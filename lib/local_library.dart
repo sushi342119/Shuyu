@@ -109,6 +109,8 @@ String _formatWordCount(int count) {
   return '${(count / 10000).toStringAsFixed(1)} 万字';
 }
 
+String formatLocalWordCount(int count) => _formatWordCount(count);
+
 class LocalBook {
   const LocalBook({
     required this.id,
