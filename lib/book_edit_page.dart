@@ -259,12 +259,13 @@ class _LocalBookEditPageState extends State<LocalBookEditPage> {
             return Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 700),
-                child: ListView(
+                child: SingleChildScrollView(
                   key: const ValueKey('book-edit-scroll'),
-                  cacheExtent: 1200,
                   padding: featurePadding(context),
-                  children: [
-                    _BookPreviewCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _BookPreviewCard(
                       book: book,
                       previewNovel: previewNovel,
                       previewTitle: previewTitle,
@@ -563,7 +564,8 @@ class _LocalBookEditPageState extends State<LocalBookEditPage> {
                         onPressed: _saving ? null : _save,
                       ),
                     ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             );

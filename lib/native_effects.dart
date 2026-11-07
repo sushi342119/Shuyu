@@ -521,12 +521,39 @@ class _NativeBackdropState extends State<NativeBackdrop> {
           ? widget.morph?.resolve(widget.morph!.blur, widget.blur) ??
                 widget.blur
           : 0.0;
-      final surface = Theme.of(context).colorScheme.surface;
-      final tint = ui.Color.alphaBlend(
-        widget.tint,
-        surface.withValues(alpha: sigma > 0 ? .72 : .96),
-      );
-      Widget content = ColoredBox(color: tint, child: widget.child);
+      final theme = Theme.of(context);
+      final surface = theme.colorScheme.surface;
+      final translucent = sigma <= 0 && widget.tint.a < 1.0;
+      final tint = sigma > 0
+          ? ui.Color.alphaBlend(
+              widget.tint,
+              surface.withValues(alpha: .72),
+            )
+          : translucent
+          ? ui.Color.alphaBlend(
+              const ui.Color(0xFFFFFFFF).withValues(
+                alpha: widget.emission.clamp(0.0, .05),
+              ),
+              widget.tint,
+            )
+          : ui.Color.alphaBlend(
+              widget.tint,
+              surface.withValues(alpha: .96),
+            );
+      final dark = theme.brightness == Brightness.dark;
+      Widget content = translucent && widget.thickness > 0 && widget.morph == null
+          ? DecoratedBox(
+              decoration: BoxDecoration(
+                color: tint,
+                borderRadius: BorderRadius.circular(widget.radius),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: dark ? .08 : .28),
+                  width: .75,
+                ),
+              ),
+              child: widget.child,
+            )
+          : ColoredBox(color: tint, child: widget.child);
       if (sigma > 0) {
         content = BackdropFilter(
           filter: ui.ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),

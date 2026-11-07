@@ -68,27 +68,35 @@ class ReaderPagePhysics extends PageScrollPhysics {
     final outwardBoundary =
         position.pixels <= position.minScrollExtent && velocity <= 0 ||
         position.pixels >= position.maxScrollExtent && velocity >= 0;
-    final gestureOrigin = origin();
-    if (gestureOrigin == null) {
-      return super.createBallisticSimulation(position, velocity);
-    }
     final page = position.page ?? 0;
-    final start = gestureOrigin.toDouble();
     final width = position.viewportDimension * position.viewportFraction;
-    final distance = (page - start) * width;
-    final reversing = velocity.abs() >= 360 && velocity.sign != distance.sign;
-    final fast = !reversing && velocity.abs() >= 360 && distance.abs() >= 8;
-    final commit =
-        !reversing && (distance.abs() >= commitDistance(width) || fast);
-    final direction = distance.sign;
-    final destination = (commit ? start + direction : start).clamp(
-      position.minScrollExtent / width,
-      position.maxScrollExtent / width,
-    );
-    final pixels = destination * width;
-    if (commit && destination != start) {
-      onUserPageCommitted?.call(destination.round());
+    final gestureOrigin = origin();
+    final double destination;
+    if (gestureOrigin == null) {
+      if (outwardBoundary) {
+        return super.createBallisticSimulation(position, velocity);
+      }
+      destination = page.roundToDouble().clamp(
+        position.minScrollExtent / width,
+        position.maxScrollExtent / width,
+      );
+    } else {
+      final start = gestureOrigin.toDouble();
+      final distance = (page - start) * width;
+      final reversing = velocity.abs() >= 360 && velocity.sign != distance.sign;
+      final fast = !reversing && velocity.abs() >= 360 && distance.abs() >= 8;
+      final commit =
+          !reversing && (distance.abs() >= commitDistance(width) || fast);
+      final direction = distance.sign;
+      destination = (commit ? start + direction : start).clamp(
+        position.minScrollExtent / width,
+        position.maxScrollExtent / width,
+      );
+      if (commit && destination != start) {
+        onUserPageCommitted?.call(destination.round());
+      }
     }
+    final pixels = destination * width;
     // Reaching the first/last page can finish the whole turn under the finger.
     // Acknowledge that accepted destination before preserving the parent's
     // existing outward-edge behavior; starting at that edge is still silent.
@@ -97,7 +105,10 @@ class ReaderPagePhysics extends PageScrollPhysics {
     }
     final durationScale = this.durationScale;
     final tolerance = toleranceFor(position);
-    if ((pixels - position.pixels).abs() < tolerance.distance) return null;
+    if ((pixels - position.pixels).abs() <= 1e-6 &&
+        velocity.abs() < tolerance.velocity) {
+      return null;
+    }
     return _ReaderPageSnap(
       ScrollSpringSimulation(
         spring,

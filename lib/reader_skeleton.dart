@@ -8,6 +8,7 @@ import 'app_palette.dart';
 import 'app_ui.dart';
 import 'glass_palette.dart';
 import 'library_state.dart';
+import 'performance_preferences.dart';
 import 'reader_preferences.dart';
 
 /// Shared reading skeleton for TXT / EPUB / PDF (design 2026-11 §5.3).
@@ -70,15 +71,29 @@ ThemeData readerPaperTheme(ThemeData base, ReaderPreferences prefs) {
   );
 }
 
-/// Reader scope inherits the parent performance/glass configuration so the
-/// bottom dock and progress bar stay translucent rather than turning into
-/// an opaque black board.
+/// Glass refraction and backdrop blur are off for the reader chrome so
+/// controls paint in one pass with their foreground under [ReaderChromeLayer]'s
+/// opacity transition; translucency is preserved by `NativeBackdrop`.
 class ReaderSolidScope extends StatelessWidget {
   const ReaderSolidScope({super.key, required this.child});
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => child;
+  Widget build(BuildContext context) {
+    final parent = PerformanceScope.of(context);
+    final effects = {
+      for (final effect in PerformanceEffect.values)
+        if (effect != PerformanceEffect.glass &&
+            effect != PerformanceEffect.blur &&
+            parent.allows(effect))
+          effect,
+    };
+    return PerformanceScope(
+      preferences: PerformancePreferences(enabled: true, effects: effects),
+      explicitReduceMotion: PerformanceScope.reduceMotionOf(context),
+      child: child,
+    );
+  }
 }
 
 /// Paper theme + warm-light overlay for one reader.

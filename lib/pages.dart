@@ -7183,6 +7183,7 @@ class _ReaderPageState extends State<ReaderPage>
     _toolsOpen = true;
     _followTicket++;
     _followScroll.cancel();
+    _savePosition(notify: false);
     final position = _currentPosition();
     final preview = ValueNotifier(false);
     try {

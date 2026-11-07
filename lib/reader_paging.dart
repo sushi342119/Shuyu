@@ -10,6 +10,7 @@ import 'library_state.dart';
 import 'local_platform.dart';
 import 'reader_pagination.dart';
 import 'reader_preferences.dart';
+import 'reader_reflow.dart';
 import 'reader_text.dart';
 import 'reader_vertical_text.dart';
 
@@ -168,25 +169,36 @@ Widget readerPageBody(
   bool compressPunctuation = true,
 }) {
   if (page.vertical) return ReaderVerticalText(page: page, style: style);
+  final fragments = [
+    for (final fragment in page.fragments)
+      if (!fragment.image && !fragment.rule && fragment.text.isNotEmpty)
+        fragment,
+  ];
+  Widget buildFragment(ReaderPageFragment fragment) => ClipRect(
+    child: Text.rich(
+      readerParagraphSpan(
+        children: [TextSpan(text: fragment.text)],
+        style: style,
+        indent: fragment.indent,
+        compressPunctuation: compressPunctuation,
+      ),
+      softWrap: true,
+    ),
+  );
   return Stack(
-    clipBehavior: Clip.hardEdge,
+    clipBehavior: Clip.none,
     children: [
-      for (final fragment in page.fragments)
-        if (!fragment.image && !fragment.rule && fragment.text.isNotEmpty)
-          Positioned.fromRect(
-            rect: fragment.rect,
-            child: ClipRect(
-              child: Text.rich(
-                readerParagraphSpan(
-                  children: [TextSpan(text: fragment.text)],
-                  style: style,
-                  indent: fragment.indent,
-                  compressPunctuation: compressPunctuation,
-                ),
-                softWrap: true,
-              ),
-            ),
+      for (var i = 0; i < fragments.length; i++)
+        Positioned.fromRect(
+          rect: fragments[i].rect,
+          child: ReaderFragmentMotion(
+            fragment: fragments[i],
+            index: i,
+            count: fragments.length,
+            previousBuilder: buildFragment,
+            child: buildFragment(fragments[i]),
           ),
+        ),
     ],
   );
 }

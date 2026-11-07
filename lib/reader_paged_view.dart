@@ -778,11 +778,26 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
       _programmaticTurn = true;
     });
     unawaited(
-      pager.animateToPage(
-        spread + _edgeSlots,
-        duration: widget.preferences.pageSpeed.durationFor(_effect),
-        curve: Curves.linear,
-      ),
+      pager
+          .animateToPage(
+            spread + _edgeSlots,
+            duration: widget.preferences.pageSpeed.durationFor(_effect),
+            curve: Curves.linear,
+          )
+          .whenComplete(() {
+            if (!mounted || _pager?.hasClients != true) return;
+            final position = (_pager!.page ?? _edgeSlots) - _edgeSlots;
+            final settled = position.round();
+            if ((position - settled).abs() > .005) return;
+            if (_swipeOrigin == null && _turnSpread == null) return;
+            setState(() {
+              _swipeOrigin = null;
+              _programmaticTurn = false;
+              _target = _page;
+              _turn.value = 1;
+              _turnSpread = null;
+            });
+          }),
     );
   }
 
@@ -1853,7 +1868,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
             // which also emits ScrollEnd. It is not a completed turn: keep the
             // live sheet/clock until it really snaps, or the next drag can still
             // be attached to a rail that was replaced by a premature handoff.
-            if ((position - spread).abs() > .0001) return false;
+            if ((position - spread).abs() > .005) return false;
             final boundary = spread < 0
                 ? -1
                 : spread >= _spreadCount

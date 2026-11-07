@@ -173,11 +173,14 @@ class ReaderChromeLayer extends StatelessWidget {
             ignoring: inactive,
             child: ExcludeSemantics(
               excluding: inactive,
-              child: Opacity(
-                opacity: t,
+              child: NativeGlassGroup(
+                inherit: false,
                 child: Transform.translate(
                   offset: offset * (1 - t),
-                  child: Padding(padding: paintPadding, child: child),
+                  child: Opacity(
+                    opacity: t,
+                    child: Padding(padding: paintPadding, child: child),
+                  ),
                 ),
               ),
             ),
