@@ -568,7 +568,8 @@ class _LocalBookEditPageState extends State<LocalBookEditPage> {
                   ),
                 ),
               ),
-            );
+            ),
+          );
           },
         ),
       ),
