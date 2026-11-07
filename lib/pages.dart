@@ -13,6 +13,7 @@ import 'app_interactions.dart';
 import 'archive_carousel.dart';
 import 'novel_random_pick_section.dart';
 import 'backup_page.dart';
+import 'book_edit_page.dart';
 import 'book_tags.dart';
 import 'catalog.dart';
 import 'glass_dock.dart';
@@ -2570,91 +2571,18 @@ class _ShelfPageState extends State<ShelfPage> {
     );
   }
 
-  /// 编辑本地书籍的书名/作者；书名变化时重命名源文件（保留原扩展名）。
+  /// 编辑本地书籍的书名、作者与标签；书名或标签变化时重命名源文件（保留原扩展名）。
   Future<void> _editShelfBookInfo(
     BuildContext context,
     LocalLibraryStore local,
     int id,
   ) async {
-    final book = local.bookFor(id);
-    if (book == null || !context.mounted) return;
-    final titleController = TextEditingController(text: book.displayTitle);
-    final authorController = TextEditingController(text: book.displayAuthor);
-    final result = await showDialogWithControllers<(String, String)?>(
-      context: context,
-      controllers: [titleController, authorController],
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, setDialogState) {
-          final preview = LocalLibraryStore.safeFileNameForTitle(
-            book.fileName,
-            titleController.text.trim(),
-          );
-          final willRename = preview != null && preview != book.fileName;
-          return AlertDialog(
-            title: const Text('编辑书籍信息'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: titleController,
-                  decoration: const InputDecoration(labelText: '书名'),
-                  onChanged: (_) => setDialogState(() {}),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: authorController,
-                  decoration: const InputDecoration(labelText: '作者'),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  willRename
-                      ? '书名修改后，源文件将重命名为：\n$preview'
-                      : '修改书名会同步重命名源文件（保留原扩展名）。',
-                  style: Theme.of(dialogContext).textTheme.bodySmall,
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('取消'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, (
-                  titleController.text,
-                  authorController.text,
-                )),
-                child: const Text('保存'),
-              ),
-            ],
-          );
-        },
-      ),
+    await openLocalBookEditPage(
+      context,
+      state: state,
+      local: local,
+      bookId: id,
     );
-    if (result == null || !mounted) return;
-    LocalBook updated;
-    try {
-      updated = await local.editBookFile(
-        id,
-        title: result.$1,
-        author: result.$2,
-      );
-    } catch (e) {
-      if (context.mounted) {
-        showNovelFeedback(context, '保存失败：${_friendlyEditError(e)}');
-      }
-      return;
-    }
-    // 同步书架快照里的书名/作者。
-    if (state.shelf.contains(id)) {
-      try {
-        await state.rememberNovel(local.toNovel(updated));
-      } catch (_) {
-        if (context.mounted) showNovelFeedback(context, '文件已改名，书架信息保存失败，请重试');
-        return;
-      }
-    }
-    if (context.mounted) showNovelFeedback(context, '已保存');
   }
 
   /// 二次确认后彻底删除本地书籍的源文件，并清理书架/标签/阅读进度。
@@ -2719,15 +2647,6 @@ class _ShelfPageState extends State<ShelfPage> {
       context,
       cleanupOk ? successText : '书籍已移除，但部分关联数据未清干净，可重启后重试',
     );
-  }
-
-  static String _friendlyEditError(Object e) {
-    final message = e.toString();
-    if (message.contains('书名不能为空')) return '书名不能为空';
-    if (message.contains('无法用作文件名')) return '书名无法用作文件名';
-    if (message.contains('同名文件已存在')) return '同名文件已存在';
-    if (message.contains('书籍不存在')) return '书籍已不存在';
-    return '请重试';
   }
 }
 
@@ -4944,110 +4863,20 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     }
   }
 
-  /// 编辑书籍信息（详情页版）：复用与书架页相同的对话框逻辑，
-  /// 成功后刷新详情页显示。
+  /// 编辑书籍信息（详情页版）：打开独立编辑页，保存成功后刷新详情页显示。
   Future<void> _editDetailBookInfo(
     BuildContext context,
     LocalLibraryStore local,
     int id,
   ) async {
-    final book = local.bookFor(id);
-    if (book == null || !context.mounted) return;
-    final titleController = TextEditingController(text: book.displayTitle);
-    final authorController = TextEditingController(text: book.displayAuthor);
-    try {
-      final result = await showDialogWithControllers<(String, String)?>(
-        context: context,
-        controllers: [titleController, authorController],
-        builder: (dialogContext) => StatefulBuilder(
-          builder: (dialogContext, setDialogState) {
-            final preview = LocalLibraryStore.safeFileNameForTitle(
-              book.fileName,
-              titleController.text.trim(),
-            );
-            final willRename = preview != null && preview != book.fileName;
-            return AlertDialog(
-              title: const Text('编辑书籍信息'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: titleController,
-                    decoration: const InputDecoration(labelText: '书名'),
-                    onChanged: (_) => setDialogState(() {}),
-                  ),
-                  TextField(
-                    controller: authorController,
-                    decoration: const InputDecoration(labelText: '作者'),
-                  ),
-                  if (willRename)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Text(
-                        '将重命名为：$preview',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Theme.of(dialogContext).colorScheme.primary,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('取消'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop((
-                    titleController.text.trim(),
-                    authorController.text.trim(),
-                  )),
-                  child: const Text('保存'),
-                ),
-              ],
-            );
-          },
-        ),
-      );
-      if (!mounted || result == null) return;
-      final (newTitle, newAuthor) = result;
-      if (newTitle.isEmpty) {
-        if (context.mounted) showNovelFeedback(context, '书名不能为空');
-        return;
-      }
-      LocalBook updated;
-      try {
-        updated = await local.editBookFile(
-          id,
-          title: newTitle,
-          author: newAuthor,
-        );
-      } catch (e) {
-        if (context.mounted) {
-          showNovelFeedback(context, describeSafeError(e, fallback: '保存失败'));
-        }
-        return;
-      }
-      // 同步书架快照里的书名/作者。
-      if (state.shelf.contains(id)) {
-        try {
-          await state.rememberNovel(local.toNovel(updated));
-        } catch (_) {
-          if (mounted) setState(() => _novelOverride = local.toNovel(updated));
-          if (context.mounted) showNovelFeedback(context, '文件已改名，书架信息保存失败，请重试');
-          return;
-        }
-      }
-      if (mounted && context.mounted) {
-        showNovelFeedback(context, '已保存');
-        // 刷新详情页显示。
-        setState(() => _novelOverride = local.toNovel(updated));
-      }
-    } catch (e) {
-      if (context.mounted) {
-        showNovelFeedback(context, describeSafeError(e, fallback: '保存失败'));
-      }
+    final updated = await openLocalBookEditPage(
+      context,
+      state: state,
+      local: local,
+      bookId: id,
+    );
+    if (updated != null && mounted) {
+      setState(() => _novelOverride = local.toNovel(updated));
     }
   }
 

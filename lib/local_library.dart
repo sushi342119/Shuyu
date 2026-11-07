@@ -3149,7 +3149,12 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
 
   /// 从书名派生安全的文件名（保留原扩展名及其大小写）。
   /// 返回 null 表示书名无法派生出合法文件名。
-  static String? safeFileNameForTitle(String fileName, String title) {
+  static String? safeFileNameForTitle(
+    String fileName,
+    String title, {
+    Iterable<String>? tags,
+  }) {
+    final effectiveTags = tags ?? parseFilenameTags(fileName).tags;
     final dot = fileName.lastIndexOf('.');
     final ext = dot > 0 ? fileName.substring(dot) : '';
     var stem = title.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1f]'), '_').trim();
@@ -3162,7 +3167,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       stem = '_$stem';
     }
     var name = '$stem$ext';
-    final suffix = appendFilenameTags(ext, parseFilenameTags(fileName).tags);
+    final suffix = appendFilenameTags(ext, effectiveTags);
     final keep = 200 - utf8.encode(suffix).length;
     if (keep <= 0) return null;
     if (utf8.encode(name).length > keep + utf8.encode(ext).length) {
@@ -3178,7 +3183,35 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       if (buffer.isEmpty) return null;
       name = '$buffer$ext';
     }
-    return appendFilenameTags(name, parseFilenameTags(fileName).tags);
+    return appendFilenameTags(name, effectiveTags);
+  }
+
+  /// 预览编辑书名与标签后的目标文件名；返回 null 表示书名无法派生合法文件名。
+  static String? previewEditedFileName(
+    LocalBook book, {
+    required String title,
+    Iterable<String>? tagNames,
+  }) {
+    final cleanTitle = title.trim();
+    if (cleanTitle.isEmpty) return null;
+    final renamed = cleanTitle != book.displayTitle;
+    if (!renamed && tagNames == null) return book.fileName;
+    final effectiveTags = tagNames ??
+        <String>{
+          ...parseFilenameTags(book.fileName).tags,
+          ...?TagStore.maybeShared?.tagNamesForBook(book.id),
+        };
+    if (renamed) {
+      return safeFileNameForTitle(
+        book.fileName,
+        cleanTitle,
+        tags: effectiveTags,
+      );
+    }
+    return appendFilenameTags(
+      stripFilenameTags(book.fileName),
+      effectiveTags,
+    );
   }
 
   /// Changes source filename first; failed renames leave internal tags intact.
@@ -3252,12 +3285,13 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
   }
 
-  /// 编辑书名/作者；书名变化时重命名源文件（保留标签和扩展名），book.id 不变。
-  /// 成功返回更新后的 LocalBook；失败时抛错且不改动记录。
+  /// 编辑书名/作者（及可选的标签集合）；书名或标签变化时一次性重命名源文件
+  /// （保留扩展名），book.id 不变。成功返回更新后的 LocalBook；失败时抛错且不改动记录。
   Future<LocalBook> editBookFile(
     int id, {
     required String title,
     required String author,
+    Iterable<String>? tagIds,
   }) => _synchronized(() async {
     final index = _indexForBook(id);
     if (index < 0) throw StateError('书籍不存在');
@@ -3266,19 +3300,29 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     final cleanAuthor = author.trim();
     if (cleanTitle.isEmpty) throw ArgumentError('书名不能为空');
 
-    var updated = book;
-    final renamed = cleanTitle != book.displayTitle;
-    if (renamed) {
-      final baseName = safeFileNameForTitle(book.fileName, cleanTitle);
-      if (baseName == null) throw ArgumentError('书名无法用作文件名');
-      final tagNames = {
-        ...parseFilenameTags(book.fileName).tags,
-        ...?TagStore.maybeShared?.tagNamesForBook(book.id),
-      };
-      final targetName = appendFilenameTags(baseName, tagNames);
-      if (targetName != book.fileName) {
-        updated = await _renameSourceFile(book, targetName);
+    Set<String>? resolvedTagIds;
+    List<String>? explicitTagNames;
+    if (tagIds != null) {
+      final store = TagStore.shared;
+      resolvedTagIds = tagIds.toSet();
+      explicitTagNames = <String>[];
+      for (final tagId in resolvedTagIds) {
+        final tag = store.tagById(tagId);
+        if (tag == null) throw StateError('标签已不存在，请重新选择');
+        explicitTagNames.add(tag.name);
       }
+    }
+
+    final targetName = previewEditedFileName(
+      book,
+      title: cleanTitle,
+      tagNames: explicitTagNames,
+    );
+    if (targetName == null) throw ArgumentError('书名无法用作文件名');
+
+    var updated = book;
+    if (targetName != book.fileName) {
+      updated = await _renameSourceFile(book, targetName);
     }
     updated = updated.copyWith(
       customTitle: cleanTitle,
@@ -3287,6 +3331,10 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     try {
       _replaceBook(index, updated);
       await _saveIndex();
+      if (resolvedTagIds != null) {
+        await _clearTagStashKeys([book], clearBookTags: false);
+        await TagStore.shared.setTagsForBook(id, resolvedTagIds);
+      }
     } catch (error, stack) {
       await _restoreRenamedBooks([book], cause: error);
       Error.throwWithStackTrace(error, stack);
