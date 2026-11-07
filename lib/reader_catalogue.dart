@@ -41,6 +41,8 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
   TxtTocRulePreset _selectedPreset = TxtTocRulePreset.auto;
   bool _subdivideOversized = false;
   String? _ruleError;
+  bool _locatedFeedback = false;
+  int _locatePulse = 0;
 
   List<int> _filter(String query) {
     final chapters = _novel.chapters;
@@ -59,16 +61,36 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
   }
 
   void _filterChanged(String query) {
-    setState(() => _matches = _filter(query));
+    setState(() {
+      _matches = _filter(query);
+      _locatedFeedback = false;
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _scroll.hasClients) _scroll.jumpTo(0);
     });
   }
 
   void _locateCurrent() {
+    final hadSearch = _search.text.trim().isNotEmpty;
     _search.clear();
-    _filterChanged('');
+    setState(() {
+      _matches = _filter('');
+      _locatedFeedback = true;
+      _locatePulse++;
+    });
     FocusScope.of(context).unfocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      if (!hadSearch && _scroll.offset.abs() > 1.0) {
+        _scroll.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      } else {
+        _scroll.jumpTo(0);
+      }
+    });
   }
 
   Future<void> _applyTocRule() async {
@@ -281,11 +303,18 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
         const SizedBox(height: 10),
         Text(
           _search.text.trim().isEmpty
-              ? '共 ${_novel.chapters.length} 章 · 当前第 ${widget.currentChapter + 1} 章'
+              ? _locatedFeedback
+                    ? '共 ${_novel.chapters.length} 章 · 已定位到第 ${widget.currentChapter + 1} 章'
+                    : '共 ${_novel.chapters.length} 章 · 当前第 ${widget.currentChapter + 1} 章'
               : '找到 ${_matches.length} 章',
           style: TextStyle(
             fontSize: 12,
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontWeight: _locatedFeedback && _search.text.trim().isEmpty
+                ? FontWeight.w600
+                : null,
+            color: _locatedFeedback && _search.text.trim().isEmpty
+                ? Theme.of(context).colorScheme.primary
+                : Theme.of(context).colorScheme.onSurfaceVariant,
           ),
         ),
         const SizedBox(height: 8),
@@ -299,13 +328,13 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
       return const Center(child: Text('没有匹配的章节'));
     }
     final current = _matches.indexOf(widget.currentChapter);
-    final origin = current < 0 ? 0 : current;
+    final origin = current < 0 || _matches.length <= 6 ? 0 : current;
     return CustomScrollView(
       key: const ValueKey('reader-catalogue-scroll'),
       controller: _scroll,
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       center: _center,
-      anchor: current > 0 ? .22 : 0,
+      anchor: origin > 0 ? .22 : 0,
       slivers: [
         SliverList.builder(
           itemCount: origin,
@@ -325,6 +354,7 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
   Widget _row(BuildContext context, int index) {
     final chapter = _novel.chapters[index];
     final current = index == widget.currentChapter;
+    final scheme = Theme.of(context).colorScheme;
     return Semantics(
       selected: current,
       child: JellyTapSurface(
@@ -333,14 +363,37 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
           FocusScope.of(context).unfocus();
           Navigator.pop(context, index);
         },
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 52),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-          decoration: BoxDecoration(
-            color: current
-                ? Theme.of(context).colorScheme.onSurface.withValues(alpha: .06)
-                : null,
-            borderRadius: BorderRadius.circular(ArchiveDesign.panelRadius),
+        child: TweenAnimationBuilder<double>(
+          key: ValueKey(
+            current ? 'reader-chapter-pulse-$index-$_locatePulse' : index,
+          ),
+          tween: Tween(
+            begin: current && _locatePulse > 0 ? 1.0 : 0.0,
+            end: 0.0,
+          ),
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOut,
+          builder: (context, pulse, child) => Container(
+            constraints: const BoxConstraints(minHeight: 52),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+            decoration: BoxDecoration(
+              color: current
+                  ? Color.lerp(
+                      scheme.onSurface.withValues(alpha: .06),
+                      scheme.primary.withValues(alpha: .18),
+                      pulse,
+                    )
+                  : null,
+              border: current && (_locatedFeedback || pulse > 0)
+                  ? Border.all(
+                      color: scheme.primary.withValues(
+                        alpha: .28 + pulse * .42,
+                      ),
+                    )
+                  : null,
+              borderRadius: BorderRadius.circular(ArchiveDesign.panelRadius),
+            ),
+            child: child,
           ),
           child: Row(
             children: [

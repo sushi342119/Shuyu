@@ -40,7 +40,6 @@ import 'reader_content.dart';
 import 'reader_follow_scroll.dart';
 import 'reader_illustrations.dart';
 import 'reader_find.dart';
-import 'reader_dictionary.dart';
 import 'reader_purification.dart';
 import 'reader_landing_highlight.dart';
 import 'reader_tools.dart';
@@ -7397,9 +7396,6 @@ class _ReaderPageState extends State<ReaderPage>
           // The settings surface has fully collapsed before opening the next.
           _toolsOpen = false;
           await _findInChapter();
-        case ReaderOpenDictionary():
-          _toolsOpen = false;
-          await _lookupInChapter(position);
         case ReaderOpenPurification():
           _toolsOpen = false;
           await _openPurificationInChapter(position);
@@ -7435,40 +7431,6 @@ class _ReaderPageState extends State<ReaderPage>
       chapterParagraphs: content?.paragraphs,
       initialParagraphIndex: paragraphIndex,
       initialPattern: initialPattern,
-    );
-  }
-
-  Future<void> _lookupInChapter(ReadingPosition? position) async {
-    final content = _currentContent;
-    if (!_ready || content == null || content.paragraphs.isEmpty) return;
-    _clearBookmarkLanding();
-    _suspendListeningFollow();
-    final paragraphIndex =
-        (position?.paragraphIndex ?? _currentPosition()?.paragraphIndex ?? 0)
-            .clamp(0, content.paragraphs.length - 1);
-    final paragraphText = content.paragraphs[paragraphIndex];
-    if (paragraphText.trim().isEmpty) {
-      await showReaderDictionarySheet(
-        context: context,
-        word: _novel.title,
-        reduceMotion: widget.state.reduceMotion,
-      );
-      return;
-    }
-    final range = await showReaderTextRangePicker(
-      context: context,
-      text: paragraphText,
-      title: '点选词句查词典',
-      confirmLabel: '查询词典',
-      reduceMotion: widget.state.reduceMotion,
-    );
-    if (!mounted || range == null) return;
-    final word = range.textInside(paragraphText).trim();
-    if (word.isEmpty) return;
-    await showReaderDictionarySheet(
-      context: context,
-      word: word,
-      reduceMotion: widget.state.reduceMotion,
     );
   }
 

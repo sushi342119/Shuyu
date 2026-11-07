@@ -402,7 +402,6 @@ class ReaderSelection extends StatelessWidget {
     this.onSelect,
     this.vertical = false,
     this.onBookmark,
-    this.onDictionary,
     this.onPurify,
     this.onIllustrations,
   });
@@ -411,7 +410,6 @@ class ReaderSelection extends StatelessWidget {
   final VoidCallback? onSelect;
   final bool vertical;
   final ValueChanged<ReaderQuoteSelection>? onBookmark;
-  final ValueChanged<ReaderQuoteSelection>? onDictionary;
   final ValueChanged<ReaderQuoteSelection>? onPurify;
   final VoidCallback? onIllustrations;
   @override
@@ -508,16 +506,6 @@ class ReaderSelection extends StatelessWidget {
                                 icon: CupertinoIcons.bookmark,
                                 label: '书签',
                                 onPressed: () => action(onBookmark!),
-                              ),
-                            if (onDictionary != null)
-                              _selectionAction(
-                                key: const ValueKey(
-                                  'reader-selection-dictionary',
-                                ),
-                                icon: CupertinoIcons.book,
-                                label: '词典',
-                                semanticLabel: '词典',
-                                onPressed: () => action(onDictionary!),
                               ),
                             if (onPurify != null)
                               _selectionAction(
