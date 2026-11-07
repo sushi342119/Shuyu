@@ -547,7 +547,9 @@ class _NativeBackdropState extends State<NativeBackdrop> {
                 color: tint,
                 borderRadius: BorderRadius.circular(widget.radius),
                 border: Border.all(
-                  color: Colors.white.withValues(alpha: dark ? .08 : .28),
+                  color: const ui.Color(
+                    0xFFFFFFFF,
+                  ).withValues(alpha: dark ? .08 : .28),
                   width: .75,
                 ),
               ),
