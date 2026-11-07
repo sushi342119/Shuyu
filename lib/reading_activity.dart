@@ -154,7 +154,10 @@ class ReadingActivityStore extends ChangeNotifier {
       return;
     }
     final bookId = token.bookId;
-    var cursor = startedAt.toLocal();
+    var cursor = DateTime.fromMillisecondsSinceEpoch(
+      startedAt.millisecondsSinceEpoch,
+      isUtc: startedAt.isUtc,
+    ).toLocal();
     _record.startedAt = _earliest(_record.startedAt, cursor);
     final source = _record.sources.putIfAbsent(_record.sourceId, () => {});
     final sessionDays = <String, int>{};

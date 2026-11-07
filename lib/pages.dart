@@ -5130,7 +5130,7 @@ class _ReaderPageState extends State<ReaderPage>
   final _paged = ReaderPagedController();
   int _pagedTurn = 0;
   ReaderMode? _lastMode;
-  ReadingPosition? _pagedRestoreSource, _pagedRestore;
+  ReadingPosition? _pagedRestoreSource, _pagedRestore, _settingsPosition;
   bool get _paginated =>
       widget.state.readerPreferences.mode.paginated && _novel.chapters.isNotEmpty;
   late final _followScroll = ReaderFollowScroll(_scroll);
@@ -6927,7 +6927,8 @@ class _ReaderPageState extends State<ReaderPage>
             // this frame and leave the reader at the chapter start.
             final mode = widget.state.readerPreferences.mode;
             if (ready && _lastMode != null && _lastMode != mode) {
-              final saved = widget.state.positionFor(_novel.id);
+              final saved =
+                  _settingsPosition ?? widget.state.positionFor(_novel.id);
               _restorePending ??= _lastMode!.paginated
                   ? _pagedPosition()
                   : (saved != null && saved.chapter == _chapter ? saved : null);
@@ -7184,6 +7185,7 @@ class _ReaderPageState extends State<ReaderPage>
     _followTicket++;
     _followScroll.cancel();
     final position = _currentPosition();
+    _settingsPosition = position;
     final preview = ValueNotifier(false);
     try {
       final action = await showJellySheet<ReaderToolAction>(
@@ -7234,6 +7236,7 @@ class _ReaderPageState extends State<ReaderPage>
           break;
       }
     } finally {
+      _settingsPosition = null;
       _toolsOpen = false;
       _typographyPreviewing = false;
       preview.dispose();
