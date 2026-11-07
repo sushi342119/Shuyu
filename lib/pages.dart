@@ -95,7 +95,7 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     }
     if (local.folderUri == null) return;
     try {
-      final result = await local.scan();
+      final result = await local.scan(verifyUnchangedFingerprints: false);
       // 章节迁移按队列顺序执行，完成后一次提交确认和失败状态。
       final followUp = await applyLocalScanFollowUp<LocalChapterRemap>(
         remaps: result.chapterRemaps,
@@ -255,13 +255,15 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
         do {
           _pendingLocalCatalogSync = false;
           if (!mounted) return;
-          final books = local.books;
-          final additions = [
-            for (final book in books)
-              if (!widget.state.contains(book.id)) local.toNovel(book),
-          ];
-          if (additions.isNotEmpty) {
-            await widget.state.addShelfBooks(additions);
+          if (!localScanProgressFor(local).value.scanning) {
+            final books = local.books;
+            final additions = [
+              for (final book in books)
+                if (!widget.state.contains(book.id)) local.toNovel(book),
+            ];
+            if (additions.isNotEmpty) {
+              await widget.state.addShelfBooks(additions);
+            }
           }
           if (!mounted) return;
           await _catalog.refresh();

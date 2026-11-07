@@ -261,6 +261,7 @@ class _LocalBookEditPageState extends State<LocalBookEditPage> {
                 constraints: const BoxConstraints(maxWidth: 700),
                 child: ListView(
                   key: const ValueKey('book-edit-scroll'),
+                  cacheExtent: 1200,
                   padding: featurePadding(context),
                   children: [
                     _BookPreviewCard(

@@ -125,7 +125,10 @@ void main() {
     final bookId = local.books.single.id;
 
     // Select existing tag '母子'
-    await tester.tap(find.byKey(const ValueKey('book-edit-tag-母子')));
+    final existingTagFinder = find.byKey(const ValueKey('book-edit-tag-母子'));
+    await tester.ensureVisible(existingTagFinder);
+    await tester.pumpAndSettle();
+    await tester.tap(existingTagFinder);
     await tester.pump();
     expect(
       find.textContaining('✦古风 ✦母子.txt'),
@@ -133,27 +136,49 @@ void main() {
     );
 
     // Create a new tag inline and auto-select it
-    await tester.enterText(
-      find.byKey(const ValueKey('book-edit-new-tag-field')),
-      '精校',
-    );
-    await tester.tap(find.byKey(const ValueKey('book-edit-add-tag-button')));
+    final newTagField = find.byKey(const ValueKey('book-edit-new-tag-field'));
+    await tester.ensureVisible(newTagField);
+    await tester.pumpAndSettle();
+    await tester.enterText(newTagField, '精校');
+    final addTagButton = find.byKey(const ValueKey('book-edit-add-tag-button'));
+    await tester.ensureVisible(addTagButton);
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      await tester.tap(addTagButton);
+      for (
+        var i = 0;
+        i < 60 && !TagStore.shared.tags.any((t) => t.name == '精校');
+        i++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    });
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('book-edit-tag-精校')), findsOneWidget);
 
     // Change title & author
-    await tester.enterText(
-      find.byKey(const ValueKey('book-edit-title-field')),
-      '秦家仙子新编',
-    );
-    await tester.enterText(
-      find.byKey(const ValueKey('book-edit-author-field')),
-      '知名作者',
-    );
+    final titleField = find.byKey(const ValueKey('book-edit-title-field'));
+    await tester.ensureVisible(titleField);
+    await tester.pumpAndSettle();
+    await tester.enterText(titleField, '秦家仙子新编');
+    final authorField = find.byKey(const ValueKey('book-edit-author-field'));
+    await tester.ensureVisible(authorField);
+    await tester.pumpAndSettle();
+    await tester.enterText(authorField, '知名作者');
     await tester.pump();
 
     // Save via header button
-    await tester.tap(find.byKey(const ValueKey('book-edit-header-save')));
+    await tester.runAsync(() async {
+      await tester.tap(find.byKey(const ValueKey('book-edit-header-save')));
+      for (
+        var i = 0;
+        i < 120 && local.bookFor(bookId)?.displayTitle != '秦家仙子新编';
+        i++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    });
     await tester.pumpAndSettle();
 
     final updated = local.bookFor(bookId)!;

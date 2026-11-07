@@ -597,17 +597,72 @@ List _decodeIndexJson(String raw) {
   return decoded['books'] as List;
 }
 
-String _encodeIndexJson(Map<String, Object?> value) => jsonEncode(value);
+List<String> _encodeBooksJson(List<LocalBook> books) => [
+  for (final book in books) jsonEncode(book.toJson()),
+];
 
 void _recordScanFailure(Map<String, String> failures, String name, Object error) {
   final detail = describeLocalScanError(error);
   failures['$name ($detail)'] = detail;
 }
 
-Future<List> _decodeIndexFile(File file) async {
+({List<LocalBook> books, List<Object?> unparsed}) _parseIndexEntries(
+  List entries,
+) {
+  final books = <LocalBook>[];
+  final unparsed = <Object?>[];
+  final loadedIds = <int>{};
+  for (final entry in entries) {
+    try {
+      if (entry is! Map<String, Object?>) {
+        throw const FormatException('invalid book record');
+      }
+      final loaded = LocalBook.fromJson(entry);
+      if (isLocalNovelId(loaded.id) && loadedIds.add(loaded.id)) {
+        books.add(loaded);
+      } else {
+        throw const FormatException('invalid or duplicate book id');
+      }
+    } catch (_) {
+      unparsed.add(entry);
+    }
+  }
+  return (books: books, unparsed: unparsed);
+}
+
+Future<({List<LocalBook> books, List<Object?> unparsed})>
+_decodeAndParseIndexFile(File file) async {
   final raw = await file.readAsString();
-  if (raw.length < 65536) return _decodeIndexJson(raw);
-  return Isolate.run(() => _decodeIndexJson(raw));
+  if (raw.length < 65536) return _parseIndexEntries(_decodeIndexJson(raw));
+  return Isolate.run(() => _parseIndexEntries(_decodeIndexJson(raw)));
+}
+
+({bool indexReadable, bool hasBadEntry}) _inspectIndexJson(
+  String raw,
+  Set<String> preserved,
+) {
+  try {
+    final entries = _decodeIndexJson(raw);
+    final ids = <int>{};
+    try {
+      for (final entry in entries) {
+        if (preserved.isNotEmpty && preserved.contains(jsonEncode(entry))) {
+          continue;
+        }
+        final book = LocalBook.fromJson(
+          Map<String, Object?>.from(entry as Map),
+        );
+        if (!isLocalNovelId(book.id) || !ids.add(book.id)) {
+          throw const FormatException('invalid index record');
+        }
+      }
+    } catch (_) {
+      return (indexReadable: true, hasBadEntry: true);
+    }
+    return (indexReadable: true, hasBadEntry: false);
+  } catch (_) {
+    return (indexReadable: false, hasBadEntry: false);
+  }
 }
 
 /// 本地图书仓库：SAF 文件夹扫描、TXT 章节切分、PDF 页数。
@@ -631,6 +686,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   int _indexGeneration = 0;
   final Map<int, int> _bookPositions = {};
   final Map<int, LocalBook> _savedBookRefs = {};
+  final Map<int, ({LocalBook book, String encoded})> _encodedBookJsonCache = {};
+  ({int size, int modified})? _lastValidIndexStat;
   final LinkedHashMap<int, String> _textCache = LinkedHashMap();
   final Map<int, Future<String>> _textReads = {};
   static const _textCacheBudget = 8 * 1024 * 1024;
@@ -772,37 +829,38 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     _reservedIdEnd = _nextIdCursor;
     final backup = File('${file.path}.bak');
     if (!await file.exists() && !await backup.exists()) return;
-    late List entries;
+    late ({List<LocalBook> books, List<Object?> unparsed}) parsed;
+    var loadedFromPrimary = false;
     try {
-      entries = await _decodeIndexFile(file);
+      parsed = await _decodeAndParseIndexFile(file);
+      loadedFromPrimary = true;
     } catch (_) {
       try {
-        entries = await _decodeIndexFile(backup);
+        parsed = await _decodeAndParseIndexFile(backup);
       } catch (_) {
         throw const FormatException('本地书库索引及备份无法读取，已停止写入');
       }
     }
-    final loadedIds = <int>{};
-    for (final entry in entries) {
-      try {
-        if (entry is! Map<String, Object?>) {
-          throw const FormatException('invalid book record');
-        }
-        final loaded = LocalBook.fromJson(entry);
-        final book = parseFilenameTags(loaded.fileName).tags.isEmpty
-            ? loaded
-            : _withFilenameMetadata(loaded, loaded.fileName);
-        if (isLocalNovelId(book.id) && loadedIds.add(book.id)) {
-          _books.add(book);
-          if (book.title != loaded.title || book.author != loaded.author) {
-            _dirtyBookIds.add(book.id);
-          }
-        } else {
-          throw const FormatException('invalid or duplicate book id');
-        }
-      } catch (_) {
-        _unparsedIndexEntries.add(entry);
+    for (final loaded in parsed.books) {
+      final book = parseFilenameTags(loaded.fileName).tags.isEmpty
+          ? loaded
+          : _withFilenameMetadata(loaded, loaded.fileName);
+      _books.add(book);
+      if (book.title != loaded.title || book.author != loaded.author) {
+        _dirtyBookIds.add(book.id);
       }
+    }
+    _unparsedIndexEntries.addAll(parsed.unparsed);
+    if (loadedFromPrimary && _unparsedIndexEntries.isEmpty) {
+      try {
+        final stat = await file.stat();
+        if (stat.type == FileSystemEntityType.file) {
+          _lastValidIndexStat = (
+            size: stat.size,
+            modified: stat.modified.microsecondsSinceEpoch,
+          );
+        }
+      } catch (_) {}
     }
     // 校正 ID 计数器，防止复用（修复#17）。
     var maxId = localNovelIdBase - 1;
@@ -1157,17 +1215,30 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     if (_dirtyBookIds.isEmpty) return;
     final changedIds = Set<int>.of(_dirtyBookIds);
     final snapshot = {for (final book in _books) book.id: book};
+    _encodedBookJsonCache.removeWhere(
+      (id, cached) => !identical(snapshot[id], cached.book),
+    );
+    final uncached = [
+      for (final book in snapshot.values)
+        if (!_encodedBookJsonCache.containsKey(book.id)) book,
+    ];
+    if (uncached.isNotEmpty) {
+      final encodedList = uncached.length < 64
+          ? _encodeBooksJson(uncached)
+          : await Isolate.run(() => _encodeBooksJson(uncached));
+      for (var i = 0; i < uncached.length; i++) {
+        final book = uncached[i];
+        _encodedBookJsonCache[book.id] = (book: book, encoded: encodedList[i]);
+      }
+    }
     final dir = _booksDir;
     if (!await dir.exists()) await dir.create(recursive: true);
-    final payload = <String, Object?>{
-      'books': [
-        ...snapshot.values.map((book) => book.toJson()),
-        ..._unparsedIndexEntries,
-      ],
-    };
-    final json = snapshot.length < 64
-        ? _encodeIndexJson(payload)
-        : await Isolate.run(() => _encodeIndexJson(payload));
+    final encodedEntries = <String>[
+      for (final book in snapshot.values)
+        _encodedBookJsonCache[book.id]!.encoded,
+      for (final entry in _unparsedIndexEntries) jsonEncode(entry),
+    ];
+    final json = '{"books":[${encodedEntries.join(',')}]}';
     // 原子写入：先写临时文件再重命名，避免崩溃丢索引（修复#5）。
     final tmp = File('${dir.path}/index.json.tmp');
     final target = File('${dir.path}/index.json');
@@ -1177,26 +1248,28 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     if (await target.exists()) {
       var indexReadable = false;
       var hasBadEntry = false;
-      try {
-        final entries = await _decodeIndexFile(target);
+      final stat = await target.stat();
+      final validStat = _lastValidIndexStat;
+      if (stat.type == FileSystemEntityType.file &&
+          stat.size >= 65536 &&
+          validStat != null &&
+          stat.size == validStat.size &&
+          stat.modified.microsecondsSinceEpoch == validStat.modified) {
         indexReadable = true;
-        final preserved = _unparsedIndexEntries.map(jsonEncode).toSet();
-        final ids = <int>{};
+      } else {
         try {
-          for (final entry in entries) {
-            if (preserved.contains(jsonEncode(entry))) continue;
-            final book = LocalBook.fromJson(
-              Map<String, Object?>.from(entry as Map),
-            );
-            if (!isLocalNovelId(book.id) || !ids.add(book.id)) {
-              throw const FormatException('invalid index record');
-            }
-          }
+          final raw = await target.readAsString();
+          final preserved = _unparsedIndexEntries.isEmpty
+              ? const <String>{}
+              : _unparsedIndexEntries.map(jsonEncode).toSet();
+          final inspected = raw.length < 65536
+              ? _inspectIndexJson(raw, preserved)
+              : await Isolate.run(() => _inspectIndexJson(raw, preserved));
+          indexReadable = inspected.indexReadable;
+          hasBadEntry = inspected.hasBadEntry;
         } catch (_) {
-          hasBadEntry = true;
+          // 整体无法解码：不刷新 .bak，只留损坏副本。
         }
-      } catch (_) {
-        // 整体无法解码：不刷新 .bak，只留损坏副本。
       }
       if (indexReadable) {
         await target.copy('${dir.path}/index.json.bak');
@@ -1206,6 +1279,19 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       }
     }
     await tmp.rename(target.path);
+    if (_unparsedIndexEntries.isEmpty) {
+      try {
+        final stat = await target.stat();
+        if (stat.type == FileSystemEntityType.file) {
+          _lastValidIndexStat = (
+            size: stat.size,
+            modified: stat.modified.microsecondsSinceEpoch,
+          );
+        }
+      } catch (_) {}
+    } else {
+      _lastValidIndexStat = null;
+    }
     _indexGeneration++;
     // 索引成功提交后，只更新实际变化书籍的章节表快照。
     for (final id in changedIds) {
@@ -1229,7 +1315,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   Future<void> Function(LocalChapterRemap)? migrateProgress;
 
   bool isMigrationPending(int id) =>
-      _dirtyBookIds.contains(id) ||
+      (_dirtyBookIds.contains(id) && _savedBookRefs.containsKey(id)) ||
       pendingChapterRemaps.any((remap) => remap.bookId == id);
 
   bool acceptsChapter(int id, NovelChapter chapter) =>
@@ -1254,7 +1340,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   Future<LocalBook> _upgradeEpubChaptersIfNeeded(LocalBook book) async {
     if (book.kind != LocalBookKind.epub ||
         book.chapterSplitVersion == _chapterSplitVersion ||
-        book.sourceFingerprint.isEmpty) {
+        book.sourceFingerprint.isEmpty ||
+        book.chapters.length > 1) {
       return book;
     }
     final index = _indexForBook(book.id);
@@ -1326,15 +1413,26 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     return toNovel(updated);
   });
 
+  bool _isBookReadyWithoutLock(LocalBook book) {
+    if (book.kind == LocalBookKind.pdf) return true;
+    if (book.kind == LocalBookKind.epub) {
+      return book.chapterSplitVersion == _chapterSplitVersion ||
+          book.sourceFingerprint.isEmpty ||
+          book.chapters.length > 1 ||
+          _activeScan != null;
+    }
+    return book.chapterSplitVersion == _chapterSplitVersion ||
+        (book.chapterSplitVersion >= 3 &&
+            (book.chapters.length > 1 || _activeScan != null));
+  }
+
   Future<void> ensureReady(int id) async {
     final book = bookFor(id);
     if (book == null) throw StateError('书库中没有这本书的记录，请重新扫描导入');
-    if (identical(_savedBookRefs[id], book) &&
+    if ((identical(_savedBookRefs[id], book) ||
+            !_savedBookRefs.containsKey(id)) &&
         !isMigrationPending(id) &&
-        (book.kind == LocalBookKind.pdf ||
-            book.chapterSplitVersion == _chapterSplitVersion ||
-            (book.kind == LocalBookKind.epub &&
-                book.sourceFingerprint.isEmpty))) {
+        _isBookReadyWithoutLock(book)) {
       return;
     }
     await _synchronized(
@@ -1350,13 +1448,15 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     if (book == null) throw StateError('书库中没有这本书的记录，请重新扫描导入');
     if (book.kind == LocalBookKind.epub) {
       if (book.chapterSplitVersion != _chapterSplitVersion &&
-          book.sourceFingerprint.isNotEmpty) {
+          book.sourceFingerprint.isNotEmpty &&
+          book.chapters.length <= 1) {
         await _upgradeEpubChaptersIfNeeded(book);
       }
       return;
     }
     if (book.kind != LocalBookKind.txt) return;
-    if (book.chapterSplitVersion != _chapterSplitVersion) {
+    if (book.chapterSplitVersion != _chapterSplitVersion &&
+        (book.chapterSplitVersion < 3 || book.chapters.length <= 1)) {
       final remaps = <LocalChapterRemap>[];
       final updates = <int, LocalBook>{};
       final outcome = await _refreshBookIfNeeded(
@@ -2310,15 +2410,24 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
   }
 
-  Future<LocalScanResult> scan({bool force = false}) {
+  Future<LocalScanResult> scan({
+    bool force = false,
+    bool verifyUnchangedFingerprints = true,
+  }) {
     if (!force && _activeScan != null) return _activeScan!;
     late final Future<LocalScanResult> running;
-    running = _runScan(force: force);
+    running = _runScan(
+      force: force,
+      verifyUnchangedFingerprints: verifyUnchangedFingerprints,
+    );
     if (!force) _activeScan = running;
     return running;
   }
 
-  Future<LocalScanResult> _runScan({required bool force}) async {
+  Future<LocalScanResult> _runScan({
+    required bool force,
+    required bool verifyUnchangedFingerprints,
+  }) async {
     try {
       return await _synchronized(
         () => _scanTransaction((epubCacheBackups) async {
@@ -2383,12 +2492,17 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           );
           for (final entry in entries) {
             processed++;
-            _updateScanProgress(
-              scanning: true,
-              processed: processed,
-              total: entries.length,
-              added: added,
-            );
+            if (entries.length <= 50 ||
+                processed == 1 ||
+                processed == entries.length ||
+                processed % 10 == 0) {
+              _updateScanProgress(
+                scanning: true,
+                processed: processed,
+                total: entries.length,
+                added: added,
+              );
+            }
             final uri = entry['uri'] as String? ?? '';
             final name = entry['name'] as String? ?? '';
             if (uri.isEmpty) continue;
@@ -2429,8 +2543,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
               }
               if ((existing.kind == LocalBookKind.pdf ||
                       (existing.kind == LocalBookKind.epub &&
-                          existing.chapterSplitVersion ==
-                              _chapterSplitVersion)) &&
+                          (existing.chapterSplitVersion ==
+                                  _chapterSplitVersion ||
+                              existing.chapters.length > 1))) &&
                   !force &&
                   existing.size == size &&
                   existing.modified == modified) {
@@ -2444,9 +2559,14 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                   existing.kind == LocalBookKind.txt &&
                   existing.size == size &&
                   existing.modified == modified &&
-                  existing.chapterSplitVersion == _chapterSplitVersion &&
+                  (existing.chapterSplitVersion == _chapterSplitVersion ||
+                      (existing.chapterSplitVersion >= 3 &&
+                          existing.chapters.length > 1)) &&
                   existing.wordCount != null &&
                   existing.sourceFingerprint.isNotEmpty) {
+                if (!verifyUnchangedFingerprints) {
+                  continue;
+                }
                 try {
                   if (await _sourceHasFingerprint(
                     existing,
@@ -2753,12 +2873,17 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           );
           for (final file in files) {
             processed++;
-            _updateScanProgress(
-              scanning: true,
-              processed: processed,
-              total: files.length,
-              added: added,
-            );
+            if (files.length <= 50 ||
+                processed == 1 ||
+                processed == files.length ||
+                processed % 10 == 0) {
+              _updateScanProgress(
+                scanning: true,
+                processed: processed,
+                total: files.length,
+                added: added,
+              );
+            }
             final name = file.path.split('/').last;
             final lower = name.toLowerCase();
             if (!lower.endsWith('.txt') &&
@@ -2814,7 +2939,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                 chapterUpdates[existing.id] = existing;
               }
               if (existing.kind == LocalBookKind.epub &&
-                  existing.chapterSplitVersion == _chapterSplitVersion &&
+                  (existing.chapterSplitVersion == _chapterSplitVersion ||
+                      existing.chapters.length > 1) &&
                   !force &&
                   existing.size == size &&
                   existing.modified == modified &&
@@ -2824,7 +2950,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
               if (!force &&
                   existing.size == size &&
                   existing.modified == modified &&
-                  existing.chapterSplitVersion == _chapterSplitVersion &&
+                  (existing.chapterSplitVersion == _chapterSplitVersion ||
+                      (existing.chapterSplitVersion >= 3 &&
+                          existing.chapters.length > 1)) &&
                   existing.wordCount != null &&
                   existing.sourceFingerprint.isNotEmpty) {
                 try {
@@ -4446,8 +4574,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       throw StateError('EPUB 章节索引缺失或越界，请重新扫描');
     }
     if (book.chapterSplitVersion != _chapterSplitVersion &&
-        book.sourceFingerprint.isNotEmpty) {
-      book = await _upgradeEpubChaptersIfNeeded(book);
+        book.sourceFingerprint.isNotEmpty &&
+        book.chapters.length <= 1 &&
+        _activeScan == null) {
+      final current = book;
+      book = await _synchronized(() => _upgradeEpubChaptersIfNeeded(current));
     }
     if (chapterIndex < 0 ||
         chapterIndex >= book.chapters.length ||
