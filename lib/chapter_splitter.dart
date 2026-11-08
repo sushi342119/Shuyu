@@ -35,10 +35,13 @@ class LocalChapterIndex {
       );
 }
 
+final _bomPrefix = RegExp(r'^\uFEFF');
+final _nonUnixNewline = RegExp(r'[\r\u2028\u2029]');
+
 String normalizeLocalText(String text) => text
-    .replaceFirst(RegExp(r'^\uFEFF'), '')
+    .replaceFirst(_bomPrefix, '')
     .replaceAll('\r\n', '\n')
-    .replaceAll(RegExp(r'[\r\u2028\u2029]'), '\n');
+    .replaceAll(_nonUnixNewline, '\n');
 
 bool validChapterRanges(List<LocalChapterIndex> chapters, int textLength) {
   var end = 0;
@@ -81,6 +84,36 @@ final _proseSuffix = RegExp(
 );
 final _punctuation = RegExp(r'[。！？!?；;]');
 final _weakPunctuation = RegExp(r'[。；;，,]');
+final _wordIgnoredChars = RegExp(r'[\s\uFEFF\u200B]');
+final _directoryMarkerLine = RegExp(
+  r'^[【\[\s]*(?:目\s*录|contents)[】\]\s:：]*$',
+  caseSensitive: false,
+);
+final _openingBracket = RegExp(r'^[【\[［〖〔《「『（(]');
+final _volumeSuffix = RegExp(r'[卷捲部集篇]$');
+final _sentencePunctuation = RegExp(r'[。！？!?，,；;“”]');
+final _bracketPrefix = RegExp(
+  r'^(?:【[^】\n]{1,48}】|《[^》\n]{1,48}》|\[[^\]\n]{1,48}\]|［[^］\n]{1,48}］|「[^」\n]{1,48}」|『[^』\n]{1,48}』|〖[^〗\n]{1,48}〗|〔[^〕\n]{1,48}〕)\s*',
+);
+final _titledBarePrefix = RegExp(
+  '^([^\\n。！？!?，,；;：:“”‘’""\'\'「」『』【】\\[\\]［］〖〗〔〕《》（）()]{1,40}?)[ \\t　]*(?=[（(](?:$_numberSpan)[）)]|[【\\[［〖〔](?:$_numberSpan)[】\\]］〗〕])',
+);
+final _bareTrailingSeparator = RegExp(r'^[\s:：、.．\-—]');
+final _parenthesizedCandidate = RegExp(r'^[（(【\[［〖〔]');
+final _specialTailAllowed = RegExp(
+  r'^[\s\d０-９:：、.．【\[［〖〔《「『（(】\]］〗〕》」』）)\-—]',
+);
+final _bracketVolumeEnd = RegExp(
+  r'^[【\[].*[卷捲部集篇].*(?:完|结束|END)[）)】\]]*$',
+  caseSensitive: false,
+);
+final _triPartVolume = RegExp(r'^[上中下]篇');
+final _forumMarker = RegExp(
+  r'\[bbs\]|https?://|viewthread\.php',
+  caseSensitive: false,
+);
+final _anyWhitespace = RegExp(r'\s');
+final _headingKeyIgnored = RegExp(r'[\s【】\[\]（）()]');
 
 class _Heading {
   _Heading(
@@ -149,7 +182,7 @@ class ChapterTextIndex {
       final newline = chunk.indexOf('\n', i);
       final end = newline < 0 ? chunk.length : newline;
       var part = chunk.substring(i, end);
-      _lineWords += part.replaceAll(RegExp(r'[\s\uFEFF\u200B]'), '').length;
+      _lineWords += part.replaceAll(_wordIgnoredChars, '').length;
       if (_leading) {
         final trimmed = part.trimLeft();
         _indent += part.length - trimmed.length;
@@ -177,10 +210,7 @@ class ChapterTextIndex {
 
   void _finishLine(int next, int nextBytes) {
     final line = _line.trimRight();
-    if (RegExp(
-      r'^[【\[\s]*(?:目\s*录|contents)[】\]\s:：]*$',
-      caseSensitive: false,
-    ).hasMatch(line)) {
+    if (_directoryMarkerLine.hasMatch(line)) {
       _directoryMarkers.add(_lineStart);
     }
     final h = _parse(line, next, nextBytes);
@@ -202,7 +232,7 @@ class ChapterTextIndex {
     if (_endMarker.hasMatch(line)) return null;
     // Enclosing book names are meaningful display prefixes. Only syntactic
     // opening brackets around a heading are removed for matching.
-    var opening = RegExp(r'^[【\[［〖〔《「『（(]').firstMatch(line);
+    var opening = _openingBracket.firstMatch(line);
     if (opening != null) {
       final afterOpening = line.substring(1);
       final startsWithHeading =
@@ -222,14 +252,14 @@ class ChapterTextIndex {
         _volumeNumber.firstMatch(line) ??
         _english.firstMatch(line);
     if (m != null &&
-        (RegExp(r'[卷捲部集篇]$').hasMatch(m.group(0)!) ||
+        (_volumeSuffix.hasMatch(m.group(0)!) ||
             m.group(0)!.startsWith('卷'))) {
       final rest = line.substring(m.end);
       final sub = _numbered.firstMatch(rest) ?? _english.firstMatch(rest);
       if (sub != null && sub.start <= 36) {
         final subToken = sub.group(0)!;
         final subSuffix = rest.substring(sub.end);
-        if (!RegExp(r'[卷捲部集篇]$').hasMatch(subToken) &&
+        if (!_volumeSuffix.hasMatch(subToken) &&
             !_proseSuffix.hasMatch(
               '${subToken[subToken.length - 1]}$subSuffix',
             )) {
@@ -247,7 +277,7 @@ class ChapterTextIndex {
       final prefix = line.substring(0, m.start);
       // Prefixes are titles/正文, never a sentence or a reference in prose.
       if (prefix.length > 48 ||
-          RegExp(r'[。！？!?，,；;“”]').hasMatch(prefix) ||
+          _sentencePunctuation.hasMatch(prefix) ||
           !(prefix.endsWith(' ') ||
               prefix.endsWith('\t') ||
               prefix.endsWith('　') ||
@@ -270,7 +300,7 @@ class ChapterTextIndex {
               prefix.endsWith(':') ||
               prefix.endsWith('：') ||
               prefix.endsWith('/') ||
-              RegExp(r'[卷捲部集篇]$').hasMatch(prefix) ||
+              _volumeSuffix.hasMatch(prefix) ||
               prefix == '正文')) {
         return null;
       }
@@ -281,9 +311,7 @@ class ChapterTextIndex {
       var candidate = line;
       m = _bare.firstMatch(candidate);
       if (m == null) {
-        final bracket = RegExp(
-          r'^(?:【[^】\n]{1,48}】|《[^》\n]{1,48}》|\[[^\]\n]{1,48}\]|［[^］\n]{1,48}］|「[^」\n]{1,48}」|『[^』\n]{1,48}』|〖[^〗\n]{1,48}〗|〔[^〕\n]{1,48}〕)\s*',
-        ).firstMatch(line);
+        final bracket = _bracketPrefix.firstMatch(line);
         if (bracket != null) {
           base = bracket.end;
           candidate = line.substring(base);
@@ -291,16 +319,14 @@ class ChapterTextIndex {
         }
       }
       if (m == null) {
-        final titled = RegExp(
-          '^([^\\n。！？!?，,；;：:“”‘’""\'\'「」『』【】\\[\\]［］〖〗〔〕《》（）()]{1,40}?)[ \\t　]*(?=[（(](?:$_numberSpan)[）)]|[【\\[［〖〔](?:$_numberSpan)[】\\]］〗〕])',
-        ).firstMatch(line);
+        final titled = _titledBarePrefix.firstMatch(line);
         if (titled != null) {
           final afterPrefix = line.substring(titled.end);
           final bareMatch = _bare.firstMatch(afterPrefix);
           if (bareMatch != null) {
             final trailing = afterPrefix.substring(bareMatch.end);
             if (trailing.isEmpty ||
-                (RegExp(r'^[\s:：、.．\-—]').hasMatch(trailing) &&
+                (_bareTrailingSeparator.hasMatch(trailing) &&
                     trailing.length <= 24 &&
                     !_punctuation.hasMatch(trailing) &&
                     !_weakPunctuation.hasMatch(trailing))) {
@@ -312,7 +338,7 @@ class ChapterTextIndex {
         }
       }
       if (m != null) {
-        family = RegExp(r'^[（(【\[［〖〔]').hasMatch(candidate)
+        family = _parenthesizedCandidate.hasMatch(candidate)
             ? 'parenthesized'
             : 'bare';
         weak = true;
@@ -326,25 +352,19 @@ class ChapterTextIndex {
         if (m == null) return null;
         family = 'special';
         final tail = line.substring(m.end);
-        if (tail.isNotEmpty &&
-            !RegExp(
-              r'^[\s\d０-９:：、.．【\[［〖〔《「『（(】\]］〗〕》」』）)\-—]',
-            ).hasMatch(tail)) {
+        if (tail.isNotEmpty && !_specialTailAllowed.hasMatch(tail)) {
           return null;
         }
         if (_punctuation.hasMatch(tail) && tail.length > 12) return null;
       }
     }
     final token = m.group(0)!;
-    if (RegExp(
-      r'^[【\[].*[卷捲部集篇].*(?:完|结束|END)[）)】\]]*$',
-      caseSensitive: false,
-    ).hasMatch(raw)) {
+    if (_bracketVolumeEnd.hasMatch(raw)) {
       return null;
     }
     final isVolume =
-        RegExp(r'[卷捲部集篇]$').hasMatch(token) && family != 'special' ||
-        RegExp(r'^[上中下]篇').hasMatch(token);
+        _volumeSuffix.hasMatch(token) && family != 'special' ||
+        _triPartVolume.hasMatch(token);
     final suffix = line.substring(m.end);
     if (family.isEmpty &&
         !token.startsWith('第') &&
@@ -368,10 +388,7 @@ class ChapterTextIndex {
             (_punctuation.hasMatch(suffix) && suffix.length > 24))) {
       return null;
     }
-    final forum = RegExp(
-      r'\[bbs\]|https?://|viewthread\.php',
-      caseSensitive: false,
-    ).firstMatch(line);
+    final forum = _forumMarker.firstMatch(line);
     var titleEnd = forum?.start ?? line.length;
     var content = next;
     final glued =
@@ -401,10 +418,10 @@ class ChapterTextIndex {
                     0,
                     (content - _lineStart - _indent).clamp(0, raw.length),
                   )
-                  .replaceAll(RegExp(r'\s'), '')
+                  .replaceAll(_anyWhitespace, '')
                   .length
         : _words + _lineWords;
-    final key = title.replaceAll(RegExp(r'[\s【】\[\]（）()]'), '');
+    final key = title.replaceAll(_headingKeyIgnored, '');
     final contentUnits = (content - _lineStart).clamp(0, raw.length);
     final contentBytes = glued
         ? _lineByteStart + utf8.encode(raw.substring(0, contentUnits)).length

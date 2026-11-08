@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:flutter/semantics.dart';
 import 'package:flutter/rendering.dart';
 import 'dart:ui' show DisplayFeature, DisplayFeatureState, DisplayFeatureType;
 import 'dart:math' as math;

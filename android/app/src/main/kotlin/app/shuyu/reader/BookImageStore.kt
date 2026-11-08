@@ -2,7 +2,6 @@ package app.shuyu.reader
 
 import android.content.ContentValues
 import android.content.Context
-import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -14,21 +13,6 @@ internal object BookImageStore {
     fun renderedImage(bytes: ByteArray?, name: String?): Image {
         require(QuoteCardImage.valid(bytes)) { "图片格式或大小无效" }
         return Image(bytes!!, "image/png", QuoteCardImage.fileName(name))
-    }
-    fun image(bytes: ByteArray?, name: String?): Image {
-        require(bytes != null && bytes.size in 16..8 * 1024 * 1024) { "图片大小无效" }
-        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-        val extension = when (options.outMimeType) {
-            "image/jpeg" -> "jpg"
-            "image/png" -> "png"
-            "image/webp" -> "webp"
-            "image/gif" -> "gif"
-            else -> throw IllegalArgumentException("不支持此图片格式")
-        }
-        require(options.outWidth > 0 && options.outHeight > 0 && options.outWidth.toLong() * options.outHeight <= 80_000_000) { "图片尺寸无效" }
-        val stem = (name ?: "文库插图").replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "-").take(96).ifBlank { "文库插图" }
-        return Image(bytes, options.outMimeType, "$stem.$extension")
     }
 
     fun save(context: Context, image: Image) {

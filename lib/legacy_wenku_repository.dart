@@ -81,6 +81,25 @@ class LegacyWenkuRepository extends NovelRepository {
   final Map<(int, int), Future<List<NovelChapter>>> _indexRequests = {};
   final Map<int, Future<Novel>> _detailRequests = {};
 
+  static Future<V> _dedupe<K, V>(
+    Map<K, Future<V>> pending,
+    K key,
+    Future<V> Function() create,
+  ) {
+    final existing = pending[key];
+    if (existing != null) return existing;
+    late final Future<V> request;
+    request = () async {
+      try {
+        return await create();
+      } finally {
+        if (identical(pending[key], request)) pending.remove(key);
+      }
+    }();
+    pending[key] = request;
+    return request;
+  }
+
   @override
   Future<List<Novel>> list() async => (await browse()).items;
 
@@ -100,16 +119,11 @@ class LegacyWenkuRepository extends NovelRepository {
     final cached = _pages[(sort, page)];
     if (cached != null) return cached;
     final version = _listVersions[sort] ?? 0;
-    final key = (sort, page, version);
-    final pending = _pageRequests[key];
-    if (pending != null) return pending;
-    final request = _loadPage(sort, page, version);
-    _pageRequests[key] = request;
-    try {
-      return await request;
-    } finally {
-      _pageRequests.remove(key);
-    }
+    return _dedupe(
+      _pageRequests,
+      (sort, page, version),
+      () => _loadPage(sort, page, version),
+    );
   }
 
   Future<NovelPage> _loadPage(NovelSort sort, int page, int version) async {
@@ -159,15 +173,7 @@ class LegacyWenkuRepository extends NovelRepository {
   Future<Novel?> find(int id) async {
     if (_meta.containsKey(id)) return _meta[id];
     if (id <= 0) return null;
-    final pending = _metaRequests[id];
-    if (pending != null) return pending;
-    final request = _loadMeta(id);
-    _metaRequests[id] = request;
-    try {
-      return await request;
-    } finally {
-      _metaRequests.remove(id);
-    }
+    return _dedupe(_metaRequests, id, () => _loadMeta(id));
   }
 
   Future<Novel?> _loadMeta(int id) async {
@@ -214,18 +220,11 @@ class LegacyWenkuRepository extends NovelRepository {
     );
   }
 
-  Future<List<int>> _matchingIds(String term, int version) async {
-    final key = (term, version);
-    final pending = _searchRequests[key];
-    if (pending != null) return pending;
-    final request = _loadMatchingIds(term, version);
-    _searchRequests[key] = request;
-    try {
-      return await request;
-    } finally {
-      _searchRequests.remove(key);
-    }
-  }
+  Future<List<int>> _matchingIds(String term, int version) => _dedupe(
+    _searchRequests,
+    (term, version),
+    () => _loadMatchingIds(term, version),
+  );
 
   Future<List<int>> _loadMatchingIds(String term, int version) async {
     final encoded = Uri.encodeQueryComponent(term);
@@ -247,21 +246,13 @@ class LegacyWenkuRepository extends NovelRepository {
   }
 
   @override
-  Future<Novel> detail(Novel novel) async {
-    final pending = _detailRequests[novel.id];
-    if (pending != null) return pending;
+  Future<Novel> detail(Novel novel) => _dedupe(_detailRequests, novel.id, () {
     // Opening a book is also the directory refresh boundary. Saved books must
     // discover newly published chapters without depending on the current list.
     _indexes.remove(novel.id);
     _indexVersions[novel.id] = (_indexVersions[novel.id] ?? 0) + 1;
-    final request = _loadDetail(novel);
-    _detailRequests[novel.id] = request;
-    try {
-      return await request;
-    } finally {
-      _detailRequests.remove(novel.id);
-    }
-  }
+    return _loadDetail(novel);
+  });
 
   Future<Novel> _loadDetail(Novel novel) async {
     final meta = await find(novel.id) ?? novel;
@@ -295,16 +286,11 @@ class LegacyWenkuRepository extends NovelRepository {
   Future<List<NovelChapter>> chapters(int id) async {
     if (_indexes.containsKey(id)) return _indexes[id]!;
     final version = _indexVersions[id] ?? 0;
-    final key = (id, version);
-    final pending = _indexRequests[key];
-    if (pending != null) return pending;
-    final request = _loadChapters(id, version);
-    _indexRequests[key] = request;
-    try {
-      return await request;
-    } finally {
-      _indexRequests.remove(key);
-    }
+    return _dedupe(
+      _indexRequests,
+      (id, version),
+      () => _loadChapters(id, version),
+    );
   }
 
   Future<List<NovelChapter>> _loadChapters(int id, int version) async {

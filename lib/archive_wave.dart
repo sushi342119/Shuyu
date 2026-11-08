@@ -503,7 +503,6 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
       spine: spine,
       cover: cover,
       height: height,
-      dark: dark,
       topStartColor: topStartColor,
       topEndColor: topEndColor,
       topStrokeColor: topStrokeColor,
@@ -1273,7 +1272,6 @@ class _BookVolume extends MultiChildRenderObjectWidget {
     required this.spine,
     required this.cover,
     required this.height,
-    required this.dark,
     required this.topStartColor,
     required this.topEndColor,
     required this.topStrokeColor,
@@ -1285,7 +1283,6 @@ class _BookVolume extends MultiChildRenderObjectWidget {
   final _WavePose pose;
   final int index;
   final double spine, cover, height;
-  final bool dark;
   final Color topStartColor;
   final Color topEndColor;
   final Color topStrokeColor;
@@ -1300,7 +1297,6 @@ class _BookVolume extends MultiChildRenderObjectWidget {
         spine,
         cover,
         height,
-        dark,
         topStartColor,
         topEndColor,
         topStrokeColor,
@@ -1318,7 +1314,6 @@ class _BookVolume extends MultiChildRenderObjectWidget {
     spine,
     cover,
     height,
-    dark,
     topStartColor,
     topEndColor,
     topStrokeColor,
@@ -1341,7 +1336,6 @@ class ArchiveBoxDepthRender extends RenderBox
     this._spine,
     this._cover,
     this._height,
-    this._dark,
     this._topStartColor,
     this._topEndColor,
     this._topStrokeColor,
@@ -1358,7 +1352,6 @@ class ArchiveBoxDepthRender extends RenderBox
   _WavePose _pose;
   int _index;
   double _spine, _cover, _height;
-  bool _dark;
   Color _topStartColor;
   Color _topEndColor;
   Color _topStrokeColor;
@@ -1438,7 +1431,6 @@ class ArchiveBoxDepthRender extends RenderBox
     double spine,
     double cover,
     double height,
-    bool dark,
     Color topStartColor,
     Color topEndColor,
     Color topStrokeColor,
@@ -1458,7 +1450,6 @@ class ArchiveBoxDepthRender extends RenderBox
       markNeedsLayout();
     }
     _index = index;
-    _dark = dark;
     _topStartColor = topStartColor;
     _topEndColor = topEndColor;
     _topStrokeColor = topStrokeColor;

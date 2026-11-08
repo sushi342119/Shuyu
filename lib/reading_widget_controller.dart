@@ -439,7 +439,7 @@ Future<String?> cachedReadingWidgetCover(
     if (await target.exists()) return target.path;
     final Uint8List bytes = url.startsWith('file://')
         ? await File(Uri.parse(url).toFilePath()).readAsBytes()
-        : await LegacyCover.bytes(id, url: url);
+        : await LegacyCover.bytes(id);
     final codec = await ui.instantiateImageCodec(bytes, targetWidth: 360);
     try {
       final frame = await codec.getNextFrame();

@@ -1,18 +1,18 @@
 import 'dart:async';
+import 'dart:typed_data';
 
-import 'package:flutter/services.dart';
-
+import 'legacy_transport.dart';
 import 'local_library.dart';
 
 /// Reuses the original Android cover API, with bounded encoded memory and
 /// stable cached futures. Eviction leaves the native disk cache untouched.
 abstract final class LegacyCover {
-  static const _channel = MethodChannel('org.mewx.wenku8/legacy_api');
   static final _cache = LegacyCoverCache(
-    request: (aid) => _channel.invokeMethod<Uint8List>('cover', {'aid': aid}),
+    request: (aid) =>
+        LegacyTransport.channel.invokeMethod<Uint8List>('cover', {'aid': aid}),
   );
-  static Uint8List? peek(int aid, {String? url}) => _cache.peek(aid);
-  static Future<Uint8List> bytes(int aid, {String? url}) {
+  static Uint8List? peek(int aid) => _cache.peek(aid);
+  static Future<Uint8List> bytes(int aid) {
     if (isLocalNovelId(aid)) {
       final cached = _cache.peek(aid);
       if (cached != null) return Future.value(cached);

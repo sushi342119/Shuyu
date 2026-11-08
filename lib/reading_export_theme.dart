@@ -2,7 +2,7 @@ import 'package:flutter/painting.dart';
 
 import 'reading_visual_theme.dart';
 
-const readingExportBrandName = '轻小说文库';
+const readingExportBrandName = '书屿';
 
 /// Resolve artwork once for a surface's snapshot. An artwork date does not add
 /// a recorded date to the content; dateless excerpts can still follow the season.
@@ -13,10 +13,8 @@ String readingExportArt(
 }) {
   if (theme == ReadingVisualTheme.editorial) {
     final season = switch ((at ?? DateTime.now()).month) {
-      3 || 4 || 5 => 'spring',
-      6 || 7 || 8 => 'summer',
-      9 || 10 || 11 => 'autumn',
-      _ => 'winter',
+      3 || 4 || 5 || 9 || 10 || 11 => 'spring',
+      _ => 'summer',
     };
     return 'assets/report/char_season_$season.webp';
   }

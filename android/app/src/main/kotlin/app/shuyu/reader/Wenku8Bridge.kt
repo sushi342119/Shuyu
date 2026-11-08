@@ -11,59 +11,26 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.concurrent.Executors
 import java.util.zip.GZIPInputStream
 
-/** Bounded I/O workers; guest content requests cannot mutate an account session. */
+/** Bounded I/O workers for guest discovery/search, cover, and illustration requests. */
 internal class Wenku8Bridge(context: Context, private val postToMain: (Runnable) -> Unit) : MethodChannel.MethodCallHandler {
     private val io = Executors.newFixedThreadPool(4)
-    private val accounts = Executors.newSingleThreadExecutor()
     private val imageIo = Executors.newSingleThreadExecutor()
-    private val store = AccountSessionStore(context)
-    @Volatile private var sessionCookie: String? = null
-    @Volatile private var sessionLoaded = false
-    @Volatile private var sessionRevision = 0
     private val images = File(context.filesDir, "wenku8-illustrations-v1")
     private val imageLock = Any()
-    private data class Response(val bytes: ByteArray, val cookie: String?)
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-        if (call.method !in setOf("request", "cover", "requestBytes", "accountRequest", "login", "hasSession", "clearSession", "illustration", "clearIllustrations", "encodeReview")) {
+        if (call.method !in setOf("request", "cover", "illustration")) {
             result.notImplemented()
             return
         }
-        val account = call.method in setOf("accountRequest", "login", "hasSession", "clearSession")
-        val queuedRevision = sessionRevision
-        (if (account) accounts else if (call.method in setOf("illustration", "clearIllustrations")) imageIo else io).execute {
+        (if (call.method == "illustration") imageIo else io).execute {
             try {
-                if (account && !sessionLoaded) {
-                    sessionCookie = store.read()
-                    sessionLoaded = true
-                }
-                val response: Any? = when (call.method) {
-                    "hasSession" -> sessionCookie != null
-                    "clearSession" -> {
-                        store.write(null)
-                        sessionCookie = null
-                        sessionRevision++
-                        null
-                    }
-                    "encodeReview" -> {
-                        val text = call.argument<String>("text") ?: throw IllegalArgumentException("Missing text")
-                        require(text.length <= 10000)
-                        if (!charset("GBK").newEncoder().canEncode(text)) {
-                            postToMain(Runnable { result.error("REVIEW_ENCODING", "Characters outside the review encoding", null) })
-                            return@execute
-                        }
-                        Base64.encodeToString(URLEncoder.encode(text, "GBK").toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-                    }
+                val response: Any = when (call.method) {
                     "illustration" -> illustration(call.argument<String>("url") ?: "")
-                    "clearIllustrations" -> synchronized(imageLock) {
-                        check(!images.exists() || images.deleteRecursively())
-                        null
-                    }
                     else -> {
                         val action = if (call.method == "cover") {
                             val id = call.argument<Int>("aid") ?: 0
@@ -71,38 +38,12 @@ internal class Wenku8Bridge(context: Context, private val postToMain: (Runnable)
                             "action=book&do=cover&aid=$id"
                         } else call.argument<String>("action") ?: ""
                         require(action.isNotBlank() && action.length <= 60000)
-                        if (call.method == "login") {
-                            require(action.startsWith("action=login&") || action.startsWith("action=loginemail&"))
-                            val reply = request(action, null)
-                            val text = reply.bytes.toString(Charsets.UTF_8)
-                            if (text.trim() == "1") {
-                                val cookie = reply.cookie ?: throw IllegalStateException("Missing session")
-                                store.write(cookie)
-                                sessionCookie = cookie
-                                sessionRevision++
-                            }
-                            text
-                        } else if (call.method == "accountRequest") {
-                            check(queuedRevision == sessionRevision) { "Session changed" }
-                            val cookie = sessionCookie
-                            if (cookie == null) "4" else {
-                                val reply = request(action, cookie)
-                                val text = reply.bytes.toString(Charsets.UTF_8)
-                                if (reply.cookie != null && reply.cookie != cookie && text.trim() != "4") {
-                                    store.write(reply.cookie)
-                                    sessionCookie = reply.cookie
-                                }
-                                text
-                            }
-                        } else {
-                            val reply = request(action, null)
-                            if (call.method == "request") reply.bytes.toString(Charsets.UTF_8) else reply.bytes
-                        }
+                        val bytes = request(action)
+                        if (call.method == "request") bytes.toString(Charsets.UTF_8) else bytes
                     }
                 }
                 postToMain(Runnable { result.success(response) })
             } catch (_: Exception) {
-                // Never expose actions, credentials or cookie-bearing exceptions.
                 postToMain(Runnable { result.error("LEGACY_API_ERROR", "Request or local storage failed", null) })
             } catch (_: LinkageError) {
                 postToMain(Runnable { result.error("LEGACY_API_RUNTIME", "Legacy runtime unavailable", null) })
@@ -110,7 +51,7 @@ internal class Wenku8Bridge(context: Context, private val postToMain: (Runnable)
         }
     }
 
-    private fun request(action: String, cookie: String?): Response {
+    private fun request(action: String): ByteArray {
         val version = TokenManager.getMagicVersionCpp("1.30")
         val encoded = Base64.encodeToString(action.toByteArray(Charsets.UTF_8), Base64.DEFAULT).trim()
         val body = "&appver=$version&request=$encoded&timetoken=${System.currentTimeMillis()}"
@@ -118,7 +59,6 @@ internal class Wenku8Bridge(context: Context, private val postToMain: (Runnable)
             requestMethod = "POST"
             setRequestProperty("Accept-Encoding", "gzip")
             setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-            cookie?.let { setRequestProperty("Cookie", "PHPSESSID=$it") }
             connectTimeout = 5000
             readTimeout = 10000
             doOutput = true
@@ -127,15 +67,10 @@ internal class Wenku8Bridge(context: Context, private val postToMain: (Runnable)
         try {
             connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             check(connection.responseCode in 200..299)
-            val session = connection.headerFields.entries
-                .filter { it.key?.equals("Set-Cookie", ignoreCase = true) == true }
-                .flatMap { it.value }.firstNotNullOfOrNull {
-                    Regex("(?:^|[;,]\\s*)PHPSESSID=([A-Za-z0-9,-]{8,256})").find(it)?.groupValues?.get(1)
-                }
             val stream = if (connection.contentEncoding?.contains("gzip", ignoreCase = true) == true) {
                 GZIPInputStream(BufferedInputStream(connection.inputStream))
             } else connection.inputStream
-            return Response(stream.use { readBounded(it, 8 * 1024 * 1024) }, session)
+            return stream.use { readBounded(it, 8 * 1024 * 1024) }
         } finally {
             connection.disconnect()
         }
@@ -155,18 +90,18 @@ internal class Wenku8Bridge(context: Context, private val postToMain: (Runnable)
             } catch (_: Exception) { file.delete() }
         }
         val bytes = downloadIllustration(url)
-            try {
-                images.mkdirs()
-                val temporary = File(images, "$name.part")
-                temporary.writeBytes(bytes)
-                check(temporary.renameTo(file))
-                val cached = images.listFiles()?.filter { it.isFile } ?: emptyList()
-                var size = cached.sumOf { it.length() }
-                for (old in cached.sortedBy { it.lastModified() }) {
-                    if (size <= 256L * 1024 * 1024) break
-                    if (old != file) { val length = old.length(); if (old.delete()) size -= length }
-                }
-            } catch (_: Exception) { /* An online illustration survives a cache write error. */ }
+        try {
+            images.mkdirs()
+            val temporary = File(images, "$name.part")
+            temporary.writeBytes(bytes)
+            check(temporary.renameTo(file))
+            val cached = images.listFiles()?.filter { it.isFile } ?: emptyList()
+            var size = cached.sumOf { it.length() }
+            for (old in cached.sortedBy { it.lastModified() }) {
+                if (size <= 256L * 1024 * 1024) break
+                if (old != file) { val length = old.length(); if (old.delete()) size -= length }
+            }
+        } catch (_: Exception) { /* An online illustration survives a cache write error. */ }
         bytes
     }
 
@@ -219,7 +154,6 @@ internal class Wenku8Bridge(context: Context, private val postToMain: (Runnable)
     }
     fun close() {
         io.shutdown()
-        accounts.shutdown()
         imageIo.shutdown()
     }
 }

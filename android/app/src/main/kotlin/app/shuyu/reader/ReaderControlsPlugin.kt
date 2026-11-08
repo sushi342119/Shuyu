@@ -71,18 +71,6 @@ class ReaderControlsPlugin : FlutterPlugin, ActivityAware {
         }
         channel = MethodChannel(binding.binaryMessenger, "org.mewx.wenku8/reader_controls").also {
             it.setMethodCallHandler { call, result ->
-                if (call.method == "navigationCapabilities") {
-                    result.success(mapOf("systemFloatingNavigation" to android.os.Build.MANUFACTURER.equals("HUAWEI", true)))
-                    return@setMethodCallHandler
-                }
-                if (call.method == "navigationSettings") {
-                    try {
-                        val context = activity ?: applicationContext ?: error("No context")
-                        context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                        result.success(null)
-                    } catch (_: Exception) { result.error("SETTINGS", "请在手机设置中搜索悬浮导航", null) }
-                    return@setMethodCallHandler
-                }
                 if (call.method == "windowInsets") {
                     val view = activity?.findViewById<View>(FlutterActivity.FLUTTER_VIEW_ID)
                     result.success(view?.let(CaptionBarInsets::read))

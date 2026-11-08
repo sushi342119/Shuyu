@@ -64,7 +64,7 @@ import 'wenku_errors.dart';
 
 export 'app_ui.dart' show sectionHeader;
 
-final _readerWhitespace = RegExp(r'\s');
+final _readerWhitespace = RegExp(r'\s+');
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key, required this.state, required this.repository});
@@ -1709,7 +1709,7 @@ class _ShelfPageState extends State<ShelfPage> {
       _buildKnown = {for (final id in state.shelf) id: _knownFromSources(id)};
       _filter.prune(TagStore.shared);
       final saved = state.shelf.where(_matches).toList()..sort(_compare);
-      _selection.removeWhere((id) => !state.shelf.contains(id));
+      _selection.removeWhere((id) => !state.contains(id));
       final grid = state.shelfLayout == ShelfLayout.grid;
       return GlassHeaderLayout(
         showHeader: widget.showHeader,
@@ -2589,63 +2589,71 @@ class _ShelfPageState extends State<ShelfPage> {
     LocalLibraryStore local,
     int id,
   ) async {
-    final book = local.bookFor(id);
-    if (book == null || !context.mounted) return;
-    final title = book.displayTitle;
-    final first = await confirmNovelAction(
+    final (successText, cleanupOk) = await _confirmAndDeleteLocalBook(
       context,
-      title: '彻底删除文件？',
-      message: '「$title」将从手机存储中彻底删除，书架、标签和阅读进度一并清除。此操作无法撤销。',
-      confirmLabel: '继续',
-      reduceMotion: state.reduceMotion,
-    );
-    if (!mounted || !first || !context.mounted) return;
-    final second = await confirmNovelAction(
-      context,
-      title: '再次确认删除',
-      message: '这是最后一次确认。文件删除后无法恢复，确定要删除「$title」吗？',
-      confirmLabel: '确认删除',
-      reduceMotion: state.reduceMotion,
-    );
-    if (!mounted || !context.mounted || !second) return;
-    // 删除失败的区分提示与兜底在 _deleteLocalBookWithFallback 内处理；
-    // failed 时记录保留，直接返回。
-    final deleteResult = await _deleteLocalBookWithFallback(
-      context,
-      local,
-      id,
-      reduceMotion: state.reduceMotion,
+      local: local,
       state: state,
+      id: id,
     );
-    if (deleteResult == _DeleteFileResult.failed) return;
-    final successText = switch (deleteResult) {
-      _DeleteFileResult.recordOnly => '已移出书库「$title」，源文件已保留',
-      _DeleteFileResult.recordOnlySourceGone => '已移出书库「$title」',
-      _ => '已删除「$title」',
-    };
-    // 书籍记录已移除：关联数据尽力清理，失败如实提示。
-    var cleanupOk = true;
-    try {
-      await state.setShelfMembership(id, false);
-    } catch (_) {
-      cleanupOk = false;
-    }
-    try {
-      await TagStore.shared.setTagsForBook(id, const {});
-    } catch (_) {
-      cleanupOk = false;
-    }
-    try {
-      await state.clearBookProgress(id);
-    } catch (_) {
-      cleanupOk = false;
-    }
-    if (!context.mounted) return;
+    if (successText == null || !mounted || !context.mounted) return;
     showNovelFeedback(
       context,
       cleanupOk ? successText : '书籍已移除，但部分关联数据未清干净，可重启后重试',
     );
   }
+}
+
+Future<(String?, bool)> _confirmAndDeleteLocalBook(
+  BuildContext context, {
+  required LocalLibraryStore local,
+  required LibraryState state,
+  required int id,
+}) async {
+  final book = local.bookFor(id);
+  if (book == null || !context.mounted) return (null, false);
+  final title = book.displayTitle;
+  final first = await confirmNovelAction(
+    context,
+    title: '彻底删除文件？',
+    message: '「$title」将从手机存储中彻底删除，书架、标签和阅读进度一并清除。此操作无法撤销。',
+    confirmLabel: '继续',
+    reduceMotion: state.reduceMotion,
+  );
+  if (!first || !context.mounted) return (null, false);
+  final second = await confirmNovelAction(
+    context,
+    title: '再次确认删除',
+    message: '这是最后一次确认。文件删除后无法恢复，确定要删除「$title」吗？',
+    confirmLabel: '确认删除',
+    reduceMotion: state.reduceMotion,
+  );
+  if (!second || !context.mounted) return (null, false);
+  final deleteResult = await _deleteLocalBookWithFallback(
+    context,
+    local,
+    id,
+    reduceMotion: state.reduceMotion,
+    state: state,
+  );
+  if (deleteResult == _DeleteFileResult.failed) return (null, false);
+  final successText = switch (deleteResult) {
+    _DeleteFileResult.recordOnly => '已移出书库「$title」，源文件已保留',
+    _DeleteFileResult.recordOnlySourceGone => '已移出书库「$title」',
+    _ => '已删除「$title」',
+  };
+  var cleanupOk = true;
+  for (final step in <Future<void> Function()>[
+    () => state.setShelfMembership(id, false),
+    () => TagStore.shared.setTagsForBook(id, const {}),
+    () => state.clearBookProgress(id),
+  ]) {
+    try {
+      await step();
+    } catch (_) {
+      cleanupOk = false;
+    }
+  }
+  return (successText, cleanupOk);
 }
 
 /// 删除源文件的结果：已彻底删除 / 仅移出书库（源文件保留）/
@@ -4884,55 +4892,13 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     LocalLibraryStore local,
     int id,
   ) async {
-    final book = local.bookFor(id);
-    if (book == null || !context.mounted) return;
-    final title = book.displayTitle;
-    final first = await confirmNovelAction(
+    final (successText, cleanupOk) = await _confirmAndDeleteLocalBook(
       context,
-      title: '彻底删除文件？',
-      message: '「$title」将从手机存储中彻底删除，书架、标签和阅读进度一并清除。此操作无法撤销。',
-      confirmLabel: '继续',
-      reduceMotion: state.reduceMotion,
-    );
-    if (!mounted || !first || !context.mounted) return;
-    final second = await confirmNovelAction(
-      context,
-      title: '再次确认删除',
-      message: '这是最后一次确认。文件删除后无法恢复，确定要删除「$title」吗？',
-      confirmLabel: '确认删除',
-      reduceMotion: state.reduceMotion,
-    );
-    if (!mounted || !context.mounted || !second) return;
-    final deleteResult = await _deleteLocalBookWithFallback(
-      context,
-      local,
-      id,
-      reduceMotion: state.reduceMotion,
+      local: local,
       state: state,
+      id: id,
     );
-    if (deleteResult == _DeleteFileResult.failed) return;
-    final successText = switch (deleteResult) {
-      _DeleteFileResult.recordOnly => '已移出书库「$title」，源文件已保留',
-      _DeleteFileResult.recordOnlySourceGone => '已移出书库「$title」',
-      _ => '已删除「$title」',
-    };
-    var cleanupOk = true;
-    try {
-      await state.setShelfMembership(id, false);
-    } catch (_) {
-      cleanupOk = false;
-    }
-    try {
-      await TagStore.shared.setTagsForBook(id, const {});
-    } catch (_) {
-      cleanupOk = false;
-    }
-    try {
-      await state.clearBookProgress(id);
-    } catch (_) {
-      cleanupOk = false;
-    }
-    if (!mounted) return;
+    if (successText == null || !mounted) return;
     // 文件已删，详情页无意义，返回上一页。
     // pop 前先取到 ScaffoldMessenger：pop 后再用 context 找 messenger，
     // 可能拿到正在退场路由的，反馈挂上去用户看不到；
@@ -5552,12 +5518,7 @@ class _ReaderPageState extends State<ReaderPage>
       final chapters = _novel.chapters;
       _chapterWeights = [
         for (final c in chapters)
-          c.content.runes
-              .where(
-                (rune) =>
-                    !_readerWhitespace.hasMatch(String.fromCharCode(rune)),
-              )
-              .length,
+          c.content.replaceAll(_readerWhitespace, '').runes.length,
       ];
     }
     _totalWeight = _chapterWeights.fold(0, (a, b) => a + b);
@@ -6709,7 +6670,7 @@ class _ReaderPageState extends State<ReaderPage>
                           child: ValueListenableBuilder<double>(
                             valueListenable: _progressValue,
                             builder: (context, progress, _) =>
-                                _ReaderProgressBar(
+                                ReaderProgressBar(
                                   value: _progressDragging
                                       ? _dragValue
                                       : progress,
@@ -7396,145 +7357,6 @@ class _ReaderPageState extends State<ReaderPage>
     } finally {
       _findOpen = false;
     }
-  }
-}
-
-/// 阅读器底部进度条：显示全书阅读进度，支持拖动跳转。
-/// 平时只显示纤细轨道；拖动时显示滑块和"第 N 章 · X%"预览。
-class _ReaderProgressBar extends StatelessWidget {
-  const _ReaderProgressBar({
-    required this.value,
-    required this.dragging,
-    required this.previewText,
-    required this.onDragStart,
-    required this.onDragUpdate,
-    required this.onDragEnd,
-    required this.onDragCancel,
-    required this.onPointerCancel,
-  });
-
-  final double value;
-  final bool dragging;
-  final String previewText;
-  final VoidCallback onDragStart;
-  final ValueChanged<double> onDragUpdate;
-  final VoidCallback onDragEnd;
-  final VoidCallback onDragCancel;
-  // 底层指针取消（PointerCancelEvent）：拖拽 accepted 后可能不走
-  // onHorizontalDragCancel 而直接进 onEnd，父级用它做提交前的检查。
-  final VoidCallback onPointerCancel;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // 拖动时显示预览文字。
-        AnimatedOpacity(
-          opacity: dragging ? 1 : 0,
-          duration: const Duration(milliseconds: 150),
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: Text(
-              previewText,
-              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
-            ),
-          ),
-        ),
-        // 36px 高的可触摸区域，轨道纤细居中。
-        // 用 LayoutBuilder 拿宽度：details.localPosition 是相对手势区域的，
-        // 必须与同一区域的宽度相除，不能用外层 context 的 RenderBox。
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final barWidth = constraints.maxWidth;
-            double toRatio(double dx) => (dx / barWidth).clamp(0.0, 1.0);
-            // Listener 捕获底层指针取消：拖拽 accepted 后，
-            // 指针取消不一定触发 onHorizontalDragCancel，可能直接走 onEnd。
-            return Listener(
-              onPointerCancel: (_) => onPointerCancel(),
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onHorizontalDragStart: (_) => onDragStart(),
-                onHorizontalDragUpdate: (details) =>
-                    onDragUpdate(toRatio(details.localPosition.dx)),
-                onHorizontalDragEnd: (_) => onDragEnd(),
-                onHorizontalDragCancel: onDragCancel,
-                onTapDown: (details) {
-                  onDragStart();
-                  onDragUpdate(toRatio(details.localPosition.dx));
-                },
-                onTapUp: (_) => onDragEnd(),
-                onTapCancel: onDragCancel,
-                child: SizedBox(
-                  height: 36,
-                  width: barWidth,
-                  child: Center(
-                    child: SizedBox(
-                      height: 4,
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          final w = constraints.maxWidth;
-                          return Stack(
-                            children: [
-                              // 轨道
-                              Container(
-                                width: w,
-                                height: 4,
-                                decoration: BoxDecoration(
-                                  color: scheme.onSurface.withValues(
-                                    alpha: 0.15,
-                                  ),
-                                  borderRadius: BorderRadius.circular(2),
-                                ),
-                              ),
-                              // 已读部分
-                              Container(
-                                width: w * value.clamp(0.0, 1.0),
-                                height: 4,
-                                decoration: BoxDecoration(
-                                  color: scheme.primary,
-                                  borderRadius: BorderRadius.circular(2),
-                                ),
-                              ),
-                              // 滑块（拖动时显示）
-                              if (dragging)
-                                Positioned(
-                                  left: (w * value.clamp(0.0, 1.0) - 7).clamp(
-                                    0.0,
-                                    math.max(0.0, w - 14),
-                                  ),
-                                  top: -5,
-                                  child: Container(
-                                    width: 14,
-                                    height: 14,
-                                    decoration: BoxDecoration(
-                                      color: scheme.primary,
-                                      shape: BoxShape.circle,
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withValues(
-                                            alpha: 0.2,
-                                          ),
-                                          blurRadius: 4,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
-      ],
-    );
   }
 }
 

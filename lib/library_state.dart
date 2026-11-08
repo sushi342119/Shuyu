@@ -1,7 +1,8 @@
-import 'dart:convert';
-import 'text_anchor.dart';
 import 'dart:async';
+import 'dart:collection' show UnmodifiableSetView;
+import 'dart:convert';
 import 'dart:io';
+import 'text_anchor.dart';
 
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb, listEquals;
@@ -704,6 +705,7 @@ class LibraryState extends ChangeNotifier {
   final _shelfViewChanges = _StateNotifier();
   final _readerBehaviorChanges = _StateNotifier();
   final Set<int> _shelf = {};
+  late final Set<int> _shelfView = UnmodifiableSetView(_shelf);
   bool _shelfLoadFailed = false;
   final Set<int> _hiddenHistory = {};
   final Map<int, Novel> _known = {};
@@ -786,7 +788,7 @@ class LibraryState extends ChangeNotifier {
     _glassAdvanced = false;
   }
 
-  Set<int> get shelf => Set.unmodifiable(_shelf);
+  Set<int> get shelf => _shelfView;
   bool get shelfLoadFailed => _shelfLoadFailed;
 
   void _requireShelfLoaded() {

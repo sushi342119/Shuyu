@@ -2,12 +2,8 @@ part of 'archive_icons.dart';
 
 /// Folded corners, typeset ink and a little asymmetry. Motion belongs to the
 /// illustrated object: leaves fan, tabs lift, ribbons flex, ink marks settle.
-_Art _foldDrawing(
-  _IconPose pose,
-  ArchiveIconGesture gesture, {
-  bool serialize = false,
-}) {
-  final a = _Art(serialize: serialize);
+_Art _foldDrawing(_IconPose pose, ArchiveIconGesture gesture) {
+  final a = _Art();
   final p = gesture.lead, q = gesture.follow, r = gesture.trail;
   final active = pose.active.clamp(0.0, 1.0), v = pose.variant;
   switch (pose.symbol) {

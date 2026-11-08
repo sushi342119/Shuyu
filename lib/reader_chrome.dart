@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart' show Theme;
+import 'package:flutter/material.dart' show Colors, Theme;
 import 'package:flutter/rendering.dart';
 
 import 'app_ui.dart';
@@ -639,3 +639,144 @@ class ReaderTopBar extends StatelessWidget {
     ),
   );
 }
+
+/// 阅读器底部全书进度条：支持 TXT/在线阅读器与 EPUB 阅读器共用。
+/// 平时只显示纤细轨道；拖动时显示滑块和"第 N 章 · X%"预览。
+class ReaderProgressBar extends StatelessWidget {
+  const ReaderProgressBar({
+    super.key,
+    required this.value,
+    required this.dragging,
+    required this.previewText,
+    required this.onDragStart,
+    required this.onDragUpdate,
+    required this.onDragEnd,
+    required this.onDragCancel,
+    required this.onPointerCancel,
+  });
+
+  final double value;
+  final bool dragging;
+  final String previewText;
+  final VoidCallback onDragStart;
+  final ValueChanged<double> onDragUpdate;
+  final VoidCallback onDragEnd;
+  final VoidCallback onDragCancel;
+  // 底层指针取消（PointerCancelEvent）：拖拽 accepted 后可能不走
+  // onHorizontalDragCancel 而直接进 onEnd，父级用它做提交前的检查。
+  final VoidCallback onPointerCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 拖动时显示预览文字。
+        AnimatedOpacity(
+          opacity: dragging ? 1 : 0,
+          duration: const Duration(milliseconds: 150),
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(
+              previewText,
+              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+            ),
+          ),
+        ),
+        // 36px 高的可触摸区域，轨道纤细居中。
+        // 用 LayoutBuilder 拿宽度：details.localPosition 是相对手势区域的，
+        // 必须与同一区域的宽度相除，不能用外层 context 的 RenderBox。
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final barWidth = constraints.maxWidth;
+            double toRatio(double dx) => (dx / barWidth).clamp(0.0, 1.0);
+            // Listener 捕获底层指针取消：拖拽 accepted 后，
+            // 指针取消不一定触发 onHorizontalDragCancel，可能直接走 onEnd。
+            return Listener(
+              onPointerCancel: (_) => onPointerCancel(),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragStart: (_) => onDragStart(),
+                onHorizontalDragUpdate: (details) =>
+                    onDragUpdate(toRatio(details.localPosition.dx)),
+                onHorizontalDragEnd: (_) => onDragEnd(),
+                onHorizontalDragCancel: onDragCancel,
+                onTapDown: (details) {
+                  onDragStart();
+                  onDragUpdate(toRatio(details.localPosition.dx));
+                },
+                onTapUp: (_) => onDragEnd(),
+                onTapCancel: onDragCancel,
+                child: SizedBox(
+                  height: 36,
+                  width: barWidth,
+                  child: Center(
+                    child: SizedBox(
+                      height: 4,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final w = constraints.maxWidth;
+                          return Stack(
+                            children: [
+                              // 轨道
+                              Container(
+                                width: w,
+                                height: 4,
+                                decoration: BoxDecoration(
+                                  color: scheme.onSurface.withValues(
+                                    alpha: 0.15,
+                                  ),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
+                              // 已读部分
+                              Container(
+                                width: w * value.clamp(0.0, 1.0),
+                                height: 4,
+                                decoration: BoxDecoration(
+                                  color: scheme.primary,
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
+                              // 滑块（拖动时显示）
+                              if (dragging)
+                                Positioned(
+                                  left: (w * value.clamp(0.0, 1.0) - 7).clamp(
+                                    0.0,
+                                    math.max(0.0, w - 14),
+                                  ),
+                                  top: -5,
+                                  child: Container(
+                                    width: 14,
+                                    height: 14,
+                                    decoration: BoxDecoration(
+                                      color: scheme.primary,
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withValues(
+                                            alpha: 0.2,
+                                          ),
+                                          blurRadius: 4,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+

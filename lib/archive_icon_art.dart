@@ -1,61 +1,13 @@
 part of 'archive_icons.dart';
 
-/// One source for Flutter painting and SVG export. Exported previews therefore
-/// show the actual app vectors and intermediate poses, not a separate mockup.
 abstract final class ArchiveIconArt {
-  static List<Path> paths(
-    ArchiveSymbol symbol, {
-    double contact = 0,
-    ArchiveIconGesture? gesture,
-    bool active = false,
-  }) => _build(
-    _IconPose.of(symbol, active),
-    contact: contact,
-    gesture: gesture,
-  ).strokes.map((stroke) => stroke.path).toList(growable: false);
-
-  static String svg(
-    ArchiveSymbol symbol, {
-    double contact = 0,
-    ArchiveIconGesture? gesture,
-    bool active = false,
-    ArchiveSymbol? towards,
-    bool? towardsActive,
-    double progress = 1,
-    String color = 'currentColor',
-    double strokeWidth = 1.72,
-  }) {
-    final from = _IconPose.of(symbol, active);
-    final to = _IconPose.of(towards ?? symbol, towardsActive ?? active);
-    final t = progress;
-    String paths(_IconPose pose, double alpha) =>
-        _build(pose, contact: contact, gesture: gesture, serialize: true)
-            .strokes
-            .map(
-              (s) =>
-                  '<path d="${s.data}" '
-                  'fill="${s.fill ? color : 'none'}" '
-                  'stroke="${s.fill ? 'none' : color}" '
-                  'stroke-width="${_number(strokeWidth * s.width)}" '
-                  'opacity="${_number(s.opacity * alpha.clamp(0, 1))}"/>',
-            )
-            .join();
-    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
-        'fill="none" stroke-linecap="round" stroke-linejoin="round" '
-        'aria-hidden="true">'
-        '${from.symbol == to.symbol ? paths(_IconPose.lerp(from, to, t), 1) : '${paths(from, 1 - t)}${paths(to, t)}'}'
-        '</svg>';
-  }
-
   static _Art _build(
     _IconPose pose, {
     double contact = 0,
     ArchiveIconGesture? gesture,
-    bool serialize = false,
   }) => _foldDrawing(
     pose,
     gesture ?? ArchiveIconGesture(contact, contact, contact),
-    serialize: serialize,
   );
 }
 
@@ -65,17 +17,14 @@ class _Stroke {
     this.fill = false,
     this.opacity = 1,
     this.width = 1,
-    this.data = '',
   });
   final Path path;
   final bool fill;
   final double opacity, width;
-  final String data;
 }
 
 class _Art {
-  _Art({required this.serialize});
-  final bool serialize;
+  _Art();
   final strokes = <_Stroke>[];
   Matrix4 _matrix = Matrix4.identity();
 
@@ -145,7 +94,7 @@ class _Art {
     double opacity = 1,
     double width = 1,
   }) {
-    final trace = _Trace(serialize: serialize, matrix: _matrix);
+    final trace = _Trace(matrix: _matrix);
     draw(trace);
     strokes.add(
       _Stroke(
@@ -153,7 +102,6 @@ class _Art {
         fill: fill,
         opacity: opacity.clamp(0, 1),
         width: width,
-        data: trace.data,
       ),
     );
   }
@@ -274,12 +222,9 @@ class _Art {
 }
 
 class _Trace {
-  _Trace({required this.serialize, Matrix4? matrix}) : _matrix = matrix;
-  final bool serialize;
+  _Trace({Matrix4? matrix}) : _matrix = matrix;
   final Matrix4? _matrix;
   final path = Path();
-  final _data = StringBuffer();
-  String get data => _data.toString();
   Offset _p(double x, double y) {
     final m = _matrix?.storage;
     return m == null
@@ -290,45 +235,29 @@ class _Trace {
   _Trace m(double x, double y) {
     final p = _p(x, y);
     path.moveTo(p.dx, p.dy);
-    if (serialize) _data.write('M${_number(p.dx)} ${_number(p.dy)}');
     return this;
   }
 
   _Trace l(double x, double y) {
     final p = _p(x, y);
     path.lineTo(p.dx, p.dy);
-    if (serialize) _data.write('L${_number(p.dx)} ${_number(p.dy)}');
     return this;
   }
 
   _Trace q(double x1, double y1, double x, double y) {
     final a = _p(x1, y1), b = _p(x, y);
     path.quadraticBezierTo(a.dx, a.dy, b.dx, b.dy);
-    if (serialize) {
-      _data.write(
-        'Q${_number(a.dx)} ${_number(a.dy)} ${_number(b.dx)} ${_number(b.dy)}',
-      );
-    }
     return this;
   }
 
   _Trace c(double x1, double y1, double x2, double y2, double x, double y) {
     final a = _p(x1, y1), b = _p(x2, y2), c = _p(x, y);
     path.cubicTo(a.dx, a.dy, b.dx, b.dy, c.dx, c.dy);
-    if (serialize) {
-      _data.write(
-        'C${_number(a.dx)} ${_number(a.dy)} ${_number(b.dx)} ${_number(b.dy)} ${_number(c.dx)} ${_number(c.dy)}',
-      );
-    }
     return this;
   }
 
   _Trace z() {
     path.close();
-    if (serialize) _data.write('Z');
     return this;
   }
 }
-
-String _number(double n) =>
-    n.toStringAsFixed(3).replaceFirst(RegExp(r'\.?0+$'), '');

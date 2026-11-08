@@ -155,15 +155,13 @@ class EpubPackage {
     required String? coverEntry,
     required List<EpubChapter> chapters,
     required Map<int, List<EpubBlock>> chapterBlocks,
-    required Map<int, int> chapterSizes,
   }) : _input = input,
        _entries = entries,
        _title = title,
        _author = author,
        _coverEntry = coverEntry,
        _chapters = List.unmodifiable(chapters),
-       _chapterBlocks = Map.unmodifiable(chapterBlocks),
-       _chapterSizes = Map.unmodifiable(chapterSizes);
+       _chapterBlocks = Map.unmodifiable(chapterBlocks);
 
   final InputFileStream _input;
   final Map<String, ArchiveFile> _entries;
@@ -172,7 +170,6 @@ class EpubPackage {
   final String? _coverEntry;
   final List<EpubChapter> _chapters;
   final Map<int, List<EpubBlock>> _chapterBlocks;
-  final Map<int, int> _chapterSizes;
   bool _closed = false;
 
   String get title => _title;
@@ -416,7 +413,6 @@ class EpubPackage {
     // 3. 否则保持 1 个 spine 条目对应 1 章，标题回退：NCX -> nav -> <title> -> 首个 <h1> -> 第 N 章。
     final chapters = <EpubChapter>[];
     final precomputedBlocks = <int, List<EpubBlock>>{};
-    final customChapterSizes = <int, int>{};
 
     for (var i = 0; i < spineHrefs.length; i++) {
       final href = spineHrefs[i];
@@ -469,7 +465,6 @@ class EpubPackage {
           final chapterIndex = chapters.length;
           chapters.add(EpubChapter(title: item.title, href: item.href));
           precomputedBlocks[chapterIndex] = List.unmodifiable(item.blocks);
-          customChapterSizes[chapterIndex] = math.max(1, item.size);
         }
         continue;
       }
@@ -520,7 +515,6 @@ class EpubPackage {
       coverEntry: cover,
       chapters: chapters,
       chapterBlocks: precomputedBlocks,
-      chapterSizes: customChapterSizes,
     );
   }
 
@@ -554,27 +548,6 @@ class EpubPackage {
 
   void _ensureOpen() {
     if (_closed) throw StateError('EpubPackage 已关闭');
-  }
-
-  /// Uncompressed XHTML size of each spine chapter. Read from the ZIP
-  /// directory only (no extraction), used to weight displayed progress.
-  List<int> chapterSizes() {
-    _ensureOpen();
-    return [
-      for (var i = 0; i < _chapters.length; i++)
-        math.max(
-          1,
-          _chapterSizes[i] ??
-              _entries[
-                      _resolveEntryKey(
-                            _entries,
-                            _chapters[i].href.split('#').first,
-                          ) ??
-                          _chapters[i].href.split('#').first]
-                  ?.size ??
-              1,
-        ),
-    ];
   }
 
   Uint8List _readEntrySync(String entryPath) {

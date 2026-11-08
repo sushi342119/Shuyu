@@ -1781,8 +1781,8 @@ class NovelCover extends StatelessWidget {
               );
               return FutureBuilder<Uint8List>(
                 key: ValueKey('cover-bytes-${novel.id}'),
-                future: LegacyCover.bytes(novel.id, url: novel.coverUrl),
-                initialData: LegacyCover.peek(novel.id, url: novel.coverUrl),
+                future: LegacyCover.bytes(novel.id),
+                initialData: LegacyCover.peek(novel.id),
                 builder: (context, snapshot) {
                   final bytes = snapshot.data;
                   if (bytes == null) {
@@ -1866,7 +1866,7 @@ class CoverGlow extends StatelessWidget {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final background = dark ? ArchiveDesign.darkBackground : Colors.white;
     return FutureBuilder(
-      future: LegacyCover.bytes(novel.id, url: novel.coverUrl),
+      future: LegacyCover.bytes(novel.id),
       builder: (context, snapshot) {
         if (!snapshot.hasData) return const SizedBox.shrink();
         return ShaderMask(

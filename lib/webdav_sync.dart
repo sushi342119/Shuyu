@@ -485,7 +485,7 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
                               ? 'shuyu-backup-latest.json'
                               : files.first;
                           final jsonText = await client.downloadBackup(target);
-                          if (!mounted) return;
+                          if (!context.mounted) return;
                           Navigator.pop(context);
                           await widget.onRestoreBackupJson(jsonText);
                         })
@@ -553,7 +553,7 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
                               await WebDavBackupClient(cfg).downloadBackup(
                                 file,
                               );
-                          if (!mounted) return;
+                          if (!context.mounted) return;
                           Navigator.pop(context);
                           await widget.onRestoreBackupJson(jsonText);
                         })

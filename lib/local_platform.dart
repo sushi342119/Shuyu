@@ -125,18 +125,6 @@ abstract final class LocalPlatform {
   }
   static Future<String?> importBackup() =>
       channel.invokeMethod<String>('importBackup');
-  static Future<Map<Object?, Object?>?> importLegacyData() =>
-      channel.invokeMapMethod<Object?, Object?>('importLegacyData');
-  static Future<bool> saveBookImage(
-    Uint8List bytes,
-    String name, {
-    String? authorizationToken,
-  }) => _saveGalleryImage(
-    'saveBookImage',
-    bytes,
-    name,
-    authorizationToken: authorizationToken,
-  );
   static Future<void> shareImage(Uint8List bytes, String name) =>
       channel.invokeMethod<void>('shareImage', {'bytes': bytes, 'name': name});
   static Future<void> saveImageToGallery(
@@ -144,30 +132,7 @@ abstract final class LocalPlatform {
     String name, {
     String? authorizationToken,
   }) async {
-    await _saveGalleryImage(
-      'saveImageToGallery',
-      bytes,
-      name,
-      authorizationToken: authorizationToken,
-    );
-  }
-  static Future<bool> exportImage(
-    Uint8List bytes,
-    String name, {
-    String? authorizationToken,
-  }) => _saveGalleryImage(
-    'exportImage',
-    bytes,
-    name,
-    authorizationToken: authorizationToken,
-  );
-  static Future<bool> _saveGalleryImage(
-    String method,
-    Uint8List bytes,
-    String name, {
-    String? authorizationToken,
-  }) async {
-    final saved = await channel.invokeMethod<bool>(method, {
+    final saved = await channel.invokeMethod<bool>('saveImageToGallery', {
       'bytes': bytes,
       'name': name,
       'authorizationToken': ?authorizationToken,
@@ -175,7 +140,6 @@ abstract final class LocalPlatform {
     if (saved != true) {
       throw PlatformException(code: 'gallery_save', message: '图片未保存到相册，请重试');
     }
-    return true;
   }
 
   // ---- 本地书库：SAF 文件夹 / 文本 / PDF ----
@@ -396,8 +360,6 @@ abstract final class LocalPlatform {
   static Future<String?> pickFontFile() =>
       channel.invokeMethod<String>('pickFontFile');
 
-  static Future<void> shareText(String text) =>
-      channel.invokeMethod<void>('shareText', {'text': text});
   static final Set<Object> _awakeOwners = {};
   static bool _requestedAwake = false;
 

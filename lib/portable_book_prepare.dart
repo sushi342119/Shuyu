@@ -1,61 +1,26 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 import 'package:archive/archive.dart';
-import 'package:flutter/services.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:xml/xml.dart';
 
 import 'local_mobi.dart';
 
-typedef PreparedBookDocument = ({String name, String? path, String? error});
-typedef PreparedCloudBook = ({String name, Uint8List? epubBytes, String? text});
+typedef PreparedCloudBook = ({
+  String name,
+  Uint8List? epubBytes,
+  Uint8List? rawTextBytes,
+  String? text,
+});
 
 class PortableBookPreparer {
-  PortableBookPreparer({
-    required this.directory,
-    required this.textCodecToken,
-    required this.decodeNames,
-    required this.convert,
-    required this.extractKindle,
-    this.extractPdf,
-  });
-
-  final Directory directory;
-  final RootIsolateToken textCodecToken;
-  final Future<List<String>> Function(List<List<int>> names) decodeNames;
-  final Future<List<PreparedBookDocument>> Function(String name, String path)
-  convert;
-  final Future<int> Function(String source, String output) extractKindle;
-  final Future<void> Function(String name, String source, String output)?
-  extractPdf;
-
-  static Future<void> clearPreviousRuns(Directory directory) async {
-    try {
-      if (await directory.exists()) {
-        await directory.delete(recursive: true);
-      }
-    } on FileSystemException catch (_) {}
-  }
+  const PortableBookPreparer._();
 
   static const int _maxSingleFileBytes = 256 * 1024 * 1024;
   static const int _maxZipTotalBytes = 1024 * 1024 * 1024;
   static const int _maxZipEntries = 256;
-
-  Future<List<PreparedBookDocument>> prepare(String name, String path) =>
-      convert(name, path);
-
-  Future<void> releasePaths(Iterable<String> paths) async {
-    final rootPath = directory.absolute.path;
-    for (final raw in paths) {
-      if (raw.isEmpty) continue;
-      final file = File(raw);
-      if (!file.absolute.path.startsWith(rootPath)) continue;
-      try {
-        if (await file.exists()) await file.delete();
-      } on FileSystemException catch (_) {}
-    }
-  }
 
   static Future<List<PreparedCloudBook>> prepareFile(
     String name,
@@ -78,7 +43,9 @@ class PortableBookPreparer {
   ) {
     switch (ext) {
       case 'epub':
-        return [(name: name, epubBytes: bytes, text: null)];
+        return [
+          (name: name, epubBytes: bytes, rawTextBytes: null, text: null),
+        ];
       case 'mobi':
       case 'azw3':
       case 'azw':
@@ -87,23 +54,26 @@ class PortableBookPreparer {
         final outName = mobi.author.isNotEmpty
             ? '${mobi.title} - ${mobi.author}.txt'
             : '${mobi.title}.txt';
-        return [(name: outName, epubBytes: null, text: mobi.text)];
+        return [
+          (name: outName, epubBytes: null, rawTextBytes: null, text: mobi.text),
+        ];
       case 'txt':
       case 'md':
       case 'markdown':
         return [
-          (
-            name: name,
-            epubBytes: null,
-            text: utf8.decode(bytes, allowMalformed: true),
-          ),
+          (name: name, epubBytes: null, rawTextBytes: bytes, text: null),
         ];
       case 'html':
       case 'htm':
       case 'xhtml':
         final doc = html_parser.parse(utf8.decode(bytes, allowMalformed: true));
         return [
-          (name: name, epubBytes: null, text: doc.body?.text ?? doc.text ?? ''),
+          (
+            name: name,
+            epubBytes: null,
+            rawTextBytes: null,
+            text: doc.body?.text ?? doc.text ?? '',
+          ),
         ];
       case 'fb2':
         try {
@@ -115,14 +85,17 @@ class PortableBookPreparer {
               .map((e) => e.innerText.trim())
               .where((s) => s.isNotEmpty)
               .join('\n\n');
-          return [(name: name, epubBytes: null, text: paragraphs)];
-        } catch (_) {
           return [
             (
               name: name,
               epubBytes: null,
-              text: utf8.decode(bytes, allowMalformed: true),
+              rawTextBytes: null,
+              text: paragraphs,
             ),
+          ];
+        } catch (_) {
+          return [
+            (name: name, epubBytes: null, rawTextBytes: bytes, text: null),
           ];
         }
       case 'docx':
@@ -145,7 +118,14 @@ class PortableBookPreparer {
                 .trim();
             if (line.isNotEmpty) lines.add(line);
           }
-          return [(name: name, epubBytes: null, text: lines.join('\n\n'))];
+          return [
+            (
+              name: name,
+              epubBytes: null,
+              rawTextBytes: null,
+              text: lines.join('\n\n'),
+            ),
+          ];
         } catch (_) {
           return const [];
         }
@@ -155,7 +135,14 @@ class PortableBookPreparer {
             .replaceAll(RegExp(r'\\par\b\s*'), '\n')
             .replaceAll(RegExp(r'\\[a-zA-Z]+-?\d*\s?'), '')
             .replaceAll(RegExp(r'[{}]'), '');
-        return [(name: name, epubBytes: null, text: stripped.trim())];
+        return [
+          (
+            name: name,
+            epubBytes: null,
+            rawTextBytes: null,
+            text: stripped.trim(),
+          ),
+        ];
       case 'zip':
         try {
           final archive = ZipDecoder().decodeBytes(bytes);
@@ -187,11 +174,7 @@ class PortableBookPreparer {
         }
       default:
         return [
-          (
-            name: name,
-            epubBytes: null,
-            text: utf8.decode(bytes, allowMalformed: true),
-          ),
+          (name: name, epubBytes: null, rawTextBytes: bytes, text: null),
         ];
     }
   }

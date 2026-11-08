@@ -42,7 +42,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
     }
     private val io = Executors.newSingleThreadExecutor()
     private val requests = LocalToolRequests { callback -> activity.runOnUiThread { callback() } }
-    private data class Pending(val result: MethodChannel.Result, val export: String?, val legacy: Boolean = false)
+    private data class Pending(val result: MethodChannel.Result, val export: String?)
     private var pending: Pending? = null
     private var pendingShare: MethodChannel.Result? = null
     private var galleryAwaitingPermission: BookImageStore.Image? = null
@@ -126,18 +126,6 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                     result.error("clipboard", "Backup could not be copied", null)
                 }
             }
-            "shareText" -> {
-                val text = call.argument<String>("text") ?: ""
-                if (text.isBlank() || text.length > 10000) {
-                    result.error("input", "Invalid share text", null)
-                } else try {
-                    activity.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, text)
-                    }, "分享图书"))
-                    result.success(null)
-                } catch (_: Exception) { result.error("share", "Share sheet did not open", null) }
-            }
             "shareImage" -> {
                 val bytes = call.argument<ByteArray>("bytes")
                 if (pendingShare != null || pending != null || closed) {
@@ -181,17 +169,13 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                     }
                 }
             }
-            "saveImageToGallery", "exportImage", "saveBookImage" -> {
+            "saveImageToGallery" -> {
                 if (pending != null || pendingShare != null || closed) {
                     result.error("busy", "请先完成当前图片、文件或分享操作", null)
                     return
                 }
                 val image = try {
-                    if (call.method == "saveBookImage") {
-                        BookImageStore.image(call.argument<ByteArray>("bytes"), call.argument<String>("name"))
-                    } else {
-                        BookImageStore.renderedImage(call.argument<ByteArray>("bytes"), call.argument<String>("name"))
-                    }
+                    BookImageStore.renderedImage(call.argument<ByteArray>("bytes"), call.argument<String>("name"))
                 } catch (_: Exception) {
                     result.error("gallery_input", "图片格式或大小无效", null)
                     return
@@ -209,27 +193,24 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                     }
                 } else saveGallery(image, result)
             }
-            "exportBackup", "importBackup", "importLegacyData" -> {
+            "exportBackup", "importBackup" -> {
                 if (pending != null || pendingShare != null || closed) {
                     result.error("busy", "A document operation is already active", null)
                     return
                 }
                 val text = if (call.method == "exportBackup") call.argument<String>("text") else null
-                val legacy = call.method == "importLegacyData"
                 if (call.method == "exportBackup" && (text == null || text.toByteArray(Charsets.UTF_8).size > MAX_BYTES)) {
                     result.error("size", "Backup exceeds the document limit", null)
                     return
                 }
-                val intent = Intent(if (legacy) Intent.ACTION_OPEN_DOCUMENT_TREE else if (text == null) Intent.ACTION_OPEN_DOCUMENT else Intent.ACTION_CREATE_DOCUMENT).apply {
-                    if (!legacy) {
-                        addCategory(Intent.CATEGORY_OPENABLE)
-                        type = if (text == null) "*/*" else "application/json"
-                        if (text == null) putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain", "application/octet-stream"))
-                        else putExtra(Intent.EXTRA_TITLE, call.argument<String>("name") ?: "wenku8-backup.json")
-                    }
+                val intent = Intent(if (text == null) Intent.ACTION_OPEN_DOCUMENT else Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = if (text == null) "*/*" else "application/json"
+                    if (text == null) putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain", "application/octet-stream"))
+                    else putExtra(Intent.EXTRA_TITLE, call.argument<String>("name") ?: "wenku8-backup.json")
                 }
                 if (!requests.begin(result)) return
-                pending = Pending(result, text, legacy)
+                pending = Pending(result, text)
                 try {
                     @Suppress("DEPRECATION")
                     activity.startActivityForResult(intent, REQUEST)
@@ -471,9 +452,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         val work = io.submit {
             if (!requests.active(operation.result)) return@submit
             try {
-                val response: Any = if (operation.legacy) {
-                    readLegacyTree(uri)
-                } else if (operation.export != null) {
+                val response: Any = if (operation.export != null) {
                     activity.contentResolver.openOutputStream(uri, "wt")?.use { output ->
                         output.write(operation.export.toByteArray(Charsets.UTF_8))
                         output.flush()
@@ -1197,64 +1176,6 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         return (displayName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() } ?: "font")
             .replace(Regex("[^A-Za-z0-9_\\-\\u4e00-\\u9fff]"), "_")
             .take(40)
-    }
-
-    /** Only documented record/index files from the explicitly selected tree.
-     * Never read cert.wk8, account files, images or arbitrary nested folders. */
-    private fun readLegacyTree(tree: Uri): Map<String, Any> {
-        data class Document(val id: String, val name: String, val directory: Boolean, val modified: Long)
-        fun children(id: String): List<Document> {
-            val uri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, id)
-            val columns = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_LAST_MODIFIED)
-            return activity.contentResolver.query(uri, columns, null, null, null)?.use { cursor ->
-                val records = ArrayList<Document>()
-                while (cursor.moveToNext()) {
-                    check(records.size < 10000) { "Folder too large" }
-                    val documentId = cursor.getString(0) ?: continue
-                    val documentName = cursor.getString(1) ?: continue
-                    records.add(Document(documentId, documentName,
-                        cursor.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR, cursor.getLong(3)))
-                }
-                records
-            } ?: throw IllegalStateException("Folder is not readable")
-        }
-        val root = children(DocumentsContract.getTreeDocumentId(tree))
-        val saves = root.firstOrNull { it.directory && it.name == "saves" }?.let { children(it.id) } ?: root
-        val records = saves.filter { !it.directory && it.name in setOf("bookshelf_local.wk8", "read_saves.wk8", "read_saves_v1.wk8", "search_history.wk8") }
-        require(records.isNotEmpty()) { "No legacy records" }
-        val indices = saves.firstOrNull { it.directory && it.name == "intro" }?.let { children(it.id) }
-            ?.filter { !it.directory && Regex("[1-9][0-9]{0,9}-volume\\.xml").matches(it.name) } ?: emptyList()
-        val output = LinkedHashMap<String, Any>()
-        var total = 0
-        var skipped = 0
-        for (document in records + indices) {
-            val content = activity.contentResolver.openInputStream(DocumentsContract.buildDocumentUriUsingTree(tree, document.id))?.use { input ->
-                val bytes = ByteArrayOutputStream()
-                val buffer = ByteArray(8192)
-                var oversized = false
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    if (bytes.size() + count > MAX_BYTES || total + bytes.size() + count > 8 * 1024 * 1024) {
-                        if (document in records) throw IllegalArgumentException("Records too large")
-                        skipped++
-                        oversized = true
-                        break
-                    }
-                    bytes.write(buffer, 0, count)
-                }
-                if (oversized) null else bytes.toByteArray()
-            } ?: continue
-            try {
-                val text = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(content)).toString()
-                total += content.size
-                output[document.name] = mapOf("text" to text, "modifiedAt" to document.modified)
-            } catch (_: Exception) { skipped++ }
-        }
-        require(records.any { output.containsKey(it.name) }) { "No readable legacy records" }
-        return mapOf("documents" to output, "skippedFiles" to skipped)
     }
 
     fun close() {

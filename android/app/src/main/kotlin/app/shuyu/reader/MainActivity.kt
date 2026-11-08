@@ -11,12 +11,8 @@ class MainActivity : AudioServiceActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ReaderWindowLayout.apply(window)
-        refreshRate = HighRefreshRateController(this) {
-            (flutterEngine?.plugins?.get(FrameRatePlugin::class.java) as? FrameRatePlugin)?.onRequestChanged()
-        }
+        refreshRate = HighRefreshRateController(this)
     }
-
-    internal fun frameRateStatus(): HighRefreshRateController.Status? = refreshRate?.status()
 
     override fun onResume() {
         super.onResume()

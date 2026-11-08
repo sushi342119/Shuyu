@@ -2,7 +2,6 @@ import 'package:flutter/cupertino.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter/services.dart';
 import 'package:dart_jieba/dart_jieba.dart';
-import 'package:characters/characters.dart';
 import 'dart:isolate';
 import 'dart:io';
 import 'dart:async';
