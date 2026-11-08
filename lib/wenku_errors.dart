@@ -16,10 +16,6 @@ class WenkuApiError implements Exception {
 
 int? wenkuResponseCode(String source) => int.tryParse(source.trim());
 
-String describeWenkuError(Object error) => error is WenkuApiError
-    ? error.message
-    : describeSafeError(error, fallback: '网络或本地存储暂时异常，请重试');
-
 /// Returns a short diagnostic without embedding exception text, paths or URIs.
 String describeSafeError(Object error, {String fallback = '操作失败，请重试'}) =>
     kDebugMode ? '${error.runtimeType}: $fallback' : fallback;

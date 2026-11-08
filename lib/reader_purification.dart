@@ -29,7 +29,7 @@ String repairReaderQuotes(String input) {
   }
   if (!hasQuote) return input;
 
-  final buffer = StringBuilder();
+  final buffer = StringBuffer();
   var open = false;
   for (var i = 0; i < input.length; i++) {
     final unit = input.codeUnitAt(i);
@@ -57,14 +57,6 @@ String repairReaderQuotes(String input) {
     open = useOpen;
   }
   return buffer.toString();
-}
-
-class StringBuilder {
-  final StringBuffer _buf = StringBuffer();
-  void write(String s) => _buf.write(s);
-  void writeCharCode(int code) => _buf.writeCharCode(code);
-  @override
-  String toString() => _buf.toString();
 }
 
 /// Splits an overly dense wall-of-text paragraph at clear dialogue and

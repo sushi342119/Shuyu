@@ -7,12 +7,6 @@ enum ListeningSource { edge, system, custom }
 
 enum ListeningPhase { stopped, preparing, playing, paused, completed, failed }
 
-const listeningMinimumSpeed = .5;
-const listeningMaximumSpeed = 3.0;
-const listeningMaximumParagraphGapMs = 3000;
-int normalizeListeningParagraphGap(int value) =>
-    (value.clamp(0, listeningMaximumParagraphGapMs) / 100).round() * 100;
-
 class SpeechVoice {
   const SpeechVoice({
     required this.id,

@@ -623,16 +623,6 @@ class _RhythmPainter extends CustomPainter {
       surface != old.surface;
 }
 
-/// One week-row dot matrix, arranged in consecutive sections of at most 14 weeks.
-/// Sections flow left to right, then wrap at the actual widget or PNG width.
-/// [forceMonthly] is retained for old callers and no longer changes the layout.
-Size readingCalendarSize(
-  List<DateTime> dates,
-  double width, {
-  bool forceMonthly = false,
-  bool showDateAnchors = false,
-}) => _CalendarLayout(dates, width, showDateAnchors: showDateAnchors).size;
-
 class ReadingActivityCalendar extends StatefulWidget {
   const ReadingActivityCalendar({
     super.key,

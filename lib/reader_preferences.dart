@@ -5,9 +5,6 @@ import 'archive_design.dart';
 bool validBackgroundId(Object? id) =>
     id is String && RegExp(r'^paper_[0-9]+\.png$').hasMatch(id);
 
-const minimumReaderFontSize = 10.0;
-const maximumReaderFontSize = 27.0;
-
 enum ReaderPaper {
   system('跟随外观'),
   // Legacy values: never offered again, still decoded and drawn unchanged.
@@ -53,18 +50,6 @@ enum ReaderVerticalLatinOrientation {
   const ReaderVerticalLatinOrientation(this.label);
   final String label;
 }
-
-/// Stored layout keys may also carry typography and content-filter suffixes.
-/// Read the mode token rather than requiring it to be the last field.
-bool readerLayoutIsPaginated(String layout) => layout
-    .split('|')
-    .any(
-      (section) =>
-          !section.startsWith('languages=') &&
-          section
-              .split(':')
-              .any((part) => part == 'paged' || part == 'vertical'),
-    );
 
 enum ReaderTapLayout {
   standard('常规'),

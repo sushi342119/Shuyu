@@ -1635,9 +1635,6 @@ class CoverHeroTag {
   int get hashCode => Object.hash(identityHashCode(source), bookId);
 }
 
-int novelCoverDecodeWidth(double width, double pixelRatio) =>
-    (width * pixelRatio).ceil().clamp(1, 1536);
-
 class NovelCover extends StatelessWidget {
   const NovelCover(
     this.novel, {

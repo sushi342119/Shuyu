@@ -12,12 +12,6 @@ import 'ui_preferences.dart' show GlassEdgeMode;
 /// Reader direction B: controls use at most σ4, never the library's tier.
 const readerChromeMaxSigma = 4.0;
 
-/// The reveal clip reserves the capsule's shadow without adding a second gutter.
-const readerDockPaintPadding = EdgeInsets.symmetric(
-  horizontal: 12,
-  vertical: 6,
-);
-
 /// Scroll-edge treatment, mounted only while the reader controls are visible.
 class ReaderEdgeBlur extends StatelessWidget {
   const ReaderEdgeBlur({

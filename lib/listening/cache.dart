@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
-import '../reader_languages.dart';
 import 'edge_tts.dart';
 import 'http_tts.dart';
 import 'models.dart';
@@ -21,19 +20,6 @@ abstract interface class SpeechAudioSource {
   Future<void> trim();
 }
 
-/// Optional inventory scoped to the user's selected provider/Android engine.
-/// Older audio sources keep their existing catalogue contract.
-abstract interface class SpeechLanguageVoiceSource {
-  Future<List<SpeechVoice>> languageVoices(SpeechVoice preferred);
-}
-
-/// Native display names are separate from the stable synthesis identifier.
-/// Android engines that expose only an ID retain their existing voice labels.
-String systemSpeechVoiceLabel(Map<dynamic, dynamic> voice) {
-  final name = voice['name'];
-  return name is String && name.trim().isNotEmpty ? name : '${voice['id']}';
-}
-
 /// Playback maintenance is coalesced; an explicit trim still enforces the full
 /// cache policy immediately. Other sources retain their existing trim contract.
 extension SpeechPlaybackMaintenance on SpeechAudioSource {
@@ -43,7 +29,7 @@ extension SpeechPlaybackMaintenance on SpeechAudioSource {
   };
 }
 
-class SpeechAudioCache implements SpeechAudioSource, SpeechLanguageVoiceSource {
+class SpeechAudioCache implements SpeechAudioSource {
   SpeechAudioCache(this.directory, this.edge);
   final Directory directory;
   final EdgeSpeechClient edge;
@@ -78,39 +64,6 @@ class SpeechAudioCache implements SpeechAudioSource, SpeechLanguageVoiceSource {
       ...edgeVoices,
       ...HttpTtsStore.shared.voices,
     ]);
-  }
-
-  @override
-  Future<List<SpeechVoice>> languageVoices(SpeechVoice preferred) {
-    if (preferred.source == ListeningSource.edge) return onlineVoices();
-    if (preferred.source == ListeningSource.custom) {
-      return Future.value([preferred]);
-    }
-    return _native(() async {
-      final raw =
-          await system
-              .invokeListMethod<dynamic>('voices', {'engine': preferred.engine})
-              .timeout(const Duration(seconds: 25)) ??
-          [];
-      return List.unmodifiable([
-        for (final voice in raw)
-          if (voice is Map &&
-              voice['id'] is String &&
-              voice['locale'] is String &&
-              speechLanguageCode(voice['locale']).isNotEmpty &&
-              !(voice['features'] is List &&
-                  (voice['features'] as List).contains('notInstalled')))
-            SpeechVoice(
-              id: voice['id'],
-              label: systemSpeechVoiceLabel(voice),
-              locale: chineseSpeechLocale(voice['locale']) ?? voice['locale'],
-              source: ListeningSource.system,
-              engine: preferred.engine,
-              offline: voice['networkRequired'] == false,
-              quality: voice['quality'] is int ? voice['quality'] : 0,
-            ),
-      ]);
-    });
   }
 
   @override

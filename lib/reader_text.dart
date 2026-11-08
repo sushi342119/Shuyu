@@ -2,7 +2,6 @@ import 'package:flutter/widgets.dart';
 
 // A fixed inline box is not discarded as leading whitespace by SkParagraph's
 // justification. One placeholder code unit maps back to zero source characters.
-const readerIndentLength = 1;
 const readerIndentPlaceholder = '\ufffc';
 
 const cjkClosingPunctuation = '，。！？、；：）》」』】〕］｝’”';

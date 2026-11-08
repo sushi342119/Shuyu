@@ -129,14 +129,6 @@ class ReaderAnnotationRange {
   int get hashCode => Object.hash(range, style, color);
 }
 
-/// A saved range clipped to the currently materialized paragraph fragment.
-class ReaderTextMark {
-  const ReaderTextMark(this.start, this.end, this.style, this.color);
-  final int start, end;
-  final ReaderMarkStyle style;
-  final ReaderMarkColor color;
-}
-
 /// An underline in original paragraph coordinates, independent of pagination.
 ///
 /// UTF-16 offsets are end-exclusive. Several ranges may share a chapter so a

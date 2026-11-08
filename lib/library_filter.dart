@@ -127,22 +127,6 @@ bool matchesSearch(
   };
 }
 
-/// Character ranges of [term] inside [text] (case-insensitive).
-List<(int, int)> searchHighlights(String text, String term) {
-  final q = term.trim().toLowerCase();
-  if (q.isEmpty) return const [];
-  final lower = text.toLowerCase();
-  final out = <(int, int)>[];
-  var start = 0;
-  while (true) {
-    final i = lower.indexOf(q, start);
-    if (i < 0) break;
-    out.add((i, i + q.length));
-    start = i + q.length;
-  }
-  return out;
-}
-
 /// Result of a batch tag operation; failures name the book and the reason.
 @immutable
 class BatchTagResult {
