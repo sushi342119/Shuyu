@@ -39,13 +39,42 @@ def metadata(root: Path, tag: str | None = None) -> tuple[str, int, str]:
     return name, build, notes[1].strip() + "\n"
 
 
+def sync_dart_defaults(root: Path, version: str, build: int, notes: str) -> None:
+    dart_path = root / "lib/updates/app_updates.dart"
+    if not dart_path.is_file():
+        return
+    dart = dart_path.read_text()
+    dart = re.sub(
+        r"(const (?:String\s+)?currentAppVersion\s*=\s*String\.fromEnvironment\(\s*'APP_VERSION'\s*,\s*defaultValue:\s*')[^']+(')",
+        rf"\g<1>{version}\2",
+        dart,
+        count=1,
+    )
+    dart = re.sub(
+        r"(const (?:int\s+)?currentAppBuild\s*=\s*int\.fromEnvironment\(\s*'APP_BUILD'\s*,\s*defaultValue:\s*)[1-9]\d*",
+        rf"\g<1>{build}",
+        dart,
+        count=1,
+    )
+    escaped_notes = notes.replace("\\", "\\\\").replace("$", r"\$")
+    dart = re.sub(
+        r"const (?:String\s+)?currentReleaseNotes\s*=\s*r?'''[\s\S]*?'''\s*;",
+        lambda _: f"const currentReleaseNotes = '''\n{escaped_notes}''';",
+        dart,
+        count=1,
+    )
+    dart_path.write_text(dart)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag")
     parser.add_argument("--github-output", type=Path)
     parser.add_argument("--notes", type=Path, required=True)
     args = parser.parse_args()
-    version, build, notes = metadata(Path(__file__).resolve().parents[1], args.tag)
+    root = Path(__file__).resolve().parents[1]
+    version, build, notes = metadata(root, args.tag)
+    sync_dart_defaults(root, version, build, notes)
     args.notes.parent.mkdir(parents=True, exist_ok=True)
     args.notes.write_text(notes)
     if args.github_output:
@@ -56,3 +85,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

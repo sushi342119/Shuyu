@@ -285,9 +285,9 @@ class AppUpdatePage extends StatelessWidget {
                 ],
                 const SizedBox(height: 28),
               ],
-              const ArchiveSection(
+              ArchiveSection(
                 title: '本版更新',
-                code: 'RELEASE / $currentAppVersion',
+                code: 'RELEASE / $version',
               ),
               const SizedBox(height: 14),
               const ContentPanel(child: ReleaseNotes(currentReleaseNotes)),
@@ -317,7 +317,7 @@ class AppUpdatePage extends StatelessWidget {
                       onPressed: () => showLicensePage(
                         context: context,
                         applicationName: '书屿',
-                        applicationVersion: currentAppVersion,
+                        applicationVersion: version,
                         applicationLegalese:
                             'Copyright © MewX and contributors\nFlutter modifications © 2026 Wenku8 Flutter contributors',
                       ),
@@ -374,7 +374,8 @@ class ReleaseNotes extends StatelessWidget {
             child: Text(
               line
                   .replaceFirst(RegExp(r'^#{1,6}\s+'), '')
-                  .replaceFirst(RegExp(r'^[-*]\s+'), '· '),
+                  .replaceFirst(RegExp(r'^[-*]\s+'), '· ')
+                  .replaceAll('`', ''),
               style: TextStyle(
                 height: 1.6,
                 fontWeight: line.startsWith('#')

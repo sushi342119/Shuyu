@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-from prepare_release import metadata
+from prepare_release import metadata, sync_dart_defaults
 
 
 class ReleaseMetadataTest(unittest.TestCase):
@@ -76,7 +76,31 @@ const currentAppBuild = int.fromEnvironment(
     def test_repository_release_metadata_is_valid(self):
         # Exercise the real Dart declarations as well as synthetic fixtures.
         root = Path(__file__).resolve().parents[1]
-        self.assertTrue(metadata(root)[2].strip())
+        version, build, notes = metadata(root)
+        self.assertTrue(notes.strip())
+        dart = (root / "lib/updates/app_updates.dart").read_text()
+        self.assertIn(f"defaultValue: '{version}'", dart)
+        self.assertIn(f"defaultValue: {build}", dart)
+        self.assertIn(notes.strip(), dart)
+
+    def test_sync_dart_defaults_updates_version_build_and_notes(self):
+        dart = self.root / "lib/updates/app_updates.dart"
+        dart.write_text(
+            "const currentAppVersion = String.fromEnvironment(\n"
+            "  'APP_VERSION',\n"
+            "  defaultValue: '0.1.0',\n"
+            ");\n"
+            "const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 1);\n"
+            "const currentReleaseNotes = '''\n"
+            "旧版本说明\n"
+            "''';\n"
+        )
+        version, build, notes = metadata(self.root, "v0.2.0+2")
+        sync_dart_defaults(self.root, version, build, notes)
+        synced = dart.read_text()
+        self.assertIn("defaultValue: '0.2.0'", synced)
+        self.assertIn("defaultValue: 2", synced)
+        self.assertIn("const currentReleaseNotes = '''\n- 新功能\n''';", synced)
 
     def test_from_environment_default_values_are_supported(self):
         (self.root / "lib/updates/app_updates.dart").write_text(

@@ -14,14 +14,14 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.8.7',
+  defaultValue: '1.8.26',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 54);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 73);
 const currentReleaseNotes = '''
-1. 修复仅有一章正文的小说在首次排版完成后不显示底部阅读进度条的问题。
-2. 智能合并因源文本硬换行或断句异常拆开的段落，保持正常自然段与标题独立。
-3. 修复听书后向后翻页再打开听书面板点击开始会跳回首次听书章节的问题。
-4. 将应用包名更新为 app.shuyu.reader，Flutter 项目包名更新为 shuyu。
+1. 修复「关于书屿」页面中「本版更新」说明未随版本同步更新的问题，发布与构建流程自动从更新日志同步当前版本说明与默认版本号。
+2. 安装包体积与静态资源深度瘦身（缩减约 28.6 MB）：去重阅读预览与同源季节插画资源，重编码年度报告与桌面小组件背景图为高画质 WebP。
+3. 统一 TXT/在线、EPUB 与 PDF 阅读器顶栏及底部进度条组件，合并书架与详情页本地书籍文件删除确认逻辑。
+4. 修复云端与压缩包内 GBK/GB18030 文本被强制按 UTF-8 解码导致乱码的问题，优化章节切分与书架视图缓存性能。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
