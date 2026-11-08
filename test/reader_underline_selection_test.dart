@@ -251,7 +251,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('划线测试作品'));
+    await tester.tap(
+      find.byKey(const ValueKey('bookmark-book-88')),
+      warnIfMissed: false,
+    );
     await tester.pumpAndSettle();
 
     final deleteUnderline = find.byKey(ValueKey('bookmark-delete-${underline.id}'));
