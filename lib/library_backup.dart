@@ -239,6 +239,7 @@ Map<String, Object> _validateRecordValues(Map<String, dynamic> input) {
           'unread',
           'reading',
           'finished',
+          'untagged',
         ].contains(value),
         'reduceMotion' ||
         'readerKeepScreenOn' ||

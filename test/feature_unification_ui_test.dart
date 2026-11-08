@@ -316,6 +316,25 @@ void main({
       expect((await LibraryState.load()).shelfFilter, 'finished');
       expect(repository.calls, isEmpty);
       await shot(tester, 'shelf-finished-filter');
+      await tester.runAsync(() async {
+        final tagId = await TagStore.shared.createTag('已归档');
+        await TagStore.shared.setTagsForBook(71, [tagId]);
+        await TagStore.shared.setTagsForBook(72, [tagId]);
+      });
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('shelf-filter')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(GlassMenuItem),
+          matching: find.text('未写标签'),
+        ),
+      );
+      await io(tester);
+      expect(find.byKey(const ValueKey('shelf-book-73')), findsOneWidget);
+      expect(find.byKey(const ValueKey('shelf-book-71')), findsNothing);
+      expect(find.byKey(const ValueKey('shelf-book-72')), findsNothing);
+      expect((await LibraryState.load()).shelfFilter, 'untagged');
       expect(tester.takeException(), isNull);
     },
   );

@@ -523,6 +523,7 @@ class LibraryState extends ChangeNotifier {
       'unread' => 'unread',
       'reading' => 'reading',
       'finished' => 'finished',
+      'untagged' => 'untagged',
       _ => 'all',
     };
     final recent = _prefs.get('recentSearches');
@@ -1207,7 +1208,7 @@ class LibraryState extends ChangeNotifier {
           ? sort!
           : _shelfSort;
       final nextFilter =
-          ['all', 'unread', 'reading', 'finished'].contains(filter)
+          ['all', 'unread', 'reading', 'finished', 'untagged'].contains(filter)
           ? filter!
           : _shelfFilter;
       await _commitLibraryRecords({

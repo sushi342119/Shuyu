@@ -2298,6 +2298,7 @@ class _ShelfPageState extends State<ShelfPage> {
       'unread' => !read,
       'reading' => read && !finished,
       'finished' => finished,
+      'untagged' => TagStore.shared.tagsForBook(id).isEmpty,
       _ => true,
     };
   }
@@ -2422,6 +2423,7 @@ class _ShelfPageState extends State<ShelfPage> {
                                 'unread' => '未读',
                                 'reading' => '阅读中',
                                 'finished' => '已读完',
+                                'untagged' => '未写标签',
                                 _ => '全部',
                               }),
                             ),
@@ -2527,12 +2529,13 @@ class _ShelfPageState extends State<ShelfPage> {
                             ),
                           if (state.shelfFilter != 'all')
                             InputChip(
-                              label: Text('阅读状态：${switch (state.shelfFilter) {
-                                'unread' => '未读',
-                                'reading' => '阅读中',
-                                'finished' => '已读完',
-                                _ => '全部',
-                              }}'),
+                              label: Text(switch (state.shelfFilter) {
+                                'unread' => '阅读状态：未读',
+                                'reading' => '阅读状态：阅读中',
+                                'finished' => '阅读状态：已读完',
+                                'untagged' => '标签：未写标签',
+                                _ => '阅读状态：全部',
+                              }),
                               onDeleted: () =>
                                   state.setShelfView(filter: 'all'),
                             ),
@@ -3085,6 +3088,7 @@ class _ShelfPageState extends State<ShelfPage> {
             ('unread', '未读'),
             ('reading', '阅读中'),
             ('finished', '已读完'),
+            ('untagged', '未写标签'),
           ].indexed)
             GlassMenuItem(
               order: index,
