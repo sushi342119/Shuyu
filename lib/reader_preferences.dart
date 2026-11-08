@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'archive_design.dart';
-import 'personal_images.dart' show validBackgroundId;
+
+bool validBackgroundId(Object? id) =>
+    id is String && RegExp(r'^paper_[0-9]+\.png$').hasMatch(id);
 
 const minimumReaderFontSize = 10.0;
 const maximumReaderFontSize = 27.0;

@@ -789,33 +789,6 @@ class GlassForeground extends StatelessWidget {
   Widget build(BuildContext context) => child;
 }
 
-/// Navigation typography uses the same crisp foreground as glass controls.
-class GlassText extends StatelessWidget {
-  const GlassText(
-    this.data, {
-    super.key,
-    this.style,
-    this.maxLines,
-    this.overflow,
-    this.textAlign,
-  });
-  final String data;
-  final TextStyle? style;
-  final int? maxLines;
-  final TextOverflow? overflow;
-  final TextAlign? textAlign;
-  @override
-  Widget build(BuildContext context) => AppText(
-    data,
-    maxLines: maxLines,
-    overflow: overflow,
-    textAlign: textAlign,
-    style: (style ?? const TextStyle()).copyWith(
-      shadows: GlassForeground.shadowsOf(context),
-    ),
-  );
-}
-
 class LiquidGlass extends StatefulWidget {
   const LiquidGlass({
     super.key,

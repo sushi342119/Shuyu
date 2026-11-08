@@ -1,3 +1,5 @@
+import 'package:flutter/material.dart';
+
 /// Rendering treatment for a saved exact-text bookmark.
 enum ReaderMarkStyle {
   underline('划线'),
@@ -7,6 +9,18 @@ enum ReaderMarkStyle {
 
   const ReaderMarkStyle(this.label);
   final String label;
+}
+
+/// Keeps saved colors recognizable on both custom light and night paper.
+Color readerMarkInk(
+  ReaderMarkColor color,
+  Color foreground, {
+  bool dark = false,
+}) {
+  final value = color.argb;
+  if (value == null) return foreground;
+  final ink = Color(value);
+  return dark ? Color.lerp(ink, Colors.white, .2)! : ink;
 }
 
 /// A small shared palette; ink follows the reader's current paper contrast.

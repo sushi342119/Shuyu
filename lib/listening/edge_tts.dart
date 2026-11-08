@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import '../reader_languages.dart';
 import 'edge_protocol.dart';
-import 'languages.dart';
 import 'models.dart';
 
 /// Wire interoperability follows rany2/edge-tts; no account, subscription or private API key.

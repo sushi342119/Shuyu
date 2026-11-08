@@ -35,38 +35,6 @@ Set<int> readingAxisLabelIndices(
   return selected;
 }
 
-/// The dashboard and PNG capture mount this exact monthly component.
-class ReadingMonthlyChart extends StatelessWidget {
-  const ReadingMonthlyChart({
-    super.key,
-    required this.dates,
-    required this.seconds,
-    this.reduceMotion = false,
-    this.height = 178,
-    this.presentation = ReadingChartPresentation.dashboard,
-  });
-  final List<DateTime> dates;
-  final List<int?> seconds;
-  final bool reduceMotion;
-  final double height;
-  final ReadingChartPresentation presentation;
-  @override
-  Widget build(BuildContext context) => ReadingStatisticsBars(
-    labels: [
-      for (var i = 0; i < dates.length; i++)
-        i == 0 || dates[i].month == 1
-            ? '${dates[i].month}/${dates[i].year % 100}'
-            : '${dates[i].month}',
-    ],
-    values: [for (final value in seconds) value == null ? null : value / 3600],
-    semanticLabel: '月度阅读时长 · 小时',
-    allLabels: true,
-    height: height,
-    presentation: presentation,
-    reduceMotion: reduceMotion,
-  );
-}
-
 /// Retained bar geometry: animation ticks never re-layout axis text.
 class ReadingStatisticsBars extends StatefulWidget {
   const ReadingStatisticsBars({

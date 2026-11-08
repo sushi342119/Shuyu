@@ -1,13 +1,11 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart' show Theme;
 import 'package:flutter/rendering.dart';
 
 import 'app_ui.dart';
 import 'app_window_insets.dart';
-import 'dock_layout.dart';
 import 'native_effects.dart' show NativeGlassGroup, NativeScrollEdgeGroup;
 import 'ui_preferences.dart' show GlassEdgeMode;
 
@@ -19,12 +17,6 @@ const readerDockPaintPadding = EdgeInsets.symmetric(
   horizontal: 12,
   vertical: 6,
 );
-
-/// Shares the home-indicator spacing used by the app's navigation dock.
-double readerDockBottomPadding(
-  BuildContext context, {
-  bool viewPadding = false,
-}) => DockLayout.bottomPaddingOf(context, viewPadding: viewPadding);
 
 /// Scroll-edge treatment, mounted only while the reader controls are visible.
 class ReaderEdgeBlur extends StatelessWidget {
@@ -224,112 +216,6 @@ class ReaderChromeLayer extends StatelessWidget {
         child: TickerMode(enabled: animation.value != 0, child: layer),
       );
     },
-  );
-}
-
-/// Keeps a hidden chrome leaf's geometry without rebuilding it for source
-/// updates. The data source stays live; the first reveal reads its latest value.
-/// Visibility crossings, not animation ticks or TickerMode, own the subscription.
-class ReaderChromeValueBuilder<T> extends StatefulWidget {
-  const ReaderChromeValueBuilder({
-    super.key,
-    required this.visibility,
-    required this.valueListenable,
-    required this.builder,
-  });
-  final Animation<double> visibility;
-  final ValueListenable<T> valueListenable;
-  final Widget Function(BuildContext context, T value) builder;
-
-  @override
-  State<ReaderChromeValueBuilder<T>> createState() =>
-      _ReaderChromeValueBuilderState<T>();
-}
-
-class _ReaderChromeValueBuilderState<T>
-    extends State<ReaderChromeValueBuilder<T>> {
-  ValueListenable<T>? _subscribedTo;
-  late bool _visible;
-
-  @override
-  void initState() {
-    super.initState();
-    _visible = widget.visibility.value != 0;
-    widget.visibility.addListener(_visibilityChanged);
-    _subscribe();
-  }
-
-  void _subscribe() {
-    final source = _visible ? widget.valueListenable : null;
-    if (_subscribedTo == source) return;
-    _subscribedTo?.removeListener(_changed);
-    _subscribedTo = source;
-    source?.addListener(_changed);
-  }
-
-  void _visibilityChanged() {
-    final visible = widget.visibility.value != 0;
-    if (_visible == visible) return;
-    _visible = visible;
-    _subscribe();
-    if (visible) setState(() {});
-  }
-
-  void _changed() => setState(() {});
-
-  @override
-  void didUpdateWidget(ReaderChromeValueBuilder<T> oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.visibility != widget.visibility) {
-      oldWidget.visibility.removeListener(_visibilityChanged);
-      widget.visibility.addListener(_visibilityChanged);
-    }
-    _visible = widget.visibility.value != 0;
-    _subscribe();
-  }
-
-  @override
-  void dispose() {
-    _subscribedTo?.removeListener(_changed);
-    widget.visibility.removeListener(_visibilityChanged);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) =>
-      widget.builder(context, widget.valueListenable.value);
-}
-
-/// An independent secondary action using the same glass/press treatment as the
-/// follow control, without enlarging the header's full-width blur and shade.
-class ReaderHandoffChip extends StatelessWidget {
-  const ReaderHandoffChip({super.key, required this.onPressed});
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) => GlassTextButton(
-    compact: true,
-    compactMainPage: true,
-    onPressed: onPressed,
-    child: const Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        ArchiveIcon(CupertinoIcons.device_laptop, size: 17),
-        SizedBox(width: 8),
-        Flexible(
-          child: AppText(
-            '在其他设备上续读',
-            textAlign: TextAlign.center,
-            maxLines: 2,
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.4,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-      ],
-    ),
   );
 }
 
@@ -695,158 +581,6 @@ class _ReaderChapterTitleState extends State<ReaderChapterTitle>
       );
     },
   );
-}
-
-/// A separate, finite entrance: recovering follow never changes article layout
-/// or replays the main reader chrome. Live glass is clipped, not alpha-layered.
-class ReaderFollowDock extends StatefulWidget {
-  const ReaderFollowDock({
-    super.key,
-    required this.visible,
-    required this.chrome,
-    required this.onEnable,
-    required this.controls,
-    required this.hiddenExtent,
-    this.reduceMotion = false,
-  });
-  final bool visible;
-  final Animation<double> chrome;
-  final VoidCallback onEnable;
-  final Widget controls;
-
-  /// Distance from this dock's bottom to the hidden reader information row.
-  final double hiddenExtent;
-  final bool reduceMotion;
-
-  @override
-  State<ReaderFollowDock> createState() => _ReaderFollowDockState();
-}
-
-class _ReaderFollowDockState extends State<ReaderFollowDock>
-    with SingleTickerProviderStateMixin {
-  late final _entrance = AnimationController(
-    vsync: this,
-    duration: NovelMotion.enter,
-    reverseDuration: NovelMotion.exit,
-    value: widget.visible ? 1 : 0,
-  )..addStatusListener(_entranceStatus);
-
-  void _entranceStatus(AnimationStatus status) {
-    if (status == AnimationStatus.dismissed && mounted) setState(() {});
-  }
-
-  @override
-  void didUpdateWidget(ReaderFollowDock oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.visible == oldWidget.visible) return;
-    if (widget.reduceMotion || MediaQuery.disableAnimationsOf(context)) {
-      _entrance.value = widget.visible ? 1 : 0;
-    } else if (widget.visible) {
-      _entrance.forward();
-    } else {
-      _entrance.reverse();
-    }
-  }
-
-  @override
-  void dispose() {
-    _entrance.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final showPrompt =
-        (ModalRoute.isCurrentOf(context) ?? true) &&
-        (widget.visible || !_entrance.isDismissed);
-    return Flow(
-      delegate: _ReaderFollowPlacement(
-        chrome: widget.chrome,
-        hiddenExtent: widget.hiddenExtent,
-        showPrompt: showPrompt,
-      ),
-      children: [
-        widget.controls,
-        if (showPrompt)
-          IgnorePointer(
-            ignoring: !widget.visible,
-            child: ReaderChromeLayer(
-              animation: _entrance,
-              slide: const Offset(0, 1),
-              paintPadding: const EdgeInsets.symmetric(
-                horizontal: 12,
-                vertical: 4,
-              ),
-              child: ControlMaterialScope.chrome(
-                child: GlassTextButton(
-                  key: const ValueKey('reader-enable-follow'),
-                  onPressed: widget.onEnable,
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      ArchiveIcon(CupertinoIcons.location_fill, size: 17),
-                      SizedBox(width: 8),
-                      AppText('开启跟随'),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-/// Repositions only paint. Chrome ticks never relayout the glass action, and
-/// an absent prompt has neither a glass subtree nor an animation subscription.
-class _ReaderFollowPlacement extends FlowDelegate {
-  _ReaderFollowPlacement({
-    required this.chrome,
-    required this.hiddenExtent,
-    required this.showPrompt,
-  }) : super(repaint: showPrompt ? chrome : null);
-
-  final Animation<double> chrome;
-  final double hiddenExtent;
-  final bool showPrompt;
-
-  @override
-  BoxConstraints getConstraintsForChild(int i, BoxConstraints constraints) =>
-      constraints.loosen();
-
-  @override
-  void paintChildren(FlowPaintingContext context) {
-    final controls = context.getChildSize(0)!;
-    context.paintChild(
-      0,
-      transform: Matrix4.translationValues(
-        (context.size.width - controls.width) / 2,
-        context.size.height - controls.height,
-        0,
-      ),
-    );
-    if (!showPrompt) return;
-    final prompt = context.getChildSize(1)!;
-    final progress = NovelMotion.settle.transform(chrome.value);
-    // Four points are already reserved below the action for its shadow.
-    final bottom =
-        hiddenExtent + (controls.height - hiddenExtent) * progress + 8 - 4;
-    context.paintChild(
-      1,
-      transform: Matrix4.translationValues(
-        (context.size.width - prompt.width) / 2,
-        context.size.height - bottom - prompt.height,
-        0,
-      ),
-    );
-  }
-
-  @override
-  bool shouldRepaint(_ReaderFollowPlacement oldDelegate) =>
-      oldDelegate.chrome != chrome ||
-      oldDelegate.hiddenExtent != hiddenExtent ||
-      oldDelegate.showPrompt != showPrompt;
 }
 
 /// Shared top header bar across TXT/online, EPUB, and PDF readers.

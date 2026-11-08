@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'app_ui.dart';
 import 'library_state.dart';
-import 'reader_mark_style.dart';
+import 'reader_underline.dart';
 
 /// Shared quote/thought hierarchy for reader and library bookmark rows.
 /// The surrounding page keeps ownership of its panel, metadata and actions.

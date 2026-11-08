@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import '../reader_languages.dart';
 import 'edge_tts.dart';
 import 'http_tts.dart';
-import 'languages.dart';
 import 'models.dart';
 
 abstract interface class SpeechAudioSource {

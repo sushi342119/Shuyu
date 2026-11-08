@@ -2,7 +2,8 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb, listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -27,9 +28,41 @@ import 'reading_moments.dart';
 import 'user_fonts.dart';
 import 'font_catalog.dart';
 import 'app_palette.dart';
-import 'palette_platform.dart';
 import 'reader_preferences.dart';
 import 'ui_preferences.dart';
+
+class PalettePlatformInfo {
+  const PalettePlatformInfo({
+    this.colors,
+    this.iconSupported = false,
+    this.themedIcon = true,
+  });
+  final SystemTonalColors? colors;
+  final bool iconSupported, themedIcon;
+}
+
+class PalettePlatform {
+  const PalettePlatform();
+  static const channel = MethodChannel('org.mewx.wenku8/palette');
+  Future<PalettePlatformInfo> read() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return const PalettePlatformInfo();
+    }
+    try {
+      final map = await channel.invokeMapMethod<String, dynamic>('read');
+      return PalettePlatformInfo(
+        colors: SystemTonalColors.fromMap(map?['palettes']),
+        iconSupported: map?['iconSupported'] == true,
+        themedIcon: map?['themedIcon'] != false,
+      );
+    } on MissingPluginException {
+      return const PalettePlatformInfo();
+    }
+  }
+
+  Future<void> setThemedIcon(bool enabled) =>
+      channel.invokeMethod<void>('icon', {'enabled': enabled});
+}
 
 const _libraryWriteTimeout = Duration(seconds: 8);
 const _maxImportedFontBytes = 100 * 1024 * 1024;

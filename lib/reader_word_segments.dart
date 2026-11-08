@@ -195,20 +195,6 @@ List<TextRange> readerTextUnitRanges(
   }
 }
 
-/// Returns null for a sentence/paragraph, without laying out a large selection.
-TextRange? readerSingleLookupRange(String text) {
-  if (text.length > 512) return null;
-  final ranges = readerTextUnitRanges(text);
-  if (ranges.length != 1) return null;
-  final range = ranges.single;
-  if (text.substring(0, range.start).trim().isNotEmpty ||
-      text.substring(range.end).trim().isNotEmpty ||
-      text.substring(range.start, range.end).runes.take(129).length > 128) {
-    return null;
-  }
-  return range;
-}
-
 final _wordContent = RegExp(r'[\p{L}\p{N}]', unicode: true);
 bool _hasEmoji(String text) => text.runes.any(
   (rune) =>

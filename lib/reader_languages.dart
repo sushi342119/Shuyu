@@ -6,15 +6,11 @@ String readerLanguageCode(String value) {
   return tag.split('-').first.toLowerCase();
 }
 
-String readerLanguageLabel(String code) =>
-    const {
-      'zh': '中文',
-      'ja': '日文',
-      'en': '英文',
-      'ko': '韩文',
-      'fr': '法文',
-      'de': '德文',
-      'ru': '俄文',
-      'es': '西班牙文',
-    }[code] ??
-    code.toUpperCase();
+/// Primary language matching tolerates ISO metadata emitted by Android engines.
+String speechLanguageCode(String value) => switch (readerLanguageCode(value)) {
+  'chi' || 'zho' => 'zh',
+  'jpn' => 'ja',
+  'eng' => 'en',
+  'kor' => 'ko',
+  final code => code,
+};

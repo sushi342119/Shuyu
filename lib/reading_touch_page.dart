@@ -5,38 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'app_interactions.dart';
 import 'app_ui.dart';
-import 'feature_pages.dart';
 import 'reading_touch_store.dart';
-
-class ReadingTouchFingerprintEntry extends StatelessWidget {
-  const ReadingTouchFingerprintEntry({super.key, this.reduceMotion = false});
-  final bool reduceMotion;
-
-  @override
-  Widget build(BuildContext context) => FeatureEntry(
-    key: const ValueKey('statistics-touch-fingerprint'),
-    title: '触摸指纹',
-    subtitle: '看看阅读时，指尖最常落在哪里',
-    icon: CupertinoIcons.hand_draw,
-    onTap: () => pushNovelPage<void>(
-      context,
-      const ReadingTouchPage(),
-      reduceMotion: reduceMotion,
-    ),
-  );
-}
-
-class ReadingTouchPage extends StatelessWidget {
-  const ReadingTouchPage({super.key, this.store});
-  final ReadingTouchStore? store;
-
-  @override
-  Widget build(BuildContext context) => ArchiveFeaturePage(
-    title: '触摸指纹',
-    code: 'READING / TOUCH MAP',
-    child: ReadingTouchContent(store: store),
-  );
-}
 
 /// The same controls and data view inside the statistics Dock or its own route.
 class ReadingTouchContent extends StatefulWidget {

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'app_interactions.dart';
+import 'app_language.dart';
 import 'app_ui.dart';
 import 'app_search_field.dart';
 import 'catalog.dart';
@@ -14,12 +15,164 @@ import 'local_platform.dart';
 import 'offline_repository.dart';
 import 'pages.dart' show readerPageFor;
 import 'quote_card.dart';
-import 'bookmark_categories.dart';
 import 'reader_annotation_editor.dart';
-import 'reader_annotation_source.dart';
 import 'reader_bookmark_excerpt.dart';
+import 'reader_content.dart';
+import 'reader_underline.dart';
 import 'setting_menu.dart';
 import 'user_fonts.dart';
+
+Future<void> organizeBookmark(
+  BuildContext context,
+  LibraryState state,
+  int novelId,
+  ReaderBookmark mark,
+) async {
+  final text = TextEditingController(text: mark.category);
+  try {
+    final names =
+        state.bookmarkEntries
+            .map((e) => e.bookmark.category)
+            .where((v) => v.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort();
+    final category = await showJellySheet<String>(
+      context: context,
+      reduceMotion: state.reduceMotion,
+      builder: (sheet) => SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const ArchiveSection(title: '书签分类', code: 'EXCERPTS / CATEGORY'),
+            const SizedBox(height: 18),
+            CupertinoTextField(
+              key: const ValueKey('bookmark-category-name'),
+              onTap: () => AppHaptics.play(sheet, HapticCue.selection),
+              onSubmitted: (_) => AppHaptics.play(sheet, HapticCue.action),
+              controller: text,
+              maxLength: 30,
+              placeholder: '新建或选择分类',
+              padding: const EdgeInsets.all(14),
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                GlassTextButton(
+                  onPressed: () => Navigator.pop(sheet, ''),
+                  child: const AppText('未分类'),
+                ),
+                for (final name in names)
+                  GlassTextButton(
+                    onPressed: () => Navigator.pop(sheet, name),
+                    child: AppText(name),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            GlassPillButton(
+              icon: CupertinoIcons.checkmark,
+              label: '保存分类',
+              onPressed: () => Navigator.pop(sheet, text.text.trim()),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (category != null) {
+      await state.categorizeBookmark(novelId, mark.id, category);
+    }
+  } catch (_) {
+    if (context.mounted) showNovelFeedback(context, '书签分类未保存，请重试');
+  } finally {
+    text.dispose();
+  }
+}
+
+/// Reads only an already-imported original, an offline body or source-owned
+/// inline text. This action never calls remote find/chapters/chapterContent.
+Future<ReaderAnnotationContext?> loadOfflineReaderAnnotationContext({
+  required LibraryState state,
+  required NovelRepository repository,
+  required int novelId,
+  required List<ReaderUnderlineRange> ranges,
+  required ReadingPosition anchor,
+  Novel? novel,
+  Locale? locale,
+}) async {
+  final offline = repository is OfflineNovelRepository ? repository : null;
+  if (offline != null) await offline.cache.load();
+  final localStore = state.localLibrary;
+  final localBook = localStore?.bookFor(novelId);
+  novel =
+      novel ??
+      (localBook == null ? null : localStore!.toNovel(localBook)) ??
+      offline?.cache.book(novelId)?.novel ??
+      state.cachedNovel(novelId);
+  if (novel == null || novel.id != novelId || novel.chapters.isEmpty) {
+    return null;
+  }
+  if (isLocalNovelId(novelId) && localBook == null) {
+    return null;
+  }
+  final requiredIds = ranges.isEmpty
+      ? <int>{
+          if (anchor.chapterId > 0)
+            anchor.chapterId
+          else if (anchor.chapter >= 0 &&
+              anchor.chapter < novel.chapters.length)
+            novel.chapters[anchor.chapter].id,
+        }
+      : ranges.map((range) => range.chapterId).toSet();
+  if (requiredIds.isEmpty ||
+      requiredIds.any((id) => !novel!.chapters.any((c) => c.id == id))) {
+    return null;
+  }
+  final candidates = <int>{...requiredIds};
+  for (final id in requiredIds) {
+    final index = novel.chapters.indexWhere((c) => c.id == id);
+    if (index > 0) candidates.add(novel.chapters[index - 1].id);
+    if (index + 1 < novel.chapters.length) {
+      candidates.add(novel.chapters[index + 1].id);
+    }
+  }
+  final sources = <ReaderAnnotationChapterSource>[];
+  for (final chapter in novel.chapters.where(
+    (c) => candidates.contains(c.id),
+  )) {
+    String? body;
+    if (localStore != null && isLocalNovelId(novelId)) {
+      body = await localStore.chapterContent(novelId, chapter);
+    } else if (offline != null) {
+      body = await offline.cache.readChapter(novelId, chapter.id);
+    } else if (chapter.content.trim().isNotEmpty) {
+      body = chapter.content;
+    }
+    if (body == null || body.trim().isEmpty) {
+      if (requiredIds.contains(chapter.id)) return null;
+      continue;
+    }
+    final source = await (await ReaderContent.parse(
+      body,
+    )).localizedAsync(chineseLocale(locale));
+    sources.add(
+      ReaderAnnotationChapterSource(
+        chapterId: chapter.id,
+        title: chapter.title,
+        content: source,
+      ),
+    );
+  }
+  return ReaderAnnotationContext(
+    novelId: novelId,
+    novel: novel,
+    chapters: sources,
+  );
+}
 
 /// Reuse an installed face. Reports neither download fonts nor require one.
 Future<String?> registeredReadingReportSerif(UserFontStore store) async {

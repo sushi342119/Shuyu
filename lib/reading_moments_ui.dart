@@ -49,23 +49,6 @@ Future<void> showReadingMoment(
   );
 }
 
-Future<void> showReadingMomentPreview(
-  BuildContext context, {
-  required bool reduceMotion,
-  required ReadingVisualTheme theme,
-  bool confetti = true,
-}) {
-  final example = ReadingMomentPresentation.preview(theme);
-  return showReadingMoment(
-    context,
-    moment: example.moment,
-    reduceMotion: reduceMotion,
-    confetti: confetti,
-    isPreview: true,
-    theme: theme,
-  );
-}
-
 class ReadingMomentDialog extends StatefulWidget {
   const ReadingMomentDialog({
     super.key,
