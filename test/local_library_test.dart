@@ -1869,5 +1869,144 @@ void main() {
       expect(ch1.map((b) => b.text).toList(), ['起风正文一。', '起风正文二。']);
       expect(ch2.map((b) => b.text).toList(), ['落雨正文一。', '落雨正文二。']);
     });
+
+    test('多看残留 encryption.xml 指向明文章节时 lenient 模式放行，指向密文时仍拒绝', () async {
+      final base = baseEpubFiles();
+      final files = <String, List<int>>{
+        ...base,
+        'META-INF/encryption.xml': utf8.encode(
+          '<?xml version="1.0" encoding="utf-8"?>'
+          '<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+          '<EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">'
+          '<CipherData><CipherReference URI="OEBPS/ch1.xhtml"/></CipherData>'
+          '</EncryptedData>'
+          '</encryption>',
+        ),
+      };
+      final epubPath = await buildEpub(await makeTempDir(), files);
+      final pkg = await EpubPackage.open(epubPath, lenient: true);
+      addTearDown(pkg.close);
+      expect(pkg.chapters, hasLength(4));
+      final ch1 = await pkg.chapterBlocks(0);
+      expect(
+        ch1.map((b) => b.text).join(),
+        isNotEmpty,
+      );
+
+      final encryptedFiles = <String, List<int>>{
+        'mimetype': base['mimetype']!,
+        'META-INF/container.xml': base['META-INF/container.xml']!,
+        'OEBPS/content.opf': utf8.encode(
+          '<?xml version="1.0" encoding="utf-8"?>'
+          '<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">'
+          '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+          '<dc:identifier id="id">enc-test</dc:identifier><dc:title>密文</dc:title></metadata>'
+          '<manifest>'
+          '<item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>'
+          '</manifest>'
+          '<spine><itemref idref="c1"/></spine>'
+          '</package>',
+        ),
+        'OEBPS/ch1.xhtml': List<int>.generate(64, (i) => (i * 7) & 0x1f),
+        'META-INF/encryption.xml': utf8.encode(
+          '<?xml version="1.0" encoding="utf-8"?>'
+          '<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+          '<EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">'
+          '<CipherData><CipherReference URI="OEBPS/ch1.xhtml"/></CipherData>'
+          '</EncryptedData>'
+          '</encryption>',
+        ),
+      };
+      final encryptedPath = await buildEpub(
+        await makeTempDir(),
+        encryptedFiles,
+      );
+      await expectLater(
+        EpubPackage.open(encryptedPath, lenient: true),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            '不支持加密的 EPUB',
+          ),
+        ),
+      );
+    });
+
+    test('lenient 模式支持越根相对路径、文件名回退及无 OPF 的章节压缩包', () async {
+      final base = baseEpubFiles();
+      final mismatchedPaths = <String, List<int>>{
+        'mimetype': base['mimetype']!,
+        'META-INF/container.xml': utf8.encode(
+          '<?xml version="1.0" encoding="utf-8"?>'
+          '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+          '<rootfiles><rootfile full-path="../../Books/content.opf" '
+          'media-type="application/oebps-package+xml"/></rootfiles></container>',
+        ),
+        'OEBPS/content.opf': utf8.encode(
+          '<?xml version="1.0" encoding="utf-8"?>'
+          '<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">'
+          '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+          '<dc:identifier id="id">lenient-paths</dc:identifier><dc:title>测试</dc:title></metadata>'
+          '<manifest>'
+          '<item id="c1" href="../../Text/ch1.xhtml" media-type="application/xhtml+xml"/>'
+          '</manifest>'
+          '<spine><itemref idref="c1"/></spine>'
+          '</package>',
+        ),
+        'OEBPS/Sections/ch1.xhtml': xhtml('第一章', '兼容越根与目录移动'),
+      };
+      final pkg1 = await EpubPackage.open(
+        await buildEpub(await makeTempDir(), mismatchedPaths),
+        lenient: true,
+      );
+      addTearDown(pkg1.close);
+      expect(pkg1.chapters, hasLength(1));
+      final blocks1 = await pkg1.chapterBlocks(0);
+      expect(blocks1.map((b) => b.text).toList(), ['兼容越根与目录移动']);
+
+      final opfLessFiles = <String, List<int>>{
+        '001.xhtml': xhtml('第一章 序曲', '无 OPF 第一章正文'),
+        '002.xhtml': xhtml('第二章 终章', '无 OPF 第二章正文'),
+      };
+      final pkg2 = await EpubPackage.open(
+        await buildEpub(await makeTempDir(), opfLessFiles),
+        lenient: true,
+      );
+      addTearDown(pkg2.close);
+      expect(
+        pkg2.chapters.map((c) => c.title).toList(),
+        ['第一章 序曲', '第二章 终章'],
+      );
+    });
+
+    test('改了 .epub 后缀的 RAR 与 7z 压缩包抛出明确诊断文案', () async {
+      final dir = await makeTempDir();
+      final rarFile = File('${dir.path}/book.epub')
+        ..writeAsBytesSync([0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00, 0x00]);
+      await expectLater(
+        EpubPackage.open(rarFile.path, lenient: true),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            '不支持 RAR 压缩包（请先解压）',
+          ),
+        ),
+      );
+
+      final sevenZipFile = File('${dir.path}/book7z.epub')
+        ..writeAsBytesSync([0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04]);
+      await expectLater(
+        EpubPackage.open(sevenZipFile.path, lenient: true),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            '不支持 7z 压缩包（请先解压）',
+          ),
+        ),
+      );
+    });
   });
 }

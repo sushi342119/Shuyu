@@ -57,6 +57,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         private const val MAX_FONT_BYTES = 100 * 1024 * 1024
         private const val MAX_BYTES = 4 * 1024 * 1024
         private const val MAX_TEXT_BYTES = 256 * 1024 * 1024
+        private const val MAX_EPUB_BYTES = 1024L * 1024 * 1024
         private const val MAX_TEXT_BUFFER_BYTES = 32 * 1024 * 1024
         private const val MAX_SCAN_FILES = 30000
         private const val IO_TIMEOUT_MS = 20000L
@@ -635,10 +636,19 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         return libraryRecordKey.matches(key)
     }
 
+    private fun openDocInputStream(doc: Uri): java.io.InputStream? {
+        val path = doc.path
+        if (doc.scheme == "file" && !path.isNullOrEmpty()) {
+            val file = File(path)
+            if (file.isFile) return file.inputStream()
+        }
+        return activity.contentResolver.openInputStream(doc)
+    }
+
     /** Hash source bytes without decoding or writing a temporary copy. */
     private fun fingerprintLocalText(doc: Uri): String {
         val digest = MessageDigest.getInstance("SHA-256")
-        activity.contentResolver.openInputStream(doc)?.use { input ->
+        openDocInputStream(doc)?.use { input ->
             val buffer = ByteArray(65536)
             var total = 0
             while (true) {
@@ -660,7 +670,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         val raw = File.createTempFile("local-raw-", ".tmp", activity.cacheDir)
         val decoded = File.createTempFile("local-utf8-", ".tmp", activity.cacheDir)
         try {
-            activity.contentResolver.openInputStream(doc)?.use { input ->
+            openDocInputStream(doc)?.use { input ->
                 raw.outputStream().use { output ->
                     val buffer = ByteArray(65536)
                     var total = 0
@@ -798,7 +808,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
     /** 读取文本文件：严格 UTF-8 优先，失败则 GB18030，最后宽容回退。 */
     private fun readLocalText(doc: Uri): String {
         val bytes = ByteArrayOutputStream()
-        activity.contentResolver.openInputStream(doc)?.use { input ->
+        openDocInputStream(doc)?.use { input ->
             val buffer = ByteArray(65536)
             while (true) {
                 if (Thread.currentThread().isInterrupted) throw InterruptedException()
@@ -971,7 +981,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         return true
     }
 
-    // 将 SAF 文档流式复制到 destPath，上限 MAX_TEXT_BYTES；失败或超限时删除目标文件
+    // 将 SAF 文档流式复制到 destPath，上限 MAX_EPUB_BYTES；失败或超限时删除目标文件
     private fun copyDocumentToFile(doc: Uri, destPath: String): String {
         val dest = java.io.File(destPath)
         dest.parentFile?.let { parent ->
@@ -980,7 +990,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
             }
         }
         try {
-            val input = activity.contentResolver.openInputStream(doc)
+            val input = openDocInputStream(doc)
                 ?: throw java.io.IOException("cannot open input stream: $doc")
             input.use { ins ->
                 java.io.FileOutputStream(dest).use { out ->
@@ -992,7 +1002,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                         if (Thread.currentThread().isInterrupted) throw InterruptedException()
                         if (n < 0) break
                         total += n
-                        if (total > MAX_TEXT_BYTES) {
+                        if (total > MAX_EPUB_BYTES) {
                             throw java.io.IOException("document exceeds size limit")
                         }
                         out.write(buffer, 0, n)

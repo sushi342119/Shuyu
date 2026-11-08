@@ -29,6 +29,20 @@ void main() {
         describeLocalScanError(const FileSystemException(
             'denied', '/abs/x/0.txt', OSError('Permission denied', 13))),
         '文件不可读');
+    // 受控 EPUB StateError 诊断文案原样返回，帮助定位加密或改后缀压缩包。
+    expect(describeLocalScanError(StateError('不支持加密的 EPUB')), '不支持加密的 EPUB');
+    expect(
+      describeLocalScanError(StateError('不支持 RAR 压缩包（请先解压）')),
+      '不支持 RAR 压缩包（请先解压）',
+    );
+    expect(
+      describeLocalScanError(StateError('不支持 7z 压缩包（请先解压）')),
+      '不支持 7z 压缩包（请先解压）',
+    );
+    expect(
+      describeLocalScanError(StateError('无效的 EPUB：没有可读章节')),
+      '无效的 EPUB：没有可读章节',
+    );
     // 其他类型归为扫描失败，不带原文（含路径、URI 的也不带）。
     expect(describeLocalScanError(StateError('/abs/x/0.txt')), '扫描失败');
     expect(

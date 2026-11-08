@@ -14,14 +14,14 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.9.0',
+  defaultValue: '1.9.1',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 74);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 75);
 const currentReleaseNotes = '''
-1. 修复「关于书屿」页面中「本版更新」说明未随版本同步更新的问题，发布与构建流程自动从更新日志同步当前版本说明与默认版本号，并启用版本号满十进一规则（如 1.8.9 → 1.9.0 → 1.9.9 → 2.0.0）。
-2. 安装包体积与静态资源深度瘦身（缩减约 28.6 MB）：去重阅读预览与同源季节插画资源，重编码年度报告与桌面小组件背景图为高画质 WebP。
-3. 统一 TXT/在线、EPUB 与 PDF 阅读器顶栏及底部进度条组件，合并书架与详情页本地书籍文件删除确认逻辑。
-4. 修复云端与压缩包内 GBK/GB18030 文本被强制按 UTF-8 解码导致乱码的问题，优化章节切分与书架视图缓存性能。
+1. 修复超大型多卷合集与高清插画版 EPUB（超过 256 MiB）在 Android 本地扫描复制缓存阶段触发 `MAX_TEXT_BYTES` 限制而扫描失败的问题，统一对齐 1 GiB 上限并优先走 `file://` 直读流。
+2. 修复多看阅读版（Duokan）去壳/精简 EPUB 因残留 `META-INF/encryption.xml`（引用已解密明文章节、已剔除的专属字体/脚本或局部加密封面页）被误判为整本 DRM 加密而扫描失败的问题。
+3. 增强自制网文 EPUB 扫描容错：修复 ZIP 中央目录子流（`subset`）在标记 UTF-8 位但实为 GBK 文件名时抛 `FormatException` 的问题，支持解析 Info-ZIP `0x7075` Unicode 路径扩展字段、越根相对路径（`../`）钳制与同名文件兜底、ZIP Header `uncompressedSize` 不准时的解压自动扩容，以及无 OPF 直接打包 HTML/TXT 或内嵌 `.epub` 的套壳归档。
+4. 细化本地扫描失败诊断文案：支持明确提示「不支持加密的 EPUB」「不支持 RAR/7z 压缩包（请先解压）」「无效的 EPUB：没有可读章节」等安全分类原因，同时自动兼容改了 `.epub` 后缀名的 PDF 与无 BOM UTF-16 文本文件。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

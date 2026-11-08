@@ -1355,7 +1355,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       if (await _epubSourceFingerprint(localPath) != book.sourceFingerprint) {
         return book;
       }
-      final package = await EpubPackage.open(localPath);
+      final package = await EpubPackage.open(localPath, lenient: true);
       try {
         final spine = package.chapters;
         if (spine.isEmpty) return book;
@@ -3624,7 +3624,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       throw const FormatException('EPUB 文件超过 1 GiB，无法导入');
     }
     final bookId = id ?? existing?.id ?? _nextId();
-    final epub = await EpubPackage.open(localPath);
+    final epub = await EpubPackage.open(localPath, lenient: true);
     try {
       final spine = epub.chapters;
       if (spine.isEmpty) return null;
@@ -3659,7 +3659,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
   }
 
-  /// 当扩展名为 `.epub` 的文件实际是改了后缀名的 `.mobi` 或纯文本 `.txt` 时，
+  /// 当扩展名为 `.epub` 的文件实际是改了后缀名的 `.mobi`、`.pdf` 或纯文本 `.txt` 时，
   /// 自动按真实格式回退导入，避免网文资源因扩展名不符报错。
   Future<LocalBook?> _tryImportMisnamedEpubFile({
     required String localPath,
@@ -3676,7 +3676,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       final file = File(localPath);
       final stat = await file.stat();
       if (stat.type != FileSystemEntityType.file ||
-          stat.size < 64 ||
+          stat.size < 4 ||
           stat.size > localTextMaxSourceBytes) {
         return null;
       }
@@ -3685,7 +3685,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         (acc, chunk) => acc..addAll(chunk),
       );
       if (head.length < 4) return null;
-      // 排除 ZIP / RAR / 7z / PDF 等二进制归档头。
+      // 排除 ZIP / RAR / 7z 等二进制归档头。
       if ((head[0] == 0x50 && head[1] == 0x4B) ||
           (head[0] == 0x52 &&
               head[1] == 0x61 &&
@@ -3695,12 +3695,36 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
               head[0] == 0x37 &&
               head[1] == 0x7A &&
               head[2] == 0xBC &&
-              head[3] == 0xAF) ||
-          (head[0] == 0x25 &&
-              head[1] == 0x50 &&
-              head[2] == 0x44 &&
-              head[3] == 0x46)) {
+              head[3] == 0xAF)) {
         return null;
+      }
+      // 改了 .epub 后缀名的 PDF 文件。
+      if (head[0] == 0x25 &&
+          head[1] == 0x50 &&
+          head[2] == 0x44 &&
+          head[3] == 0x46) {
+        final pages = await LocalPlatform.pdfPageCount(uri);
+        if (pages <= 0) return null;
+        return LocalBook(
+          id: id,
+          title: _titleFromName(name),
+          author: _authorFromName(name),
+          fileUri: uri,
+          fileName: name,
+          kind: LocalBookKind.pdf,
+          size: size,
+          modified: modified,
+          textFingerprint: '',
+          sourceFingerprint: existing?.sourceFingerprint ?? '',
+          chapters: const [],
+          pageCount: pages,
+          wordCount: null,
+          sourceId: sourceId,
+          sourceKey: sourceKey,
+          customTitle: existing?.customTitle,
+          customAuthor: existing?.customAuthor,
+          chapterSplitVersion: _chapterSplitVersion,
+        );
       }
       if (head.length >= 68) {
         final magic = ascii.decode(head.sublist(60, 68), allowInvalid: true);
@@ -3745,7 +3769,21 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           (head[0] == 0xFF && head[1] == 0xFE) ||
           (head[0] == 0xFE && head[1] == 0xFF);
       final nulCount = head.where((b) => b == 0).length;
-      if (!hasUtf16Bom && nulCount > head.length ~/ 20) {
+      var evenNul = 0;
+      var oddNul = 0;
+      for (var i = 0; i < head.length; i++) {
+        if (head[i] == 0) {
+          if (i.isEven) {
+            evenNul++;
+          } else {
+            oddNul++;
+          }
+        }
+      }
+      final likelyUtf16NoBom =
+          (evenNul == 0 && oddNul > head.length ~/ 10) ||
+          (oddNul == 0 && evenNul > head.length ~/ 10);
+      if (!hasUtf16Bom && !likelyUtf16NoBom && nulCount > head.length ~/ 20) {
         return null;
       }
       final processed = await _importText(localPath, id, direct: true);
@@ -4566,7 +4604,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         await _epubSourceFingerprint(localPath) != book.sourceFingerprint) {
       throw StateError('EPUB 源文件已变化，请重新扫描');
     }
-    final package = await EpubPackage.open(localPath);
+    final package = await EpubPackage.open(localPath, lenient: true);
     try {
       if (package.chapters.length != book.chapters.length ||
           package.chapters[chapterIndex].href !=
