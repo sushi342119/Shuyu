@@ -561,20 +561,39 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     );
   }
 
+  List<ReaderBookmark> _chapterBookmarks() {
+    if (_total == 0) return const [];
+    return [
+      for (final mark in widget.state.bookmarksFor(_novel.id))
+        if (!mark.isUnderline &&
+            mark.quote.isEmpty &&
+            widget.state.chapterForPosition(_novel, mark.position) == _chapter)
+          mark,
+    ];
+  }
+
   Future<void> _quickAddBookmark() async {
     if (_addingBookmark || _total == 0) return;
     _addingBookmark = true;
-    final existing = widget.state
-        .bookmarksFor(_novel.id)
-        .map((mark) => mark.id)
-        .toSet();
+    final matched = _chapterBookmarks();
+    if (matched.isNotEmpty) {
+      try {
+        for (final mark in matched) {
+          await widget.state.removeBookmark(_novel.id, mark.id);
+        }
+        if (mounted) showNovelFeedback(context, '已取消书签');
+      } catch (_) {
+        if (mounted) showNovelFeedback(context, '书签删除失败，请重试');
+      } finally {
+        _addingBookmark = false;
+      }
+      return;
+    }
     try {
       final mark = await _addBookmark();
       if (!mounted) return;
       if (mark == null) {
         showNovelFeedback(context, '书签保存失败，请重试');
-      } else if (existing.contains(mark.id)) {
-        showNovelFeedback(context, '此位置已有书签（目前仅支持跳转到章首）');
       } else {
         showNovelFeedback(context, '已添加书签（目前仅支持跳转到章首）');
       }
@@ -762,17 +781,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                 novelId: _novel.id,
                 title: _novel.title,
                 bookmarkListenable: widget.state.bookmarkChanges,
-                isBookmarked: () =>
-                    _total > 0 &&
-                    widget.state.bookmarksFor(_novel.id).any(
-                      (mark) =>
-                          !mark.isUnderline &&
-                          widget.state.chapterForPosition(
-                                _novel,
-                                mark.position,
-                              ) ==
-                              _chapter,
-                    ),
+                isBookmarked: () => _chapterBookmarks().isNotEmpty,
                 onAddBookmark: _total == 0 ? null : _quickAddBookmark,
               ),
             ),
@@ -1118,6 +1127,25 @@ class _LocalEpubReaderToolsState extends State<LocalEpubReaderTools> {
 
   Future<void> _add() async {
     if (_adding) return;
+    final existingId = _addedId;
+    if (existingId != null &&
+        widget.state
+            .bookmarksFor(widget.novel.id)
+            .any((mark) => mark.id == existingId)) {
+      setState(() {
+        _adding = true;
+        _error = null;
+      });
+      try {
+        await widget.state.removeBookmark(widget.novel.id, existingId);
+        if (mounted) setState(() => _addedId = null);
+      } catch (_) {
+        if (mounted) setState(() => _error = '书签删除失败，请重试');
+      } finally {
+        if (mounted) setState(() => _adding = false);
+      }
+      return;
+    }
     setState(() {
       _adding = true;
       _error = null;

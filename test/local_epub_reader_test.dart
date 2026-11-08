@@ -563,7 +563,10 @@ void main() {
     expect(state.bookmarksFor(_novel.id), hasLength(1));
     await tester.tap(_control('添加书签'));
     await _settle(tester);
-    expect(find.text('此位置已有书签（目前仅支持跳转到章首）'), findsOneWidget);
+    expect(find.text('已取消书签'), findsOneWidget);
+    expect(state.bookmarksFor(_novel.id), isEmpty);
+    await tester.tap(_control('添加书签'));
+    await _settle(tester);
     expect(state.bookmarksFor(_novel.id), hasLength(1));
     final reloaded = await LibraryState.load();
     addTearDown(reloaded.dispose);

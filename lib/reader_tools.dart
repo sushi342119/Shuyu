@@ -107,6 +107,31 @@ class _ReaderToolsState extends State<ReaderTools> {
 
   Future<void> _add() async {
     if (_adding || widget.position == null) return;
+    final existingId = _addedId;
+    if (_added &&
+        existingId != null &&
+        widget.state
+            .bookmarksFor(widget.novel.id)
+            .any((mark) => mark.id == existingId)) {
+      setState(() {
+        _adding = true;
+        _storageError = null;
+      });
+      try {
+        await widget.state.removeBookmark(widget.novel.id, existingId);
+        if (mounted) {
+          setState(() {
+            _added = false;
+            _addedId = null;
+          });
+        }
+      } catch (_) {
+        if (mounted) setState(() => _storageError = '书签删除失败，请重试');
+      } finally {
+        if (mounted) setState(() => _adding = false);
+      }
+      return;
+    }
     setState(() {
       _adding = true;
       _storageError = null;
@@ -131,7 +156,12 @@ class _ReaderToolsState extends State<ReaderTools> {
     setState(() => _storageError = null);
     try {
       await widget.state.removeBookmark(widget.novel.id, mark.id);
-      if (mounted && mark.id == _addedId) setState(() => _added = false);
+      if (mounted && mark.id == _addedId) {
+        setState(() {
+          _added = false;
+          _addedId = null;
+        });
+      }
     } catch (_) {
       if (mounted) setState(() => _storageError = '书签删除失败，请重试');
     }

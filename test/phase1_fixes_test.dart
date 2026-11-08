@@ -491,7 +491,18 @@ void main() {
             );
             await tester.tap(_control('添加书签'));
             await _settle(tester);
-            expect(find.text(pdf ? '此页已有书签' : '此位置已有书签'), findsOneWidget);
+            expect(find.text('已取消书签'), findsOneWidget);
+            expect(state.bookmarksFor(book.id), isEmpty);
+            expect(
+              tester
+                  .widget<GlassIconButton>(
+                    find.byKey(const ValueKey('reader-bookmarks-entry')),
+                  )
+                  .icon,
+              CupertinoIcons.bookmark,
+            );
+            await tester.tap(_control('添加书签'));
+            await _settle(tester);
             expect(state.bookmarksFor(book.id), hasLength(1));
             final reloaded = await LibraryState.load();
             addTearDown(reloaded.dispose);

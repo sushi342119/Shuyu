@@ -2456,10 +2456,14 @@ class LibraryState extends ChangeNotifier {
         if (!mark.isUnderline &&
             mark.quote == excerpt &&
             chapterForPosition(novel, mark.position) == index &&
-            (excerpt.isEmpty ||
-                mark.position.paragraphIndex == position.paragraphIndex &&
-                    mark.position.textOffset == position.textOffset) &&
-            (mark.position.offset - position.offset).abs() < 12 &&
+            (excerpt.isEmpty
+                ? (position.width > 0 ||
+                      mark.position.paragraphIndex == position.paragraphIndex)
+                : mark.position.paragraphIndex == position.paragraphIndex &&
+                      mark.position.textOffset == position.textOffset) &&
+            (position.width > 0
+                ? (mark.position.offset - position.offset).abs() < 12
+                : (mark.position.offset - position.offset).abs() < .01) &&
             (mark.position.fontSize - position.fontSize).abs() < .01 &&
             (mark.position.lineHeight - position.lineHeight).abs() < .01 &&
             (mark.position.width - position.width).abs() < 1) {

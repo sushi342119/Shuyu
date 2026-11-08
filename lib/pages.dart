@@ -6171,6 +6171,9 @@ class _ReaderPageState extends State<ReaderPage>
         );
         if (chapter != null) {
           _go(chapter, position: picked.position, highlightBookmark: true);
+          if (!picked.isUnderline && picked.quote.isEmpty) {
+            _activeBookmarkId = picked.id;
+          }
         }
         return;
       }
@@ -7009,32 +7012,39 @@ class _ReaderPageState extends State<ReaderPage>
 
   String? _activeBookmarkId;
 
-  bool get _isCurrentPositionBookmarked {
+  List<ReaderBookmark> _currentPositionBookmarks() {
     final marks = widget.state.bookmarksFor(_novel.id);
-    if (marks.isEmpty) return false;
+    if (marks.isEmpty) return const [];
+    final matched = <ReaderBookmark>[];
     for (final mark in marks) {
       if (mark.isUnderline ||
           mark.quote.isNotEmpty ||
           widget.state.chapterForPosition(_novel, mark.position) != _chapter) {
         continue;
       }
-      if (mark.id == _activeBookmarkId) return true;
+      if (mark.id == _activeBookmarkId) {
+        matched.add(mark);
+        continue;
+      }
       if (_paginated) {
         final anchor =
             _paged.anchor?.paragraph ?? _restorePending?.paragraphIndex;
         if (anchor != null && mark.position.paragraphIndex == anchor) {
-          return true;
+          matched.add(mark);
         }
       } else if (_scroll.hasClients) {
         if ((mark.position.offset - _scroll.offset).abs() < 24 &&
             (mark.position.fontSize - widget.state.fontSize).abs() < .01 &&
             (mark.position.lineHeight - widget.state.lineHeight).abs() < .01) {
-          return true;
+          matched.add(mark);
         }
       }
     }
-    return false;
+    return matched;
   }
+
+  bool get _isCurrentPositionBookmarked =>
+      _currentPositionBookmarks().isNotEmpty;
 
   void _clearBookmarkLanding() {
     _activeBookmarkId = null;
@@ -7108,6 +7118,21 @@ class _ReaderPageState extends State<ReaderPage>
   Future<void> _quickAddBookmark() async {
     if (_addingBookmark) return;
     _addingBookmark = true;
+    final matched = _currentPositionBookmarks();
+    if (matched.isNotEmpty) {
+      try {
+        for (final mark in matched) {
+          await widget.state.removeBookmark(_novel.id, mark.id);
+        }
+        _clearBookmarkLanding();
+        if (mounted) showNovelFeedback(context, '已取消书签');
+      } catch (_) {
+        if (mounted) showNovelFeedback(context, '书签删除失败，请重试');
+      } finally {
+        _addingBookmark = false;
+      }
+      return;
+    }
     final existing = widget.state
         .bookmarksFor(_novel.id)
         .map((mark) => mark.id)
@@ -7118,7 +7143,9 @@ class _ReaderPageState extends State<ReaderPage>
       if (mark == null) {
         showNovelFeedback(context, '书签保存失败，请重试');
       } else if (existing.contains(mark.id)) {
-        showNovelFeedback(context, '此位置已有书签');
+        await widget.state.removeBookmark(_novel.id, mark.id);
+        _clearBookmarkLanding();
+        if (mounted) showNovelFeedback(context, '已取消书签');
       } else {
         showNovelFeedback(context, '已添加书签');
       }
@@ -7424,6 +7451,8 @@ class _ReaderPageState extends State<ReaderPage>
                 bookmarkListenable: Listenable.merge([
                   widget.state.bookmarkChanges,
                   _progressValue,
+                  _scroll,
+                  _bookmarkLanding,
                 ]),
                 isBookmarked: () => _isCurrentPositionBookmarked,
                 onAddBookmark: _quickAddBookmark,

@@ -128,14 +128,37 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
     }
   }
 
+  List<ReaderBookmark> _pageBookmarks([int? page]) {
+    if (_pageCount <= 0) return const [];
+    final target = page ?? _page;
+    return [
+      for (final mark in widget.state.bookmarksFor(widget.novel.id))
+        if (!mark.isUnderline &&
+            mark.quote.isEmpty &&
+            mark.position.chapterId == 0 &&
+            mark.position.chapter == target)
+          mark,
+    ];
+  }
+
   Future<void> _addBookmark() async {
     if (_addingBookmark || _pageCount <= 0) return;
     _addingBookmark = true;
     final page = _page;
-    final existing = widget.state
-        .bookmarksFor(widget.novel.id)
-        .map((mark) => mark.id)
-        .toSet();
+    final matched = _pageBookmarks(page);
+    if (matched.isNotEmpty) {
+      try {
+        for (final mark in matched) {
+          await widget.state.removeBookmark(widget.novel.id, mark.id);
+        }
+        if (mounted) showNovelFeedback(context, '已取消书签');
+      } catch (_) {
+        if (mounted) showNovelFeedback(context, '书签删除失败，请重试');
+      } finally {
+        _addingBookmark = false;
+      }
+      return;
+    }
     try {
       final mark = await widget.state.addPageBookmark(
         novel: widget.novel,
@@ -145,8 +168,6 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
       if (mounted) {
         if (mark == null) {
           showNovelFeedback(context, '书签保存失败，请重试');
-        } else if (existing.contains(mark.id)) {
-          showNovelFeedback(context, '此页已有书签');
         } else {
           showNovelFeedback(context, '已添加第 ${page + 1} 页书签');
         }
@@ -356,17 +377,7 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
                     novelId: widget.novel.id,
                     title: widget.novel.title,
                     bookmarkListenable: widget.state.bookmarkChanges,
-                    isBookmarked: () =>
-                        count > 0 &&
-                        widget.state
-                            .bookmarksFor(widget.novel.id)
-                            .any(
-                              (mark) =>
-                                  !mark.isUnderline &&
-                                  mark.quote.isEmpty &&
-                                  mark.position.chapterId == 0 &&
-                                  mark.position.chapter == _page,
-                            ),
+                    isBookmarked: () => _pageBookmarks().isNotEmpty,
                     onAddBookmark: count == 0 ? null : _addBookmark,
                   ),
                 ),
