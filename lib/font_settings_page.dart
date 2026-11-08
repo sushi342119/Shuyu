@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
@@ -34,6 +35,14 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
   late final documents = widget.documents ?? BookDocuments();
   bool busy = false;
   String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(widget.state.loadFonts());
+    unawaited(widget.state.preloadImportedFonts());
+  }
+
   String get _readerTypeface => widget.state.readerTypefaceFor(widget.bookId);
   Future<void> _setReaderTypeface(String value) =>
       widget.onReaderTypefaceChanged?.call(value) ??
@@ -65,12 +74,20 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
           for (final id in [
             if (reader) followAppFont,
             AppTypeface.system.name,
+            AppTypeface.sourceHanSerif.name,
+            ...state.importedFonts.map((font) => font.id),
             ...fonts.fonts.map((font) => font.id),
             ...downloadableFonts
-                .where((font) => fonts.available(font.id))
+                .where(
+                  (font) =>
+                      font.id != sourceHanFontId && fonts.available(font.id),
+                )
                 .map((font) => font.id),
             ...downloadableFonts
-                .where((font) => !fonts.available(font.id))
+                .where(
+                  (font) =>
+                      font.id != sourceHanFontId && !fonts.available(font.id),
+                )
                 .map((font) => font.id),
           ])
             Padding(
@@ -130,6 +147,19 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
       context,
       title: '移除这款字体？',
       message: '已使用这款字体的位置会恢复默认，原始字体文件不会删除。',
+      confirmLabel: '移除字体',
+      reduceMotion: widget.state.reduceMotion,
+    )) {
+      return;
+    }
+    await _perform(() => widget.state.removeUserFont(font.id));
+  }
+
+  Future<void> _deleteLegacyImported(AppFontEntry font) async {
+    if (!await confirmNovelAction(
+      context,
+      title: '移除这款字体？',
+      message: '已使用这款字体的位置会恢复默认。',
       confirmLabel: '移除字体',
       reduceMotion: widget.state.reduceMotion,
     )) {
@@ -206,71 +236,75 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
     required VoidCallback onTap,
   }) {
     final state = widget.state;
-    final download = downloadableFont(id);
+    final download = id == sourceHanFontId ? null : downloadableFont(id);
+    final isLegacyImported = state.importedFonts.any((f) => f.id == id);
     final family =
-        (id == followAppFont ? state.appFontFamily : state.fonts.family(id)) ??
+        (id == followAppFont ? state.appFontFamily : state.fontFamilyFor(id)) ??
         'Roboto';
     return _FontFacePreview(
       fonts: state.fonts,
       id: id == followAppFont ? state.appFontId : id,
-      builder: (ready, failed) => GlassTextButton(
-        key: ValueKey('${reader ? 'reader' : 'app'}-font-$id'),
-        selected: selected,
-        onPressed: busy ? null : onTap,
-        child: Row(
-          children: [
-            SizedBox(
-              width: 38,
-              child: AppText(
-                'Aa',
-                style: TextStyle(
-                  fontFamily: ready ? family : null,
-                  fontSize: 20,
+      builder: (ready, failed) {
+        final effectiveReady = ready || isLegacyImported;
+        return GlassTextButton(
+          key: ValueKey('${reader ? 'reader' : 'app'}-font-$id'),
+          selected: selected,
+          onPressed: busy ? null : onTap,
+          child: Row(
+            children: [
+              SizedBox(
+                width: 38,
+                child: AppText(
+                  'Aa',
+                  style: TextStyle(
+                    fontFamily: effectiveReady ? family : null,
+                    fontSize: 20,
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  AppText(
-                    state.fonts.label(id),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    AppText(
+                      id == followAppFont ? '跟随 App' : state.fontLabel(id),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 5),
-                  AppText(
-                    download != null && !state.fonts.available(id)
-                        ? '下载并使用 · ${download.sizeLabel}'
-                        : failed
-                        ? '字体预览暂不可用'
-                        : download?.previewText ?? '春日的光，落在书页上。',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontFamily: ready ? family : null,
-                      fontSize: 14,
-                      height: 1.6,
+                    const SizedBox(height: 5),
+                    AppText(
+                      download != null && !state.fonts.available(id)
+                          ? '下载并使用 · ${download.sizeLabel}'
+                          : failed
+                          ? '字体预览暂不可用'
+                          : download?.previewText ?? '春日的光，落在书页上。',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: effectiveReady ? family : null,
+                        fontSize: 14,
+                        height: 1.6,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            if (download != null && !state.fonts.available(id)) ...[
-              const SizedBox(width: 10),
-              const ArchiveIcon(CupertinoIcons.arrow_down_to_line, size: 16),
-            ] else if (selected) ...[
-              const SizedBox(width: 10),
-              const ArchiveIcon(CupertinoIcons.checkmark, size: 16),
+              if (download != null && !state.fonts.available(id)) ...[
+                const SizedBox(width: 10),
+                const ArchiveIcon(CupertinoIcons.arrow_down_to_line, size: 16),
+              ] else if (selected) ...[
+                const SizedBox(width: 10),
+                const ArchiveIcon(CupertinoIcons.checkmark, size: 16),
+              ],
             ],
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -336,18 +370,20 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
                   const ArchiveSection(title: '可下载字体', code: 'TYPE / DOWNLOAD'),
                   const SizedBox(height: 14),
                   for (final font in downloadableFonts)
-                    _DownloadableFontRow(
-                      key: ValueKey('downloadable-font-${font.id}'),
-                      font: font,
-                      fonts: widget.state.fonts,
-                      busy: busy,
-                      reduceMotion: widget.state.reduceMotion,
-                      onDownload: () => _perform(
-                        () => widget.state.downloadReadingFont(font.id),
+                    if (font.id != sourceHanFontId)
+                      _DownloadableFontRow(
+                        key: ValueKey('downloadable-font-${font.id}'),
+                        font: font,
+                        fonts: widget.state.fonts,
+                        busy: busy,
+                        reduceMotion: widget.state.reduceMotion,
+                        onDownload: () => _perform(
+                          () => widget.state.downloadReadingFont(font.id),
+                        ),
+                        onDelete: () => _deleteDownloaded(font),
                       ),
-                      onDelete: () => _deleteDownloaded(font),
-                    ),
-                  if (widget.state.fonts.fonts.isNotEmpty) ...[
+                  if (widget.state.fonts.fonts.isNotEmpty ||
+                      widget.state.importedFonts.isNotEmpty) ...[
                     const SizedBox(height: 28),
                     const ArchiveSection(title: '我的字体', code: 'TTF / OTF'),
                     const SizedBox(height: 14),
@@ -368,6 +404,28 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
                           ? null
                           : () => _perform(widget.state.loadFonts),
                       child: const AppText('重试读取字体'),
+                    ),
+                  for (final font in widget.state.importedFonts)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: AppText(
+                              font.displayName,
+                              style: const TextStyle(height: 1.6),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          GlassIconButton(
+                            icon: CupertinoIcons.trash,
+                            label: '移除 ${font.displayName}',
+                            onPressed: busy
+                                ? null
+                                : () => _deleteLegacyImported(font),
+                          ),
+                        ],
+                      ),
                     ),
                   for (final font in widget.state.fonts.fonts)
                     Padding(

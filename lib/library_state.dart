@@ -670,12 +670,20 @@ class LibraryState extends ChangeNotifier {
       final hasLocal = allFonts.any((f) => f.id == choice);
       if (!hasLocal) throw const FormatException('请先导入这款字体');
     }
-    await fonts.ensureLoaded(choice);
+    if (_importedFonts.any((f) => f.id == choice)) {
+      final entry = _importedFonts.firstWhere((f) => f.id == choice);
+      if (!await _loadImportedEntry(entry)) {
+        throw const FormatException('字体文件无效或已损坏');
+      }
+    } else {
+      await fonts.ensureLoaded(choice);
+    }
     await _queuePositionWrite(() async {
       if (_readerTypeface == choice) return;
       await _commitLibraryRecords({'readerTypeface': choice});
       _readerTypeface = choice;
       if (!_disposed) {
+        _application.notifyListeners();
         _readerSettings.notifyListeners();
         _settings.notifyListeners();
         notifyListeners();
@@ -888,11 +896,47 @@ class LibraryState extends ChangeNotifier {
 
   String? get appFontFamily => currentFont.family;
 
-  /// 全部可用字体：系统、内置、已导入。
+  String get effectiveReaderFontId =>
+      _readerTypeface == followAppFont ? _appFontId : _readerTypeface;
+
+  String? fontFamilyFor(String id) {
+    if (id == followAppFont) return appFontFamily;
+    for (final f in allFonts) {
+      if (f.id == id) return f.family;
+    }
+    return fonts.family(id);
+  }
+
+  String? get readerFontFamily => fontFamilyFor(effectiveReaderFontId);
+
+  List<String> get readerFontFamilyFallback {
+    final family = readerFontFamily;
+    if (family == null || family == appFontSourceHanSerif.family) {
+      return const [];
+    }
+    return const ['SourceHanSerifCN'];
+  }
+
+  /// 全部可用字体：系统、内置、已导入与已下载字库。
   List<AppFontEntry> get allFonts => [
         appFontSystem,
         appFontSourceHanSerif,
         ..._importedFonts,
+        for (final font in fonts.fonts)
+          AppFontEntry(
+            id: font.id,
+            displayName: font.name,
+            family: font.family,
+            source: AppFontSource.imported,
+          ),
+        for (final dl in downloadableFonts)
+          if (dl.id != appFontSourceHanSerif.id && fonts.available(dl.id))
+            AppFontEntry(
+              id: dl.id,
+              displayName: dl.name,
+              family: dl.typeface.family,
+              source: AppFontSource.bundled,
+            ),
       ];
 
   List<AppFontEntry> get importedFonts => List.unmodifiable(_importedFonts);
@@ -2873,10 +2917,11 @@ class LibraryState extends ChangeNotifier {
         }
       } catch (_) {}
     }
-    // 选择的导入字体若已不在列表中，回退到系统字体。
+    // 选择的导入字体若已不在列表中，回退到系统字体（UserFontStore 与下载字库在 loadFonts 中校验）。
     if (_appFontId != appFontSystem.id &&
         _appFontId != appFontSourceHanSerif.id &&
-        !_importedFonts.any((f) => f.id == _appFontId)) {
+        !_importedFonts.any((f) => f.id == _appFontId) &&
+        !validFontChoice(_appFontId)) {
       _appFontId = appFontSystem.id;
     }
   }
@@ -2982,19 +3027,50 @@ class LibraryState extends ChangeNotifier {
     return tables.containsAll(const {'head', 'name', 'maxp'});
   }
 
-  /// 确保当前选中的导入字体已通过 FontLoader 加载（启动时调用）。
+  /// 确保当前选中的导入或下载字体已通过 FontLoader 加载（启动时调用）。
   /// 加载失败时回退到系统字体。
   Future<void> ensureFontLoaded() async {
-    final entry = currentFont;
-    if (entry.source != AppFontSource.imported) return;
-    try {
-      if (!await _loadImportedEntry(entry)) throw StateError('字体不可用');
-    } catch (_) {
-      _appFontId = appFontSystem.id;
+    if (_importedFonts.any((f) => f.id == _appFontId)) {
+      final entry = _importedFonts.firstWhere((f) => f.id == _appFontId);
       try {
-        await _persistFontState();
-      } catch (_) {}
-      notifyListeners();
+        if (!await _loadImportedEntry(entry)) throw StateError('字体不可用');
+      } catch (_) {
+        _appFontId = appFontSystem.id;
+        try {
+          await _persistFontState();
+        } catch (_) {}
+        notifyListeners();
+      }
+    } else if (_appFontId != appFontSystem.id &&
+        _appFontId != appFontSourceHanSerif.id) {
+      try {
+        if (!fonts.available(_appFontId)) throw StateError('字体不可用');
+        await fonts.ensureLoaded(_appFontId);
+      } catch (_) {
+        _appFontId = appFontSystem.id;
+        try {
+          await _persistFontState();
+        } catch (_) {}
+        notifyListeners();
+      }
+    }
+    if (_readerTypeface != followAppFont) {
+      if (_importedFonts.any((f) => f.id == _readerTypeface)) {
+        final entry = _importedFonts.firstWhere((f) => f.id == _readerTypeface);
+        try {
+          if (!await _loadImportedEntry(entry)) throw StateError('字体不可用');
+        } catch (_) {
+          _readerTypeface = followAppFont;
+        }
+      } else if (_readerTypeface != appFontSystem.id &&
+          _readerTypeface != appFontSourceHanSerif.id) {
+        try {
+          if (!fonts.available(_readerTypeface)) throw StateError('字体不可用');
+          await fonts.ensureLoaded(_readerTypeface);
+        } catch (_) {
+          _readerTypeface = followAppFont;
+        }
+      }
     }
   }
 
@@ -3009,16 +3085,22 @@ class LibraryState extends ChangeNotifier {
     }
   }
 
-  /// 切换应用字体；导入字体会先确保加载成功。
+  /// 切换应用字体；导入或下载字体会先确保加载成功。
   Future<void> setAppFont(String id) async {
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then((_) => setAppFont(id));
+    }
+    if (id != appFontSystem.id &&
+        id != appFontSourceHanSerif.id &&
+        !_importedFonts.any((f) => f.id == id) &&
+        !fonts.available(id)) {
+      throw const FormatException('请先导入这款字体');
     }
     await _queuePositionWrite(() async {
       if (_appFontId == id) return;
       final previous = _appFontId;
       _appFontId = id;
-      if (currentFont.source == AppFontSource.imported) {
+      if (_importedFonts.any((f) => f.id == id)) {
         try {
           await ensureFontLoaded();
         } catch (_) {
@@ -3027,6 +3109,13 @@ class LibraryState extends ChangeNotifier {
         }
         // ensureFontLoaded 失败时已将 _appFontId 置为 system，
         // 下面继续走持久化与通知，保证回退生效。
+      } else if (id != appFontSystem.id && id != appFontSourceHanSerif.id) {
+        try {
+          await fonts.ensureLoaded(id);
+        } catch (_) {
+          _appFontId = previous;
+          rethrow;
+        }
       }
       try {
         await _persistFontState();

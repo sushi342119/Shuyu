@@ -8,7 +8,6 @@ import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
 
 import 'app_ui.dart';
-import 'app_typography.dart';
 import 'app_interactions.dart';
 import 'archive_wave.dart';
 import 'novel_random_pick_section.dart';
@@ -3661,40 +3660,6 @@ class SettingsPage extends StatelessWidget {
                 children: [
                   _appearanceSetting(context),
                   _settingsDivider(context),
-                  Row(
-                    children: [
-                      _settingsIconBadge(context, CupertinoIcons.textformat),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              '应用字体',
-                              style: TextStyle(fontWeight: FontWeight.w600),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              state.currentFont.displayName,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      GlassTextButton(
-                        key: const ValueKey('settings-font-picker'),
-                        onPressed: () => _showFontPicker(context),
-                        child: const Text('选择'),
-                      ),
-                    ],
-                  ),
-                  _settingsDivider(context),
                   ReaderValueSlider(
                     sliderKey: const ValueKey('settings-font-slider'),
                     label: '阅读字号',
@@ -4202,173 +4167,6 @@ class SettingsPage extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  /// 应用字体选择：内置字体 + 从手机导入的字体。
-  /// SettingsPage 为 StatelessWidget，刷新依赖 state 的通知。
-  Future<void> _showFontPicker(BuildContext context) async {
-    // 预加载已导入字体以便预览。
-    unawaited(state.preloadImportedFonts());
-    await showJellySheet<void>(
-      context: context,
-      reduceMotion: state.reduceMotion,
-      builder: (sheet) => StatefulBuilder(
-        builder: (sheetContext, setSheetState) {
-          // 用干净的文本主题包一层，避免“系统字体”预览继承当前自定义字体。
-          final baseTheme = Theme.of(sheetContext);
-          final cleanTheme = baseTheme.copyWith(
-            textTheme: ThemeData(brightness: baseTheme.brightness).textTheme,
-          );
-          final fonts = state.allFonts;
-          // 异步回调后刷新前检查弹层仍在。
-          void refreshIfOpen() {
-            if (sheetContext.mounted) setSheetState(() {});
-          }
-
-          return Theme(
-            data: cleanTheme,
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text(
-                    '应用字体',
-                    style: TextStyle(fontSize: 21, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '对整个应用生效（含阅读器）。',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: cleanTheme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Flexible(
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: fonts.length,
-                      itemBuilder: (listContext, index) {
-                        final font = fonts[index];
-                        final selected = state.appFontId == font.id;
-                        return ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(
-                            font.displayName,
-                            style: TextStyle(
-                              // 系统字体 family 为 null，用干净主题的平台默认；
-                              // 导入字体缺字时回退到思源宋体。
-                              fontFamily: font.family,
-                              fontFamilyFallback:
-                                  font.source == AppFontSource.imported
-                                  ? const ['SourceHanSerifCN']
-                                  : null,
-                            ),
-                          ),
-                          subtitle: font.source == AppFontSource.imported
-                              ? const Text(
-                                  '从手机导入',
-                                  style: TextStyle(fontSize: 12),
-                                )
-                              : null,
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (font.source == AppFontSource.imported)
-                                IconButton(
-                                  icon: const Icon(
-                                    CupertinoIcons.delete,
-                                    size: 20,
-                                  ),
-                                  onPressed: () async {
-                                    final confirm = await confirmNovelAction(
-                                      sheetContext,
-                                      title: '删除字体？',
-                                      message:
-                                          '「${font.displayName}」将从应用中移除。如正在使用，会切回系统字体。',
-                                      confirmLabel: '删除',
-                                      reduceMotion: state.reduceMotion,
-                                    );
-                                    if (!confirm || !sheetContext.mounted) {
-                                      return;
-                                    }
-                                    await _savePreference(
-                                      sheetContext,
-                                      () => state.removeImportedFont(font.id),
-                                    );
-                                    refreshIfOpen();
-                                  },
-                                ),
-                              if (selected)
-                                const Icon(CupertinoIcons.check_mark, size: 20),
-                            ],
-                          ),
-                          onTap: selected
-                              ? null
-                              : () async {
-                                  await _savePreference(
-                                    sheetContext,
-                                    () => state.setAppFont(font.id),
-                                  );
-                                  refreshIfOpen();
-                                },
-                        );
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  GlassTextButton(
-                    onPressed: () => _importFontFromPhone(
-                      sheetContext,
-                      onDone: refreshIfOpen,
-                    ),
-                    child: const Text('从手机导入字体文件'),
-                  ),
-                  const SizedBox(height: 8),
-                  GlassTextButton(
-                    onPressed: () => Navigator.pop(sheet),
-                    child: const Text('完成'),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-    // 设置页通过 state.settingsChanges 自动刷新，无需 setState。
-  }
-
-  /// 从手机选择 TTF/OTF 字体文件并导入，成功后自动应用。
-  Future<void> _importFontFromPhone(
-    BuildContext context, {
-    VoidCallback? onDone,
-  }) async {
-    String? path;
-    try {
-      path = await LocalPlatform.pickFontFile();
-    } catch (_) {
-      if (context.mounted) showNovelFeedback(context, '无法打开文件选择器');
-      return;
-    }
-    if (path == null || path.isEmpty) return; // 用户取消
-    final fileName = path.split('/').last;
-    final displayName = fileName.replaceAll(
-      RegExp(r'\.(ttf|otf|ttc)$', caseSensitive: false),
-      '',
-    );
-    try {
-      final id = await state.registerImportedFont(path, displayName);
-      await state.setAppFont(id);
-      onDone?.call();
-      if (context.mounted) {
-        showNovelFeedback(context, '已应用「$displayName」');
-      }
-    } catch (_) {
-      if (context.mounted) showNovelFeedback(context, '字体导入失败，文件可能已损坏');
-    }
   }
 
   Widget _appearanceSetting(BuildContext context) {
@@ -5991,7 +5789,7 @@ class _ReaderPageState extends State<ReaderPage>
         widget.state.fontSize;
     if ((width - _layoutWidth).abs() >= 1 ||
         (scale - _layoutTextScale).abs() >= .01 ||
-        _layoutFontId != widget.state.appFontId) {
+        _layoutFontId != widget.state.effectiveReaderFontId) {
       final position = _currentPosition();
       if (position != null) _prepareRestore(position);
     }
@@ -7426,7 +7224,7 @@ class _ReaderPageState extends State<ReaderPage>
               (saved.lineHeight - widget.state.lineHeight).abs() < .01 &&
               (saved.width - _layoutWidth).abs() < 1 &&
               (saved.textScale - _textScale).abs() < .01 &&
-              saved.typeface == widget.state.appFontId;
+              saved.typeface == widget.state.effectiveReaderFontId;
           var anchor =
               saved.paragraphIndex != null &&
                   saved.paragraphIndex! >= 0 &&
@@ -7538,7 +7336,7 @@ class _ReaderPageState extends State<ReaderPage>
         ? const NovelChapter('目录为空', '')
         : _novel.chapters[_chapter];
     _layoutWidth = MediaQuery.sizeOf(context).width;
-    _layoutFontId = widget.state.appFontId;
+    _layoutFontId = widget.state.effectiveReaderFontId;
     // Keep this State subscribed to the app theme: a global typeface switch
     // must reach didChangeDependencies, which re-anchors and re-saves the
     // position with the new font (the scaffold reads Theme in a Builder).

@@ -42,7 +42,9 @@ class UserFontStore extends ChangeNotifier {
   final Map<String, Future<void>> _loads = {};
   final _loadedFaces = <String>{};
   bool isLoaded(String id) =>
-      id == AppTypeface.system.name || _loadedFaces.contains(id);
+      id == AppTypeface.system.name ||
+      id == AppTypeface.sourceHanSerif.name ||
+      _loadedFaces.contains(id);
   final FontDownloadClient _downloads;
   final _availableDownloads = <String>{};
   Future<void>? _download;
@@ -63,6 +65,7 @@ class UserFontStore extends ChangeNotifier {
       _fonts.where((font) => font.id == id).firstOrNull;
   bool available(String id) =>
       id == AppTypeface.system.name ||
+      id == AppTypeface.sourceHanSerif.name ||
       _availableDownloads.contains(id) ||
       find(id) != null;
   String label(String id) => id == followAppFont
@@ -115,7 +118,12 @@ class UserFontStore extends ChangeNotifier {
 
   Future<void> ensureLoaded(String id) async {
     final font = find(id);
-    if (!available(id) || id == AppTypeface.system.name) return;
+    if (!available(id) ||
+        id == AppTypeface.system.name ||
+        (id == AppTypeface.sourceHanSerif.name &&
+            !_availableDownloads.contains(id))) {
+      return;
+    }
     final loading = _loads.putIfAbsent(id, () async {
       final root = await _root();
       final file = font == null

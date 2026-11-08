@@ -21,9 +21,26 @@ import 'reader_preferences.dart';
 ///   (目录 / 排版 / 亮度 / 听书). Unsupported ones stay visible, greyed, and
 ///   explain why when tapped.
 
-ThemeData readerPaperTheme(ThemeData base, ReaderPreferences prefs) {
+ThemeData readerPaperTheme(
+  ThemeData base,
+  ReaderPreferences prefs, {
+  bool overrideFont = false,
+  String? fontFamily,
+  List<String>? fontFamilyFallback,
+}) {
   final appDark = base.brightness == Brightness.dark;
-  if (prefs.paper == ReaderPaper.system) return base;
+  if (prefs.paper == ReaderPaper.system && !overrideFont) return base;
+  final baseText = overrideFont
+      ? ThemeData(brightness: base.brightness).textTheme.apply(
+          fontFamily: fontFamily,
+          fontFamilyFallback: fontFamilyFallback,
+          bodyColor: base.colorScheme.onSurface,
+          displayColor: base.colorScheme.onSurface,
+        )
+      : base.textTheme;
+  if (prefs.paper == ReaderPaper.system) {
+    return base.copyWith(textTheme: baseText);
+  }
   final dark = prefs.darkPaper(appDark);
   final background = prefs.background(appDark);
   final ink = prefs.foreground(appDark);
@@ -49,7 +66,7 @@ ThemeData readerPaperTheme(ThemeData base, ReaderPreferences prefs) {
     colorScheme: scheme,
     scaffoldBackgroundColor: background,
     dividerColor: scheme.outlineVariant,
-    textTheme: base.textTheme.apply(bodyColor: ink, displayColor: ink),
+    textTheme: baseText.apply(bodyColor: ink, displayColor: ink),
     iconTheme: base.iconTheme.copyWith(color: control),
     extensions: [
       for (final extension in base.extensions.values)
@@ -109,19 +126,33 @@ class ReaderPaperScope extends StatefulWidget {
 class _ReaderPaperScopeState extends State<ReaderPaperScope> {
   ThemeData? _base;
   ReaderPreferences? _prefs;
+  String? _readerFontId;
+  bool? _overrideFont;
   ThemeData? _theme;
 
   ThemeData _resolve(ThemeData base, ReaderPreferences prefs) {
+    final readerFontId = widget.state.effectiveReaderFontId;
+    final overrideFont = readerFontId != widget.state.appFontId;
     final cached = _theme;
     if (cached != null &&
         identical(base, _base) &&
         _prefs?.paper == prefs.paper &&
-        _prefs?.nightTextBrightness == prefs.nightTextBrightness) {
+        _prefs?.nightTextBrightness == prefs.nightTextBrightness &&
+        _readerFontId == readerFontId &&
+        _overrideFont == overrideFont) {
       return cached;
     }
     _base = base;
     _prefs = prefs;
-    return _theme = readerPaperTheme(base, prefs);
+    _readerFontId = readerFontId;
+    _overrideFont = overrideFont;
+    return _theme = readerPaperTheme(
+      base,
+      prefs,
+      overrideFont: overrideFont,
+      fontFamily: widget.state.readerFontFamily,
+      fontFamilyFallback: widget.state.readerFontFamilyFallback,
+    );
   }
 
   @override
