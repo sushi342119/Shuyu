@@ -49,7 +49,6 @@ class UserFontStore extends ChangeNotifier {
   String? downloadingFontId;
   FontDownloadCancellation? _cancellation;
   final downloadChanges = ValueNotifier<FontDownloadProgress?>(null);
-  FontDownloadProgress? get downloadProgress => downloadChanges.value;
   final _downloadErrors = <String, String>{};
   String? downloadError(String id) => _downloadErrors[id];
   bool get downloading => _download != null;
@@ -137,8 +136,6 @@ class UserFontStore extends ChangeNotifier {
       rethrow;
     }
   }
-
-  Future<void> downloadSourceHanSerif() => downloadFont(sourceHanFontId);
 
   Future<void> downloadFont(String id) async {
     await load();

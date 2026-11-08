@@ -401,8 +401,6 @@ class RenderReaderLineMotion extends RenderBox
   bool get _reverse => (_scope._linePlan.incoming.firstOrNull?.dy ?? 0) < 0;
 
   @visibleForTesting
-  int get debugLineCount => _lines.length;
-  @visibleForTesting
   double debugLineProgress(int index) =>
       _scope.progressFor(_rank + index, _count, reverse: _reverse);
   @visibleForTesting

@@ -49,30 +49,6 @@ class ReaderContent {
         : '$layout|languages=$languageFilter';
   }
 
-  ReaderContent withHiddenLanguages(
-    Set<String> hidden, {
-    String? onlyLanguage,
-  }) {
-    final excluded = onlyLanguage == null
-        ? languages.intersection(hidden)
-        : languages.difference({onlyLanguage});
-    if (excluded.isEmpty) return this;
-    final names = excluded.toList()..sort();
-    return ReaderContent(
-      paragraphs,
-      readingOrder: List.unmodifiable(
-        order.where((index) => !excluded.contains(formats[index]?.language)),
-      ),
-      inlineOwners: inlineOwners,
-      placementIds: placementIds,
-      formats: formats,
-      notes: notes,
-      revision: revision,
-      coordinateMap: coordinateMap,
-      languageFilter: names.join(','),
-    );
-  }
-
   List<String> get illustrations => _imageLists[this] ??= List.unmodifiable([
     for (final index in order) ?readerIllustrationUrl(paragraphs[index]),
   ]);
@@ -228,38 +204,6 @@ class ReaderParagraphRegistry {
     return clampToLast && rows.isNotEmpty
         ? (index: rows.last.index, fraction: 1)
         : null;
-  }
-
-  int? captureTextOffset(int index, double readingOffset) {
-    final row = _rows[index];
-    if (row == null || !row.attached || !row.hasSize) return null;
-    RenderParagraph? paragraph;
-    void visit(RenderObject node) {
-      if (node is RenderParagraph) {
-        paragraph ??= node;
-        return;
-      }
-      node.visitChildren(visit);
-    }
-
-    visit(row);
-    final text = paragraph;
-    final viewport = RenderAbstractViewport.maybeOf(row);
-    if (text == null || !text.attached || !text.hasSize || viewport == null) {
-      return null;
-    }
-    final top = viewport.getOffsetToReveal(row, 0).offset;
-    final textOrigin = text.localToGlobal(Offset.zero, ancestor: row);
-    final position = text.getPositionForOffset(
-      Offset(
-        0,
-        (readingOffset - top - textOrigin.dy).clamp(0.0, text.size.height),
-      ),
-    );
-    return (position.offset - row.textOffset).clamp(
-      0,
-      text.text.toPlainText().length - row.textOffset,
-    );
   }
 
   /// A visible anchor can be restored exactly. Otherwise use the nearest lazy

@@ -231,12 +231,6 @@ class ReadingWidgetSnapshot {
   String get themeId => theme.id;
   final bool showBookDetails;
   bool get hasMeasuredDays => week.any((day) => day.verifiedSeconds != null);
-  int? get weekSeconds => hasMeasuredDays
-      ? week.fold(0, (sum, day) => sum! + (day.verifiedSeconds ?? 0))
-      : null;
-  int get qualifiedWeekDays => week
-      .where((day) => (day.verifiedSeconds ?? 0) >= qualificationSeconds)
-      .length;
 
   ReadingWidgetSnapshot styled({
     ReadingWidgetPalette? palette,

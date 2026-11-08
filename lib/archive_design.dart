@@ -82,7 +82,6 @@ abstract final class ArchiveDesign {
   // Design 2026-11: cards and panels 14 (was 12); bottom sheets 24.
   static const panelRadius = 14.0;
   static const sheetRadius = 24.0;
-  static const controlRadius = 10.0;
   static const coverRadius = 7.0;
 
   /// A thin neutral milk layer, not a white opaque sheet or another blur pass.

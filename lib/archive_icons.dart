@@ -20,11 +20,6 @@ abstract final class ArchiveIconMotion {
   static const morphDuration = Duration(milliseconds: 380);
   static const stateCurve = Cubic(.18, 1.28, .32, 1);
 
-  static double stateAt(double gesturePhase) => stateCurve.transform(
-    (gesturePhase * duration.inMilliseconds / morphDuration.inMilliseconds)
-        .clamp(0, 1),
-  );
-
   static ArchiveIconGesture frame(double phase) => ArchiveIconGesture(
     _spring(phase),
     _spring(((phase - .055) / .945).clamp(0, 1)),

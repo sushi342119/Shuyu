@@ -76,12 +76,6 @@ class QuoteCardLayout {
       ? const Color(0xff6f7169)
       : edition.muted;
   String get artAsset => readingKeepsakeArt(theme, artAt: artAt);
-  Rect get bodyBounds => Rect.fromLTWH(
-    _geometry.left,
-    _geometry.top,
-    _geometry.bodyWidth,
-    body.height,
-  );
   double get _footerTop =>
       height - _geometry.artFooter - 88 - source.height - title.height;
 

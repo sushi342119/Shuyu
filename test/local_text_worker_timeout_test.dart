@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shuyu/local_text_worker_client.dart';
+import 'package:shuyu/local_library.dart';
 
 void _neverReady(SendPort ready) => ReceivePort().listen((_) {});
 

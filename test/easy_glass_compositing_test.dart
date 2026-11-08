@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:shuyu/easy_glass.dart';
 import 'package:shuyu/library_state.dart';
 import 'package:shuyu/native_effects.dart';
 

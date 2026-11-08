@@ -236,78 +236,6 @@ class ReaderRichParagraph {
   final ReaderBlockSpacing spacing;
   final String language;
   final double opacity;
-  ReaderRichParagraph withReferences(List<ReaderNoteReference> value) =>
-      ReaderRichParagraph(
-        alignment: alignment,
-        writing: writing,
-        rule: rule,
-        ruby: ruby,
-        references: value,
-        emphasis: emphasis,
-        breakBefore: breakBefore,
-        breakAfter: breakAfter,
-        spacing: spacing,
-        language: language,
-        opacity: opacity,
-      );
-  ReaderRichParagraph withBreaks({bool before = false, bool after = false}) =>
-      ReaderRichParagraph(
-        alignment: alignment,
-        writing: writing,
-        rule: rule,
-        ruby: ruby,
-        references: references,
-        emphasis: emphasis,
-        breakBefore: breakBefore || before,
-        breakAfter: breakAfter || after,
-        spacing: spacing,
-        language: language,
-        opacity: opacity,
-      );
-  ReaderRichParagraph withSpacing(ReaderBlockSpacing value) =>
-      ReaderRichParagraph(
-        alignment: alignment,
-        writing: writing,
-        rule: rule,
-        ruby: ruby,
-        references: references,
-        emphasis: emphasis,
-        breakBefore: breakBefore,
-        breakAfter: breakAfter,
-        spacing: spacing.merge(value),
-        language: language,
-        opacity: opacity,
-      );
-  ReaderRichParagraph replaceSpacing(ReaderBlockSpacing value) =>
-      ReaderRichParagraph(
-        alignment: alignment,
-        writing: writing,
-        rule: rule,
-        ruby: ruby,
-        references: references,
-        emphasis: emphasis,
-        breakBefore: breakBefore,
-        breakAfter: breakAfter,
-        spacing: value,
-        language: language,
-        opacity: opacity,
-      );
-  ReaderRichParagraph withPublisherLanguage(ReaderRichParagraph value) =>
-      ReaderRichParagraph(
-        alignment: alignment,
-        writing: writing,
-        rule: rule,
-        ruby: ruby,
-        references: references,
-        emphasis: emphasis,
-        breakBefore: breakBefore,
-        breakAfter: breakAfter,
-        spacing: spacing,
-        language: value.language,
-        opacity: value.opacity,
-      );
-  ReaderRichParagraph get withoutSpacing =>
-      spacing.empty ? this : replaceSpacing(const ReaderBlockSpacing());
   double gapBefore(
     ReaderRichParagraph? previous, {
     required double font,
@@ -337,13 +265,6 @@ class ReaderRichParagraph {
       spacing.empty &&
       language.isEmpty &&
       opacity == 1;
-  int emphasisAt(int offset) {
-    var mask = 0;
-    for (final run in emphasis) {
-      if (run.start <= offset && offset < run.end) mask |= run.mask;
-    }
-    return mask;
-  }
 
   static TextStyle emphasized(TextStyle base, int mask) => mask == 0
       ? base

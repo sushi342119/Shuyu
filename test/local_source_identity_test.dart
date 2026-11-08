@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shuyu/local_source_identity.dart';
+import 'package:shuyu/local_library.dart';
 
 void main() {
   test('旧 appFolder 记录在当前选择 SAF 时仍与 appFolder 扫描同键', () {

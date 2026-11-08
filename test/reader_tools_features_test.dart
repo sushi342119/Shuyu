@@ -7,7 +7,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shuyu/app_ui.dart';
 import 'package:shuyu/library_state.dart';
 import 'package:shuyu/pages.dart';
-import 'package:shuyu/reader_landing_highlight.dart';
 import 'package:shuyu/ui_preferences.dart' show readerFontSizeMax;
 
 import 'support/offline_fixture.dart';

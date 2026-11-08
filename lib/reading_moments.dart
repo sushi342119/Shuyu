@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -22,10 +21,6 @@ class ReadingMomentsPreferences {
   });
   final bool enabled, milestones, completions, confetti;
   final String themeId;
-
-  bool allows(ReadingMomentKind kind) =>
-      enabled &&
-      (kind == ReadingMomentKind.completion ? completions : milestones);
 
   ReadingMomentsPreferences copyWith({
     bool? enabled,
@@ -279,25 +274,6 @@ class ReadingMomentsStore extends ChangeNotifier {
 
   ReadingMomentsPreferences get preferences => _preferences;
 
-  /// Disabling a popup category retires its pending queue, not its history.
-  Future<void> setPreferences(ReadingMomentsPreferences value) async {
-    final before = _preferences;
-    final previouslyPresented = {..._presented};
-    _preferences = value;
-    for (final event in _moments.values) {
-      if (!value.allows(event.kind)) _presented.add(event.id);
-    }
-    try {
-      await _save();
-    } catch (_) {
-      _preferences = before;
-      _presented
-        ..clear()
-        ..addAll(previouslyPresented);
-      rethrow;
-    }
-  }
-
   DateTime? get trackedSince => _activity.startedAt;
   int get verifiedTotalSeconds => _activity.totalSeconds;
 
@@ -334,170 +310,6 @@ class ReadingMomentsStore extends ChangeNotifier {
       .where((moment) => moment.completion != null)
       .map((moment) => moment.completion)
       .firstOrNull;
-
-  /// Only a causal reading gate calls this in production. Deterministic tests
-  /// may supply intervals directly; saved positions never reach this method.
-  Future<void> recordVerifiedInterval({
-    required int bookId,
-    required DateTime startedAt,
-    required Duration elapsed,
-  }) async {
-    if (elapsed <= Duration.zero) return;
-    await _activity.recordInterval(
-      bookId: bookId,
-      startedAt: startedAt,
-      elapsed: elapsed,
-    );
-    final earnedAt = startedAt.add(elapsed);
-    var streak = 0;
-    DateTime? previousDay;
-    for (final day in _activity.days) {
-      final preceding = DateTime(
-        day.date.year,
-        day.date.month,
-        day.date.day - 1,
-      );
-      if (day.seconds < qualifyingSeconds) {
-        streak = 0;
-        previousDay = null;
-        continue;
-      }
-      streak = previousDay == preceding ? streak + 1 : 1;
-      previousDay = day.date;
-      _earn(
-        ReadingMoment(
-          id: 'first_day',
-          kind: ReadingMomentKind.firstDay,
-          earnedAt: earnedAt,
-          value: 1,
-        ),
-      );
-      for (final threshold in streakMilestones) {
-        if (streak >= threshold) {
-          _earn(
-            ReadingMoment(
-              id: 'streak:$threshold',
-              kind: ReadingMomentKind.streak,
-              earnedAt: earnedAt,
-              value: threshold,
-            ),
-          );
-        }
-      }
-    }
-    for (final hours in hourMilestones) {
-      if (verifiedTotalSeconds >= hours * 3600) {
-        _earn(
-          ReadingMoment(
-            id: 'duration:$hours',
-            kind: ReadingMomentKind.duration,
-            earnedAt: earnedAt,
-            value: hours,
-          ),
-        );
-      }
-    }
-    await _save();
-  }
-
-  /// A reader-confirmed forward end boundary, not a restored last-page fraction.
-  Future<void> completeBook({
-    required int bookId,
-    required String title,
-    required String author,
-    required bool finished,
-    DateTime? at,
-    String? coverPath,
-  }) async {
-    final key = 'completion:$bookId';
-    final previous = _moments[key];
-    final original = previous?.completion;
-    if (previous != null && (original?.finished != false || !finished)) return;
-    final wasPresented = _presented.contains(key);
-    final days = _activity.daysForBook(bookId);
-    final completedAt = at ?? DateTime.now();
-    final snapshot = ReadingCompletionSnapshot(
-      bookId: bookId,
-      title: original?.title ?? title,
-      author: original?.author ?? author,
-      completedAt: completedAt,
-      completedOffsetMinutes: completedAt.timeZoneOffset.inMinutes,
-      firstReachedEndAt:
-          original?.firstReachedEndAt ?? original?.completedAt ?? completedAt,
-      firstReachedEndOffsetMinutes: original == null
-          ? completedAt.timeZoneOffset.inMinutes
-          : original.firstReachedEndOffsetMinutes ??
-                original.completedOffsetMinutes,
-      finished: finished,
-      coverPath: original?.coverPath ?? coverPath,
-      verifiedSeconds: days.isEmpty
-          ? null
-          : days.fold<int>(0, (sum, day) => sum + day.seconds),
-      readingDays: days.where((day) => day.seconds > 0).length,
-      firstReadAt: days.firstOrNull?.date,
-      lastReadAt: days.lastOrNull?.date,
-    );
-    final event = ReadingMoment(
-      id: key,
-      kind: ReadingMomentKind.completion,
-      earnedAt: completedAt,
-      completion: snapshot,
-    );
-    if (previous == null) {
-      _earn(event);
-    } else {
-      _moments[key] = event;
-    }
-    try {
-      await _save();
-    } catch (_) {
-      if (previous == null) {
-        _moments.remove(key);
-      } else {
-        _moments[key] = previous;
-      }
-      if (wasPresented) {
-        _presented.add(key);
-      } else {
-        _presented.remove(key);
-      }
-      rethrow;
-    }
-  }
-
-  void _earn(ReadingMoment moment) {
-    _moments.putIfAbsent(moment.id, () => moment);
-    if (!_preferences.allows(moment.kind)) _presented.add(moment.id);
-  }
-
-  /// One natural stop shows at most one event. The rest remain in the timeline.
-  /// Persist presentation before opening a route, so reload never replays it.
-  Future<ReadingMoment?> takePending({bool Function()? canPresent}) async {
-    if (canPresent?.call() == false) return null;
-    final pending = moments
-        .where((event) => !_presented.contains(event.id))
-        .toList();
-    if (pending.isEmpty) return null;
-    final selected =
-        pending
-            .where((event) => event.kind == ReadingMomentKind.completion)
-            .firstOrNull ??
-        pending.first;
-    final added = pending.map((event) => event.id).toSet();
-    _presented.addAll(added);
-    try {
-      await _save();
-      if (canPresent?.call() == false) {
-        _presented.removeAll(added);
-        await _save();
-        return null;
-      }
-    } catch (_) {
-      _presented.removeAll(added);
-      rethrow;
-    }
-    return selected;
-  }
 
   String encode() => jsonEncode({
     'version': 1,

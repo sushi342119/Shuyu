@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shuyu/chapter_splitter.dart';
-import 'package:shuyu/file_text_anchor.dart';
+import 'package:shuyu/library_state.dart';
 import 'package:shuyu/text_anchor.dart';
 
 void main() {

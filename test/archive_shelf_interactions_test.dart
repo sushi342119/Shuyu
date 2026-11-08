@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 import 'package:shuyu/app_ui.dart';
-import 'package:shuyu/archive_shelf.dart';
+import 'package:shuyu/archive_wave.dart';
 import 'package:shuyu/catalog.dart';
 
 List<Novel> _books(int count) => [

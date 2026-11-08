@@ -8,8 +8,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter/material.dart' show Theme;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
-import 'easy_glass.dart';
-import 'glass_sampling_budget.dart';
 import 'performance_preferences.dart';
 
 /// Runtime effects execute on Android's Impeller GPU, without frame copies,
@@ -1354,4 +1352,256 @@ class _NativeBackdropLayer extends BackdropFilterLayer {
     backdropKey = render.group?.keyFor(render, builder);
     super.addToScene(builder);
   }
+}
+
+final _samplingCache = GlassSamplingBudgetCache(
+  enabled: const bool.fromEnvironment('GLASS_HALO_CACHE', defaultValue: true),
+);
+
+/// Bounds every source sample of an inactive rounded glass plane, including
+/// the quarter-quad antialiasing footprint. All values are physical pixels.
+/// Interval bounds, not sampled extrema, keep the blur's source halo complete.
+ui.Offset glassSamplingHalo({
+  required ui.Size size,
+  required double radius,
+  required double thickness,
+  required double refractiveIndex,
+}) => _samplingCache.halo(
+  size: size,
+  radius: radius,
+  thickness: thickness,
+  refractiveIndex: refractiveIndex,
+);
+
+/// Cache the interval proof, not the sampled backdrop or screen coordinates.
+/// Scrolling changes a plane's origin but not its optical geometry. Width and
+/// height are applied after the proof, retaining the exact original bounds.
+class GlassSamplingBudgetCache {
+  GlassSamplingBudgetCache({this.maxEntries = 64, this.enabled = true})
+    : assert(maxEntries > 0);
+  final int maxEntries;
+  final bool enabled;
+  final _kernels = <(double, double, double), (double, double)>{};
+  int _calculations = 0;
+  int get kernelCalculations => _calculations;
+  int get cachedKernels => _kernels.length;
+
+  ui.Offset halo({
+    required ui.Size size,
+    required double radius,
+    required double thickness,
+    required double refractiveIndex,
+  }) {
+    final conservative = thickness * 4 + 2;
+    const quadDistance = 2.0;
+    final corner = math.min(radius, size.shortestSide / 2);
+    if (!size.isFinite ||
+        !radius.isFinite ||
+        !thickness.isFinite ||
+        !refractiveIndex.isFinite ||
+        thickness <= quadDistance ||
+        corner <= thickness + quadDistance ||
+        refractiveIndex < 1 ||
+        refractiveIndex > 2) {
+      return ui.Offset(conservative, conservative);
+    }
+    final key = (corner, thickness, refractiveIndex);
+    var kernel = enabled ? _kernels.remove(key) : null;
+    if (kernel == null) {
+      _calculations++;
+      kernel = _proveKernel(corner, thickness, refractiveIndex);
+    }
+    if (enabled) {
+      _kernels[key] = kernel;
+      if (_kernels.length > maxEntries) _kernels.remove(_kernels.keys.first);
+    }
+    final (reach, footprint) = kernel;
+    return ui.Offset(
+      math.min(conservative, math.max(0, reach - size.width) + footprint),
+      math.min(conservative, math.max(0, reach - size.height) + footprint),
+    );
+  }
+
+  static (double, double) _proveKernel(
+    double corner,
+    double thickness,
+    double refractiveIndex,
+  ) {
+    const quadDistance = 2.0;
+    const intervals = 128;
+    final upper = List<double>.filled(intervals, 0);
+    final lower = List<double>.filled(intervals, 0);
+    final eta = 1 / refractiveIndex;
+    double slope(double u) => math.tan(math.asin(u) - math.asin(eta * u));
+    var reach = 0.0;
+    var curvature = 0.0;
+    for (var i = 0; i < intervals; i++) {
+      final lo = i / intervals;
+      final hi = (i + 1) / intervals;
+      final zLo = math.sqrt(math.max(0, 1 - lo * lo));
+      final zHi = math.sqrt(math.max(0, 1 - hi * hi));
+      // Ray slope increases with u; height decreases. Opposite interval ends
+      // bound their product without assuming that its maximum is at an edge.
+      upper[i] = thickness * (3 + zLo) * slope(hi);
+      lower[i] = thickness * (3 + zHi) * slope(lo);
+      reach = math.max(reach, upper[i] + thickness * (1 - lo));
+      curvature = math.max(
+        curvature,
+        upper[i] / (corner - thickness - quadDistance + thickness * lo),
+      );
+    }
+    // SDF is 1-Lipschitz. Quad neighbours can only visit these adjacent u
+    // intervals. Bound their ray-length difference before the 1/4 weighting.
+    final adjacent = (quadDistance / thickness * intervals).ceil() + 1;
+    var rayDifference = 0.0;
+    for (var i = 0; i < intervals; i++) {
+      final first = math.max(0, i - adjacent);
+      final last = math.min(intervals - 1, i + adjacent);
+      for (var j = first; j <= last; j++) {
+        rayDifference = math.max(rayDifference, upper[i] - lower[j]);
+      }
+    }
+    // Two weighted derivative axes plus padding/rounding guards. Refraction is
+    // inward: only rays crossing the opposite side need an additional halo.
+    final footprint =
+        .5 * (quadDistance * (1 + 2 * curvature) + rayDifference) + 8;
+    return (reach, footprint);
+  }
+}
+
+/// The package owns the live backdrop rendering; the app continues to own
+/// gestures, layout and menu motion. No screen capture or adaptive readback.
+class EasyGlassSurface extends StatelessWidget {
+  static bool _reportedRenderer = false;
+  const EasyGlassSurface({
+    super.key,
+    required this.child,
+    required this.radius,
+    required this.thickness,
+    required this.blur,
+    required this.refractiveIndex,
+    required this.tint,
+    required this.emission,
+    required this.activation,
+    this.independent = false,
+    this.physicalOptics = false,
+  });
+
+  final Widget child;
+  final double radius;
+  final double thickness;
+  final double blur;
+  final double refractiveIndex;
+  final ui.Color tint;
+  final double emission;
+  final double activation;
+  final bool independent;
+  final bool physicalOptics;
+
+  @override
+  Widget build(BuildContext context) {
+    if (const bool.fromEnvironment('GLASS_RENDER_DIAGNOSTIC') &&
+        !_reportedRenderer) {
+      _reportedRenderer = true;
+      debugPrint(
+        'GLASS_RENDER_PATH shader_filter_supported='
+        '${ui.ImageFilter.isShaderFilterSupported}',
+      );
+    }
+    final lens = LiquidGlassLens(
+      physicalOptics: physicalOptics,
+      style: LiquidGlassStyle(
+        shape: LiquidGlassShape.roundedRectangle(cornerRadius: radius),
+        // Keep the established clear, slightly milky material. Neither the
+        // package's default bright rim nor its coloured fringe belongs here.
+        specular: const LiquidGlassLight.specular(intensity: 0, thickness: 0),
+        glow: const LiquidGlassLight.glow(intensity: 0, thickness: 0),
+        dispersion: 0,
+        refractionIndex:
+            1 + (refractiveIndex - 1) * .055 + activation.clamp(0, 1) * .006,
+        refractionWidth: thickness,
+        blur: blur,
+        color: ui.Color.alphaBlend(
+          const ui.Color(0xffffffff).withValues(alpha: emission.clamp(0, .05)),
+          tint,
+        ),
+      ),
+      // Nested controls share ONE read of the finished parent surface. A fresh
+      // batch keeps them off the parent's pre-glass input without making every
+      // button in a scrolling sheet take a separate backdrop copy.
+      child: physicalOptics ? null : LiquidGlassBatch(child: child),
+    );
+    final surface = physicalOptics
+        ? Stack(
+            fit: StackFit.passthrough,
+            children: [
+              Positioned.fill(child: lens),
+              LiquidGlassBatch(child: child),
+            ],
+          )
+        : lens;
+    // Activation changes batching, not subtree identity. Replacing this
+    // wrapper would dispose an active TextField at the end of its jelly motion.
+    return LiquidGlassBatch.inherit(enabled: !independent, child: surface);
+  }
+}
+
+/// Native Gaussian + an in-layer alpha ramp. No runtime-filter texture UVs:
+/// the engine owns cropped input bounds, edge tiling and device transforms.
+class EasyScrollEdge extends StatelessWidget {
+  const EasyScrollEdge({
+    super.key,
+    required this.blur,
+    required this.plateau,
+    required this.fromBottom,
+    required this.child,
+  });
+
+  final double blur, plateau;
+  final bool fromBottom;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Stack(
+    fit: StackFit.passthrough,
+    children: [
+      Positioned.fill(
+        // Each edge masks its own blur output. Sharing with page controls or
+        // the opposite edge can let dstIn erase the wrong compositing plane.
+        child: LiquidGlassBatch.exclude(
+          child: LayoutBuilder(
+            builder: (context, constraints) => LiquidGlassScrollEdge(
+              edge: fromBottom ? LiquidGlassEdge.bottom : LiquidGlassEdge.top,
+              color: const ui.Color(0x00000000),
+              adaptivity: LiquidGlassAdaptivity.none,
+              blur: blur,
+              blurCurve: _ScrollEdgeFade(
+                constraints.maxHeight > 0
+                    ? (plateau / constraints.maxHeight).clamp(0.0, .99)
+                    : 0,
+              ),
+            ),
+          ),
+        ),
+      ),
+      child,
+    ],
+  );
+}
+
+class _ScrollEdgeFade extends Curve {
+  const _ScrollEdgeFade(this.plateau);
+  final double plateau;
+
+  @override
+  double transformInternal(double t) {
+    final x = ((t - plateau) / (1 - plateau)).clamp(0.0, 1.0);
+    return x * x * (3 - 2 * x);
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is _ScrollEdgeFade && other.plateau == plateau;
+  @override
+  int get hashCode => plateau.hashCode;
 }

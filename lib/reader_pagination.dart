@@ -233,7 +233,6 @@ class _ReaderMeasurements {
 /// chapter again. Two typography/width configurations are retained per reader.
 class ReaderTextLayoutCache {
   final _layouts = <Object, _ReaderMeasurements>{};
-  int paragraphMeasurements = 0;
   _ReaderMeasurements _for(Object key) {
     final cached = _layouts.remove(key);
     if (cached != null) {
@@ -381,7 +380,6 @@ Future<ReaderPagination?> paginateReader({
     final display = '$prefix$text';
     var metrics = measured.horizontal[index];
     if (metrics == null) {
-      if (cache != null) cache.paragraphMeasurements++;
       final paragraphStyle = format.textStyle(style);
       final span = readerParagraphSpan(
         children: format.spans(text),

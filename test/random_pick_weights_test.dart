@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shuyu/archive_random_pick_card.dart';
-import 'package:shuyu/random_pick_weights.dart';
+import 'package:shuyu/novel_random_pick_section.dart';
 
 void main() {
   test('empty and duplicate candidate ids are safe', () {

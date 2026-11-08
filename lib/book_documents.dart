@@ -69,45 +69,6 @@ class BookScanFolder {
   final bool allStorage;
 }
 
-class BookOpenRequest {
-  const BookOpenRequest({
-    required this.id,
-    required this.name,
-    required this.canLink,
-    this.sourceName,
-    this.sourceLocation,
-    this.canLocate = false,
-    this.canMove = false,
-    this.error,
-  });
-  factory BookOpenRequest.fromMap(Map<dynamic, dynamic> value) =>
-      BookOpenRequest(
-        id: value['id'] as String,
-        name: value['name'] as String,
-        canLink: value['canLink'] == true,
-        sourceName: value['sourceName'] as String?,
-        sourceLocation: value['sourceLocation'] as String?,
-        canLocate: value['canLocate'] == true,
-        canMove: value['canMove'] == true,
-        error: value['error'] as String?,
-      );
-  final String id, name;
-
-  /// Whether the supplied source can be retained without another file picker.
-  /// A temporary read grant alone must not be stored as a library reference.
-  final bool canLink;
-
-  /// Human-readable provider metadata, never an opaque URI or guessed path.
-  final String? sourceName, sourceLocation;
-
-  /// The system picker accepts an initial document hint, not a guaranteed jump.
-  final bool canLocate;
-
-  /// The host can delete this TXT/EPUB after its independent copy is verified.
-  final bool canMove;
-  final String? error;
-}
-
 typedef BookScanEntry = ({String token, String name});
 
 class BookScanSnapshot {
@@ -184,40 +145,6 @@ class BookDocuments {
         ),
     ];
   }
-
-  Future<BookOpenRequest?> pendingOpen() async {
-    final value = await channel.invokeMapMethod<String, dynamic>(
-      'pendingBookOpen',
-    );
-    return value == null ? null : BookOpenRequest.fromMap(value);
-  }
-
-  Future<BookDocumentSelection> resolveOpen(
-    String id, {
-    bool copy = false,
-  }) async => BookDocumentSelection.fromMap(
-    (await channel.invokeMapMethod<String, dynamic>('resolveBookOpen', {
-      'id': id,
-      'copy': copy,
-    }))!,
-  );
-
-  Future<BookDocumentSelection?> authorizeOpen(String id) async {
-    final value = await channel.invokeMapMethod<String, dynamic>(
-      'pickBookOpenReference',
-      {'id': id},
-    );
-    return value == null ? null : BookDocumentSelection.fromMap(value);
-  }
-
-  Future<void> finishOpen(String id) =>
-      channel.invokeMethod<void>('finishBookOpen', {'id': id});
-
-  /// Deletes only the offered original after native streaming comparison with
-  /// the committed app-owned copy. Hosts distinguish a refused deletion from
-  /// an uncertain provider result; callers must not retry the latter blindly.
-  Future<void> deleteOpenSource(String id, String copyPath) => channel
-      .invokeMethod<void>('deleteBookOpenSource', {'id': id, 'path': copyPath});
 
   Future<BookDocumentSelection?> pickImage() async {
     final value = await channel.invokeMapMethod<String, dynamic>('pickImage');
@@ -389,17 +316,6 @@ class BookDocuments {
       for (final value in values ?? const [])
         BookDocumentSelection.fromMap(value),
     ];
-  }
-
-  Future<BookDocumentSelection> stageForImport(
-    BookDocumentSelection book,
-  ) async {
-    if (book.token == null) return book;
-    final value = (await channel.invokeMapMethod<String, dynamic>(
-      'stageImportBook',
-      {'token': book.token},
-    ))!;
-    return BookDocumentSelection.fromMap(value);
   }
 
   Future<void> releaseBooks(Iterable<BookDocumentSelection> books) async {

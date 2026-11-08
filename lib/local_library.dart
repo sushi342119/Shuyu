@@ -20,8 +20,6 @@ export 'local_mobi.dart' show isMobiFileName, extractMobiBook, MobiBookData;
 import 'book_tags.dart';
 import 'filename_tags.dart';
 import 'local_record_removal.dart';
-import 'local_source_identity.dart';
-import 'local_text_worker_client.dart';
 import 'portable_book_prepare.dart';
 import 'recovery_archive.dart';
 import 'wenku_errors.dart';
@@ -4666,9 +4664,6 @@ class CompositeNovelRepository extends NovelRepository {
   final LocalLibraryStore local;
   final NovelRepository remote;
 
-  LocalBookKind? localKind(int id) =>
-      isLocalNovelId(id) ? local.kindFor(id) : null;
-
   @override
   Future<List<Novel>> list() => remote.list();
 
@@ -4703,4 +4698,242 @@ class StaleLocalChapterException implements Exception {
   const StaleLocalChapterException();
   @override
   String toString() => '章节目录已更新，请等待进度迁移后重新载入';
+}
+
+/// 本地书籍的来源身份：同一来源只生成一种忽略键。
+///
+/// appFolder 与 SAF 的来源字段不能互相覆盖：旧 appFolder 记录即使当前
+/// 选中了 SAF 文件夹，仍属于 appFolder:novels；旧 SAF 记录则属于
+/// 当初授权的 SAF 树。忽略键格式为 jsonEncode([sourceId, sourceKey])，
+/// 与旧名单条目格式一致。
+class LocalSourceIdentity {
+  const LocalSourceIdentity._(this.sourceId, this.sourceKey);
+
+  final String sourceId;
+  final String sourceKey;
+
+  String get ignoredKey => jsonEncode([sourceId, sourceKey]);
+
+  factory LocalSourceIdentity.appFolder(String path) {
+    return LocalSourceIdentity._(
+      'appFolder:novels',
+      _filePath(path),
+    );
+  }
+
+  factory LocalSourceIdentity.saf(String treeUri, String sourceKey) {
+    if (treeUri.isEmpty || sourceKey.isEmpty) {
+      throw StateError('SAF 来源信息不完整');
+    }
+    return LocalSourceIdentity._('saf:$treeUri', sourceKey);
+  }
+
+  factory LocalSourceIdentity.forBook({
+    required String sourceId,
+    required String sourceKey,
+    required String fileUri,
+    required String? folderUri,
+  }) {
+    final storedKey = sourceKey.isNotEmpty ? sourceKey : fileUri;
+    if (storedKey.isEmpty) {
+      throw StateError('书籍没有可识别的源定位符');
+    }
+    // 已回填的记录保留自己的来源，不能被当前所选目录覆盖。
+    if (sourceId == 'appFolder:novels') {
+      return LocalSourceIdentity.appFolder(storedKey);
+    }
+    if (sourceId.isNotEmpty) {
+      return LocalSourceIdentity._(sourceId, storedKey);
+    }
+    // 旧记录优先根据源 fileUri 判断所属来源。
+    final locator = fileUri.isNotEmpty ? fileUri : storedKey;
+    final uri = Uri.tryParse(locator);
+    if (uri?.scheme == 'content') {
+      // 旧 SAF 记录的树必须从它自身的 URI 里取，不能借用当前目录：
+      // 当前目录已换成 B 时，借用 folderUri 会写出 B 的忽略键，
+      // 以后扫描 A 时仍会重新导入。
+      final parts = uri!.pathSegments;
+      final documentAt = locator.indexOf('/document/');
+      if (parts.length < 4 ||
+          parts[0] != 'tree' ||
+          parts[2] != 'document' ||
+          documentAt < 0) {
+        throw StateError('旧 SAF 记录缺少原目录身份，请先扫描原目录');
+      }
+      // 保留源 URI 中树前缀的原始编码，不借用当前 folderUri。
+      return LocalSourceIdentity.saf(
+        locator.substring(0, documentAt),
+        storedKey,
+      );
+    }
+    if (uri == null || !uri.hasScheme || uri.scheme == 'file') {
+      // 旧 appFolder 记录即使当前选中了 SAF 文件夹，
+      // 仍然使用 appFolder:novels + 源文件路径。
+      return LocalSourceIdentity.appFolder(locator);
+    }
+    throw StateError('无法识别旧书籍的来源：${uri.scheme}');
+  }
+
+  static String _filePath(String value) {
+    if (value.isEmpty) throw StateError('源文件路径不能为空');
+    final uri = Uri.tryParse(value);
+    if (uri?.scheme == 'file') {
+      return uri!.toFilePath();
+    }
+    if (uri != null && uri.hasScheme) {
+      throw StateError('appFolder 来源不是文件路径');
+    }
+    return value;
+  }
+}
+
+/// Serialized request/reply transport. A dead or unresponsive isolate gets one
+/// replacement; application errors from a live worker are returned unchanged.
+class LocalTextWorkerClient {
+  LocalTextWorkerClient(
+    this.entryPoint, {
+    this.readyTimeout = const Duration(seconds: 3),
+    this.replyTimeout = const Duration(seconds: 12),
+  });
+
+  final void Function(SendPort) entryPoint;
+  final Duration readyTimeout;
+  final Duration replyTimeout;
+  _WorkerSession? _session;
+  Future<void> _queue = Future.value();
+  bool _closed = false;
+
+  Future<Object?> run(Map<String, Object?> job) {
+    final next = _queue.then((_) => _run(job));
+    _queue = next.then<void>((_) {}, onError: (Object _) {});
+    return next;
+  }
+
+  Future<Object?> _run(Map<String, Object?> job) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (_closed) throw StateError('Text worker disposed');
+      if (_session?.closed == true) _session = null;
+      final session = _session ??= _WorkerSession();
+      try {
+        if (session.requests == null) {
+          await session
+              .start(entryPoint)
+              .timeout(
+                readyTimeout,
+                onTimeout: () => throw const TextWorkerUnavailable('文本处理启动超时'),
+              );
+        }
+        if (session.closed) throw const TextWorkerUnavailable('文本处理已退出');
+        final reply = ReceivePort();
+        try {
+          session.requests!.send((reply.sendPort, job));
+          final response =
+              await Future.any<Object?>([
+                reply.first,
+                session.failure.future.then<Object?>((error) => throw error),
+              ]).timeout(
+                replyTimeout,
+                onTimeout: () => throw const TextWorkerUnavailable('文本处理回复超时'),
+              );
+          if (response is! List || response.length < 2) {
+            throw const TextWorkerUnavailable('文本处理回复无效');
+          }
+          if (response[0] == false) {
+            Error.throwWithStackTrace(
+              response[1] as Object,
+              response.length > 2 && response[2] is StackTrace
+                  ? response[2] as StackTrace
+                  : StackTrace.current,
+            );
+          }
+          return response[1];
+        } finally {
+          reply.close();
+        }
+      } on TextWorkerUnavailable {
+        session.close();
+        if (identical(_session, session)) _session = null;
+        if (attempt == 1 || _closed) rethrow;
+      }
+    }
+    throw const TextWorkerUnavailable('文本处理失败，请重试');
+  }
+
+  void dispose() {
+    _closed = true;
+    _session?.close();
+    _session = null;
+  }
+}
+
+class TextWorkerUnavailable implements Exception {
+  const TextWorkerUnavailable(this.message);
+  final String message;
+  @override
+  String toString() => '$message，请重试';
+}
+
+class _WorkerSession {
+  final ready = ReceivePort();
+  final exited = ReceivePort();
+  final errors = ReceivePort();
+  final failure = Completer<TextWorkerUnavailable>();
+  Isolate? isolate;
+  SendPort? requests;
+  bool closed = false;
+
+  Future<void> start(void Function(SendPort) entryPoint) async {
+    exited.listen((_) => _fail('文本处理进程已退出'));
+    errors.listen((_) => _fail('文本处理进程异常退出'));
+    try {
+      // Install listeners before entryPoint can run, including early exits.
+      final spawning = Isolate.spawn(
+        entryPoint,
+        ready.sendPort,
+        onExit: exited.sendPort,
+        onError: errors.sendPort,
+        errorsAreFatal: true,
+      );
+      isolate = await spawning;
+      if (closed) {
+        isolate!.kill(priority: Isolate.immediate);
+        throw const TextWorkerUnavailable('文本处理已取消');
+      }
+      final port = await Future.any<Object?>([
+        ready.first,
+        failure.future.then<Object?>((error) => throw error),
+      ]);
+      if (port is! SendPort) {
+        throw const TextWorkerUnavailable('文本处理握手无效');
+      }
+      if (closed) throw const TextWorkerUnavailable('文本处理已取消');
+      requests = port;
+    } on TextWorkerUnavailable {
+      rethrow;
+    } catch (_) {
+      throw const TextWorkerUnavailable('文本处理无法启动');
+    } finally {
+      ready.close();
+    }
+  }
+
+  void _fail(String message) {
+    requests = null;
+    if (!failure.isCompleted) failure.complete(TextWorkerUnavailable(message));
+    // Clear the old SendPort even when the worker exits between requests.
+    close();
+  }
+
+  void close() {
+    if (closed) return;
+    closed = true;
+    requests = null;
+    if (!failure.isCompleted) {
+      failure.complete(const TextWorkerUnavailable('文本处理已终止'));
+    }
+    isolate?.kill(priority: Isolate.immediate);
+    ready.close();
+    exited.close();
+    errors.close();
+  }
 }

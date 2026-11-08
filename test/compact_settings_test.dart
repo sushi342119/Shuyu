@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shuyu/app_ui.dart';
-import 'package:shuyu/appearance_performance_panel.dart';
 import 'package:shuyu/archive_wave.dart';
 import 'package:shuyu/book_tags.dart';
 import 'package:shuyu/catalog.dart';

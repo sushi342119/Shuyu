@@ -417,8 +417,6 @@ class ReaderAnnotationTextSegment {
   final int start, end;
   int get chapterId => _piece.chapter.chapterId;
   int get paragraph => _piece.paragraph;
-  int get sourceStart => _piece.start;
-  int get sourceEnd => _piece.end;
 }
 
 class _SourcePiece {

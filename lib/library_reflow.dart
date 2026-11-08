@@ -11,8 +11,6 @@ class LibraryReflowController extends ChangeNotifier {
   Rect? _sourceViewport;
   bool active = false;
   int generation = 0;
-  @visibleForTesting
-  Animation<double> get debugClock => _clock;
   double get progress =>
       const Cubic(.18, .72, .18, 1).transform(_clock.value.clamp(0, 1));
   void begin(Animation<double> clock) {
@@ -67,8 +65,6 @@ class LibraryReflowScope extends InheritedWidget {
   final int generation;
   static LibraryReflowScope? of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<LibraryReflowScope>();
-  static Clip clipOf(BuildContext context) =>
-      of(context)?.active == true ? Clip.none : Clip.hardEdge;
   @override
   bool updateShouldNotify(LibraryReflowScope oldWidget) =>
       enabled != oldWidget.enabled ||

@@ -1,20 +1,19 @@
 import 'dart:async';
+import 'package:flutter/semantics.dart';
+import 'package:flutter/rendering.dart';
+import 'dart:ui' show DisplayFeature, DisplayFeatureState, DisplayFeatureType;
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'app_ui.dart';
 import 'library_state.dart';
-import 'reader_book_layout.dart';
 import 'reader_content.dart';
 import 'reader_pagination.dart';
 import 'reader_preferences.dart';
 import 'reader_reflow.dart';
 import 'reader_turn_motion.dart';
 import 'reader_illustrations.dart';
-import 'reader_page_anchor.dart';
-import 'reader_page_physics.dart';
-import 'reader_sheet_motion.dart';
 import 'reader_spine_turn.dart';
 import 'reader_status.dart';
-import 'reader_scroll_location.dart';
 import 'reader_chrome.dart';
 
 TextStyle _chapterHeadingStyle(TextStyle style) => style.copyWith(
@@ -90,31 +89,6 @@ class ReaderPagedController {
   int get pageCount => _owner?._pagination?.pages.length ?? 0;
   Size? get pageSize => _owner?._pagination?.size;
   int get pagesPerSpread => _owner?._bookLayout?.count ?? 1;
-  List<int> get visiblePages => _owner?._visiblePages ?? const [];
-  @visibleForTesting
-  int get debugLayoutGeneration => _owner?._generation ?? 0;
-  @visibleForTesting
-  int get debugParagraphMeasurements =>
-      _owner?._textLayout.paragraphMeasurements ?? 0;
-  @visibleForTesting
-  int get debugPageBodyBuilds => _owner?._pageBodyBuilds ?? 0;
-  @visibleForTesting
-  int get debugAdjacentLayoutStarts => _owner?._adjacentLayoutStarts ?? 0;
-  @visibleForTesting
-  bool adjacentReady(int direction) =>
-      _owner?._adjacentLayouts.containsKey(direction.sign) ?? false;
-  @visibleForTesting
-  ReaderLeaf? get debugLeaf => _owner?._leaf;
-  @visibleForTesting
-  ReaderPagination? get debugPagination => _owner?._pagination;
-  @visibleForTesting
-  ReaderBookLayout? get debugBookLayout => _owner?._bookLayout;
-  @visibleForTesting
-  ReaderTextAnchor? get debugFirstVisibleAnchor {
-    final owner = _owner;
-    if (owner == null || owner._visiblePages.isEmpty) return null;
-    return owner._firstVisibleAnchor;
-  }
 
   bool pageBy(int direction) {
     final owner = _owner;
@@ -152,16 +126,6 @@ class ReaderPagedController {
   }
 
   void restore(ReadingPosition position) => _owner?._restore(position);
-
-  /// Includes the destination of an in-flight programmatic turn. Audio ticks
-  /// must not restart that same turn before it reaches the next spread.
-  bool isRevealed(ReaderTextAnchor anchor) {
-    final owner = _owner;
-    if (!ready || owner == null) return false;
-    final destination = owner._programmaticTurn ? owner._target : owner._page;
-    return owner._spreadFor(owner._pagination!.pageFor(anchor)) ==
-        owner._spreadFor(destination);
-  }
 
   void reveal(ReaderTextAnchor anchor) {
     final owner = _owner;
@@ -373,7 +337,6 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
   bool _adjacentPreparationQueued = false;
   Size? _adjacentFrame;
   TextScaler? _adjacentScaler;
-  int _adjacentLayoutStarts = 0;
   int get _edgeSlots => widget.onChapterTurned == null ? 0 : 1;
   int get _restingSpread => _boundaryLanding == null
       ? _spreadFor(_page)
@@ -438,13 +401,11 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
   bool _layoutFailed = false;
   bool _layingOut = false;
   final _pageBodies = <int, Widget>{};
-  int _pageBodyBuilds = 0;
   final _textLayout = ReaderTextLayoutCache();
   // Pagination is canonical for its content, geometry and typography inputs.
   // This bounded cache saves work; evicting it must not change page boundaries.
   final _layouts =
       <Object, ({ReaderPagination pagination, int leadingPages})>{};
-  ReaderLeaf? get _leaf => _pagination?.pages[_page];
   bool get _motionEnabled =>
       !widget.reduceMotion && !MediaQuery.disableAnimationsOf(context);
   ReaderPageEffect get _effect =>
@@ -962,7 +923,6 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
       }
       _adjacentRequests[direction] = key;
       changed = _adjacentLayouts.remove(direction) != null || changed;
-      _adjacentLayoutStarts++;
       final padding = widget.padding,
           style = _layoutStyle,
           prefs = widget.preferences;
@@ -1392,7 +1352,6 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
         continue;
       }
       final body = (adjacent?.bodies ?? _pageBodies).putIfAbsent(index, () {
-        _pageBodyBuilds++;
         return RepaintBoundary(
           child: (adjacent?.chapter.pageBuilder ?? widget.pageBuilder)(
             pagination.pages[index],
@@ -2282,4 +2241,975 @@ class _AutoCurtainClipper extends CustomClipper<Rect> {
   @override
   bool shouldReclip(_AutoCurtainClipper oldClipper) =>
       oldClipper.progress != progress || oldClipper.vertical != vertical;
+}
+
+class ReaderPageSelection extends StatelessWidget {
+  const ReaderPageSelection({
+    super.key,
+    required this.enabled,
+    required this.child,
+  });
+  final bool enabled;
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => SelectionRegistrarScope(
+    registrar:
+        (enabled ? SelectionContainer.maybeOf(context) : null) ??
+        const _InactivePageRegistrar(),
+    child: child,
+  );
+}
+
+class _InactivePageRegistrar implements SelectionRegistrar {
+  const _InactivePageRegistrar();
+  @override
+  void add(Selectable selectable) {}
+  @override
+  void remove(Selectable selectable) {}
+}
+
+/// PageView retains native drag, fling, cancellation and accessibility physics.
+/// Cancel only its page-plane translation; paragraph/column layers own the move.
+class ReaderPageAnchor extends SingleChildRenderObjectWidget {
+  const ReaderPageAnchor({
+    super.key,
+    required this.offset,
+    required this.index,
+    required this.reverse,
+    this.visible = true,
+    required super.child,
+  });
+  final ViewportOffset offset;
+  final int index;
+  final bool reverse;
+  final bool visible;
+  @override
+  ReaderPageAnchorRender createRenderObject(BuildContext context) =>
+      ReaderPageAnchorRender(offset, index, reverse, visible);
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    ReaderPageAnchorRender renderObject,
+  ) => renderObject.update(offset, index, reverse, visible);
+}
+
+class ReaderPageAnchorRender extends RenderProxyBox {
+  ReaderPageAnchorRender(this.offset, this.index, this.reverse, this.visible);
+  ViewportOffset offset;
+  int index;
+  bool reverse;
+  bool visible;
+  final _layer = LayerHandle<TransformLayer>();
+  int debugLayoutCount = 0;
+  double get displacement => offset.hasPixels
+      ? (offset.pixels - index * size.width) * (reverse ? -1 : 1)
+      : 0;
+  Matrix4 get _transform => Matrix4.translationValues(displacement, 0, 0);
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    offset.addListener(markNeedsPaint);
+  }
+
+  @override
+  void detach() {
+    offset.removeListener(markNeedsPaint);
+    super.detach();
+  }
+
+  void update(
+    ViewportOffset next,
+    int nextIndex,
+    bool nextReverse,
+    bool nextVisible,
+  ) {
+    if (offset != next && attached) {
+      offset.removeListener(markNeedsPaint);
+      next.addListener(markNeedsPaint);
+    }
+    offset = next;
+    index = nextIndex;
+    reverse = nextReverse;
+    visible = nextVisible;
+    markNeedsPaint();
+    markNeedsSemanticsUpdate();
+  }
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    assert(() {
+      debugLayoutCount++;
+      return true;
+    }());
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    // Neighbour pages are retained by PageView before their turn scope is
+    // assigned. Cancelling their translation must not expose that idle text.
+    if (!visible) return;
+    _layer.layer = context.pushTransform(
+      needsCompositing,
+      offset,
+      _transform,
+      super.paint,
+      oldLayer: _layer.layer,
+    );
+  }
+
+  @override
+  void applyPaintTransform(RenderBox child, Matrix4 transform) =>
+      transform.multiply(_transform);
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) =>
+      visible &&
+      result.addWithPaintTransform(
+        transform: _transform,
+        position: position,
+        hitTest: (result, position) =>
+            super.hitTest(result, position: position),
+      );
+  @override
+  void visitChildrenForSemantics(RenderObjectVisitor visitor) {
+    if (visible) super.visitChildrenForSemantics(visitor);
+  }
+
+  @override
+  void dispose() {
+    _layer.layer = null;
+    super.dispose();
+  }
+}
+
+/// A short deliberate stroke commits one page; a small adjustment returns to
+/// its origin. Distance is bounded in logical pixels, not half a tablet screen.
+class ReaderPagePhysics extends PageScrollPhysics {
+  const ReaderPagePhysics({
+    required this.origin,
+    double durationScale = 1,
+    this.liveDurationScale,
+    this.pageBounds,
+    this.onUserPageCommitted,
+    super.parent,
+  }) : _durationScale = durationScale;
+  final int? Function() origin;
+  final double _durationScale;
+  // Scrollable retains physics when its runtime type does not change. Read a
+  // live setting at gesture release instead of replacing its scroll position.
+  final double Function()? liveDurationScale;
+
+  /// Ready adjacent chapters extend the same page rail. Unprepared edges stay
+  /// clamped so a slow request cannot expose an empty neighbouring sheet.
+  final ({int first, int last}) Function()? pageBounds;
+
+  /// A released gesture has selected another page, before its snap animation.
+  /// A scroll position may recalculate ballistics; the owner deduplicates the
+  /// accepted gesture rather than queuing feedback until ScrollEnd.
+  final ValueChanged<int>? onUserPageCommitted;
+  double get durationScale => liveDurationScale?.call() ?? _durationScale;
+  static double commitDistance(double viewport) =>
+      (viewport * .1).clamp(28, 48);
+
+  @override
+  ReaderPagePhysics applyTo(ScrollPhysics? ancestor) => ReaderPagePhysics(
+    origin: origin,
+    durationScale: _durationScale,
+    liveDurationScale: liveDurationScale,
+    pageBounds: pageBounds,
+    onUserPageCommitted: onUserPageCommitted,
+    parent: buildParent(ancestor),
+  );
+
+  ScrollMetrics _bounded(ScrollMetrics position) {
+    final bounds = pageBounds?.call();
+    if (bounds == null || position is! PageMetrics) return position;
+    final width = position.viewportDimension * position.viewportFraction;
+    return position.copyWith(
+      minScrollExtent: bounds.first * width,
+      maxScrollExtent: bounds.last * width,
+    );
+  }
+
+  @override
+  double applyBoundaryConditions(ScrollMetrics position, double value) =>
+      super.applyBoundaryConditions(_bounded(position), value);
+
+  @override
+  Simulation? createBallisticSimulation(
+    ScrollMetrics position,
+    double velocity,
+  ) {
+    position = _bounded(position);
+    if (position is! PageMetrics ||
+        position.pixels < position.minScrollExtent ||
+        position.pixels > position.maxScrollExtent) {
+      return super.createBallisticSimulation(position, velocity);
+    }
+    final outwardBoundary =
+        position.pixels <= position.minScrollExtent && velocity <= 0 ||
+        position.pixels >= position.maxScrollExtent && velocity >= 0;
+    final page = position.page ?? 0;
+    final width = position.viewportDimension * position.viewportFraction;
+    final gestureOrigin = origin();
+    final double destination;
+    if (gestureOrigin == null) {
+      if (outwardBoundary) {
+        return super.createBallisticSimulation(position, velocity);
+      }
+      destination = page.roundToDouble().clamp(
+        position.minScrollExtent / width,
+        position.maxScrollExtent / width,
+      );
+    } else {
+      final start = gestureOrigin.toDouble();
+      final distance = (page - start) * width;
+      final reversing = velocity.abs() >= 360 && velocity.sign != distance.sign;
+      final fast = !reversing && velocity.abs() >= 360 && distance.abs() >= 8;
+      final commit =
+          !reversing && (distance.abs() >= commitDistance(width) || fast);
+      final direction = distance.sign;
+      destination = (commit ? start + direction : start).clamp(
+        position.minScrollExtent / width,
+        position.maxScrollExtent / width,
+      );
+      if (commit && destination != start) {
+        onUserPageCommitted?.call(destination.round());
+      }
+    }
+    final pixels = destination * width;
+    // Reaching the first/last page can finish the whole turn under the finger.
+    // Acknowledge that accepted destination before preserving the parent's
+    // existing outward-edge behavior; starting at that edge is still silent.
+    if (outwardBoundary) {
+      return super.createBallisticSimulation(position, velocity);
+    }
+    final durationScale = this.durationScale;
+    final tolerance = toleranceFor(position);
+    if ((pixels - position.pixels).abs() <= 1e-6 &&
+        velocity.abs() < tolerance.velocity) {
+      return null;
+    }
+    return _ReaderPageSnap(
+      ScrollSpringSimulation(
+        spring,
+        position.pixels,
+        pixels,
+        math.max(-2400.0, math.min(2400.0, velocity)) * durationScale,
+        tolerance: tolerance,
+      ),
+      from: position.pixels,
+      to: pixels,
+      durationScale: durationScale,
+    );
+  }
+}
+
+/// A fast release near the landing must not overshoot into the following page
+/// and momentarily expose its text or illustration before bouncing back.
+class _ReaderPageSnap extends Simulation {
+  _ReaderPageSnap(
+    this.spring, {
+    required this.from,
+    required this.to,
+    required this.durationScale,
+  }) : super(tolerance: spring.tolerance);
+  final ScrollSpringSimulation spring;
+  final double from, to;
+  final double durationScale;
+  @override
+  bool isDone(double time) =>
+      spring.isDone(time / durationScale) ||
+      (to > from
+          ? spring.x(time / durationScale) >= to
+          : spring.x(time / durationScale) <= to);
+  @override
+  double x(double time) => isDone(time) ? to : spring.x(time / durationScale);
+  @override
+  double dx(double time) =>
+      isDone(time) ? 0 : spring.dx(time / durationScale) / durationScale;
+}
+
+/// Listen to pixels locally, but rebuild only when the displayed percentage
+/// changes. Source progress uses only mounted row geometry after layout, never
+/// eager paragraph layout, disk writes or article rebuilds on a fling.
+class ReaderScrollLocation extends StatefulWidget {
+  const ReaderScrollLocation({
+    super.key,
+    required this.controller,
+    required this.title,
+    required this.margin,
+    required this.ink,
+    required this.paper,
+    this.sourceFraction,
+    this.sourceTitle,
+    this.bookTitle,
+    this.footer = false,
+    this.showClock = false,
+    this.showBattery = false,
+    this.onFractionChanged,
+    this.chrome,
+    this.reduceMotion = false,
+    this.statusFontSize,
+    this.statusBand = false,
+    this.transparentPaper = false,
+  });
+  final ScrollController controller;
+  final String title;
+  final EdgeInsets margin;
+  final Color ink, paper;
+  final double? Function(double viewportOffset)? sourceFraction;
+  final String? Function(double viewportOffset)? sourceTitle;
+  final String? bookTitle;
+  final bool footer, showClock, showBattery;
+  final ValueChanged<double>? onFractionChanged;
+  final Animation<double>? chrome;
+  final bool reduceMotion;
+  final double? statusFontSize;
+  final bool statusBand;
+  final bool transparentPaper;
+  static double extentOf(BuildContext context) =>
+      math.max(24, MediaQuery.textScalerOf(context).scale(13) * 1.4 + 6);
+
+  @override
+  State<ReaderScrollLocation> createState() => _ReaderScrollLocationState();
+}
+
+class _ReaderScrollLocationState extends State<ReaderScrollLocation> {
+  int _percent = 0;
+  String? _title;
+  bool _updateQueued = false;
+  int? _reportedPercent;
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_updateAfterLayout);
+    _updateAfterLayout();
+  }
+
+  void _updateAfterLayout() {
+    if (_updateQueued) return;
+    _updateQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _updateQueued = false;
+      if (mounted) _update();
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  void _update() {
+    final controller = widget.controller;
+    if (!controller.hasClients || !controller.position.hasContentDimensions) {
+      return;
+    }
+    final maximum = controller.position.maxScrollExtent;
+    final source = widget.sourceFraction;
+    final fraction = !widget.footer && widget.onFractionChanged == null
+        ? null
+        : source == null
+        ? (maximum > 0 ? controller.offset / maximum : 0.0)
+        : controller.offset <= .5
+        ? 0.0
+        : controller.position.extentAfter <= .5
+        ? 1.0
+        : source(controller.offset);
+    // A layout/restore can temporarily have no mounted source row. Keep the
+    // last verified location instead of substituting an unrelated estimate.
+    final percent = fraction == null
+        ? _percent
+        : (fraction * 100).clamp(0, 100).round();
+    final title = widget.sourceTitle == null
+        ? widget.title
+        : widget.sourceTitle!(controller.offset) ?? _title ?? widget.title;
+    if (fraction != null && _reportedPercent != percent) {
+      _reportedPercent = percent;
+      widget.onFractionChanged?.call(fraction.clamp(0.0, 1.0));
+    }
+    if (_percent != percent || _title != title) {
+      setState(() {
+        _percent = percent;
+        _title = title;
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(ReaderScrollLocation oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_updateAfterLayout);
+      widget.controller.addListener(_updateAfterLayout);
+    }
+    if (oldWidget.onFractionChanged != widget.onFractionChanged) {
+      _reportedPercent = null;
+    }
+    // Font, margins or viewport changes can update maxScrollExtent without
+    // changing pixels, so a scroll listener alone leaves the label stale.
+    _updateAfterLayout();
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_updateAfterLayout);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SelectionContainer.disabled(
+    child: Stack(
+      children: [
+        if (!widget.transparentPaper)
+          Positioned.fill(
+            child: IgnorePointer(child: ColoredBox(color: widget.paper)),
+          ),
+        Padding(
+          padding: widget.margin,
+          child: DefaultTextStyle.merge(
+            style: TextStyle(
+              fontSize:
+                  widget.statusFontSize ??
+                  (widget.footer || widget.showClock ? 13 : 11),
+              height: widget.footer || widget.showClock ? 1.4 : 1.3,
+              color: widget.ink.withValues(alpha: .72),
+            ),
+            child: widget.showClock
+                ? ReaderStatusFooter(
+                    compact: true,
+                    fontSize: widget.statusFontSize,
+                    statusBand: widget.statusBand,
+                    timeAtEnd: true,
+                    showBattery: widget.showBattery,
+                    interactiveLeading: true,
+                    ink: widget.ink.withValues(alpha: .72),
+                    leading: ReaderChapterTitle(
+                      text: _title ?? widget.title,
+                      key: const ValueKey('reader-scroll-chapter-title'),
+                      chrome: widget.chrome,
+                      showWithChrome: false,
+                      reduceMotion: widget.reduceMotion,
+                    ),
+                  )
+                : Row(
+                    children: [
+                      Expanded(
+                        child: widget.footer && widget.bookTitle != null
+                            ? AppText(
+                                widget.bookTitle!,
+                                key: const ValueKey('reader-scroll-book-title'),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              )
+                            : ReaderChapterTitle(
+                                text: _title ?? widget.title,
+                                chrome: widget.chrome,
+                                showWithChrome: false,
+                                reduceMotion: widget.reduceMotion,
+                              ),
+                      ),
+                      const SizedBox(width: 12),
+                      AppText(
+                        '$_percent%',
+                        key: const ValueKey('reader-scroll-percent'),
+                      ),
+                    ],
+                  ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+/// One pagination width for both leaves, including off-centre hardware hinges.
+/// Rectangles are viewport-local; reading order is applied by ReaderBookSpread.
+class ReaderBookLayout {
+  const ReaderBookLayout._(this.viewport, this.pages, this.spine);
+  final Size viewport;
+  final List<Rect> pages;
+  final Rect? spine;
+  int get count => pages.length;
+  Size get pageSize => pages.first.size;
+  Object get key => (viewport, pages.first, pages.last, count, spine);
+
+  /// Paper reaches the screen edges while pagination keeps its text rectangle.
+  Rect frameFor(int index, EdgeInsets insets) {
+    final body = pages[index].shift(Offset(insets.left, insets.top));
+    return Rect.fromLTRB(
+      index == 0 ? 0 : body.left,
+      0,
+      index == count - 1 ? viewport.width + insets.horizontal : body.right,
+      viewport.height + insets.vertical,
+    );
+  }
+
+  factory ReaderBookLayout.resolve({
+    required Size viewport,
+    required double margin,
+    List<DisplayFeature> features = const [],
+    Offset origin = Offset.zero,
+  }) {
+    var area = Offset.zero & viewport;
+    Rect? hinge;
+    for (final feature in features) {
+      if (feature.type != DisplayFeatureType.hinge &&
+          feature.type != DisplayFeatureType.fold) {
+        continue;
+      }
+      final bounds = feature.bounds.shift(-origin);
+      final vertical = bounds.height > bounds.width;
+      // A fully opened flexible display has a crease, not two separate panes.
+      // Treating its zero-width fold as a hinge made compact inner screens fall
+      // below the two-page threshold and render only the left half of the book.
+      final occludes = vertical ? bounds.width > 0 : bounds.height > 0;
+      if (feature.type == DisplayFeatureType.fold &&
+          !occludes &&
+          feature.state != DisplayFeatureState.postureHalfOpened) {
+        continue;
+      }
+      if (vertical &&
+          bounds.left > area.left &&
+          bounds.right < area.right &&
+          bounds.bottom > area.top &&
+          bounds.top < area.bottom) {
+        hinge = bounds;
+      } else if (!vertical &&
+          bounds.width > area.width / 2 &&
+          bounds.top > area.top &&
+          bounds.bottom < area.bottom &&
+          (bounds.height > 0 ||
+              feature.state == DisplayFeatureState.postureHalfOpened)) {
+        // A tabletop fold uses the larger unobstructed pane, never text across
+        // the physical hinge. Flat, zero-width crease metadata costs no space.
+        area = bounds.top - area.top >= area.bottom - bounds.bottom
+            ? Rect.fromLTRB(area.left, area.top, area.right, bounds.top - 12)
+            : Rect.fromLTRB(
+                area.left,
+                bounds.bottom + 12,
+                area.right,
+                area.bottom,
+              );
+      }
+    }
+    final gutter = math.max(40.0, margin * 2);
+    final leftEnd = hinge == null
+        ? area.center.dx - gutter / 2
+        : hinge.left - margin;
+    final rightStart = hinge == null
+        ? area.center.dx + gutter / 2
+        : hinge.right + margin;
+    final width = math.min(leftEnd - area.left, area.right - rightStart);
+    if (area.width + margin * 2 >= 720 && area.height >= 220 && width >= 300) {
+      return ReaderBookLayout._(
+        viewport,
+        [
+          Rect.fromLTWH(leftEnd - width, area.top, width, area.height),
+          Rect.fromLTWH(rightStart, area.top, width, area.height),
+        ],
+        hinge == null
+            ? Rect.fromLTWH(area.center.dx - 12, area.top, 24, area.height)
+            : null,
+      );
+    }
+    if (hinge != null) {
+      area = leftEnd - area.left >= area.right - rightStart
+          ? Rect.fromLTRB(area.left, area.top, leftEnd, area.bottom)
+          : Rect.fromLTRB(rightStart, area.top, area.right, area.bottom);
+    }
+    return ReaderBookLayout._(viewport, [area], null);
+  }
+}
+
+class ReaderBookSpread extends StatelessWidget {
+  const ReaderBookSpread({
+    super.key,
+    required this.layout,
+    required this.pages,
+    this.rightToLeft = false,
+    this.edgeOverflow = 0,
+    this.verticalOverflow = 0,
+    this.clipLeaves = true,
+    this.frameInsets,
+  });
+  final ReaderBookLayout layout;
+  final List<Widget> pages;
+  final bool rightToLeft;
+  final double edgeOverflow;
+  final double verticalOverflow;
+  final bool clipLeaves;
+  final EdgeInsets? frameInsets;
+
+  @override
+  Widget build(BuildContext context) => Stack(
+    clipBehavior: Clip.none,
+    children: [
+      if (layout.spine case final spine?)
+        Positioned.fromRect(
+          rect: frameInsets == null
+              ? spine
+              : Rect.fromLTWH(
+                  spine.left + frameInsets!.left,
+                  0,
+                  spine.width,
+                  layout.viewport.height + frameInsets!.vertical,
+                ),
+          child: IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    Colors.transparent,
+                    Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: .045),
+                    Colors.transparent,
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      for (var index = 0; index < pages.length; index++)
+        Positioned.fromRect(
+          rect: frameInsets == null
+              ? layout.pages[rightToLeft ? layout.count - 1 - index : index]
+              : layout.frameFor(
+                  rightToLeft ? layout.count - 1 - index : index,
+                  frameInsets!,
+                ),
+          child: Semantics(
+            sortKey: OrdinalSortKey(index.toDouble()),
+            child: ClipRect(
+              clipBehavior: clipLeaves ? Clip.hardEdge : Clip.none,
+              clipper: edgeOverflow == 0 && verticalOverflow == 0
+                  ? null
+                  : _BookTurnClip(
+                      vertical: verticalOverflow,
+                      left:
+                          (rightToLeft ? layout.count - 1 - index : index) == 0
+                          ? edgeOverflow
+                          : 0,
+                      right:
+                          (rightToLeft ? layout.count - 1 - index : index) ==
+                              layout.count - 1
+                          ? edgeOverflow
+                          : 0,
+                    ),
+              child: pages[index],
+            ),
+          ),
+        ),
+    ],
+  );
+}
+
+class _BookTurnClip extends CustomClipper<Rect> {
+  const _BookTurnClip({
+    required this.left,
+    required this.right,
+    this.vertical = 0,
+  });
+  final double left, right, vertical;
+  @override
+  Rect getClip(Size size) => Rect.fromLTRB(
+    -left,
+    -vertical,
+    size.width + right,
+    size.height + vertical,
+  );
+  @override
+  bool shouldReclip(_BookTurnClip oldClipper) =>
+      left != oldClipper.left ||
+      right != oldClipper.right ||
+      vertical != oldClipper.vertical;
+}
+
+/// Retains the live leaf once. A fold is two complementary clips and a paper
+/// crease, not two fading text planes or a screenshot captured on every frame.
+class ReaderSheetMotion extends SingleChildRenderObjectWidget {
+  ReaderSheetMotion({
+    super.key,
+    required this.animation,
+    required this.effect,
+    required this.direction,
+    required this.incoming,
+    required this.front,
+    required this.active,
+    required this.paper,
+    required Widget child,
+  }) : super(child: RepaintBoundary(child: child));
+  final Animation<double> animation;
+  final ReaderPageEffect effect;
+  final double direction;
+  final bool incoming, front, active;
+  final Color paper;
+  @override
+  ReaderSheetMotionRender createRenderObject(BuildContext context) =>
+      ReaderSheetMotionRender(this);
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    ReaderSheetMotionRender renderObject,
+  ) => renderObject.update(this);
+}
+
+class ReaderSheetMotionRender extends RenderProxyBox {
+  ReaderSheetMotionRender(this.config);
+  ReaderSheetMotion config;
+  final _clip = LayerHandle<ClipPathLayer>();
+  final _move = LayerHandle<TransformLayer>();
+  final _opacity = LayerHandle<OpacityLayer>();
+  int debugLayoutCount = 0;
+  double get progress => config.animation.value.clamp(0.0, 1.0);
+  double get opacity =>
+      config.active && config.effect == ReaderPageEffect.fade && config.front
+      ? (config.incoming ? progress : 1 - progress)
+      : 1;
+  double get _sign => config.direction < 0 ? -1 : 1;
+  double get _envelope => math.sin(progress * math.pi);
+  double get _edge => size.width * (_sign > 0 ? 1 - progress : progress);
+  double get _bend => config.effect == ReaderPageEffect.paper
+      ? _sign * math.min(24.0, size.width * .045) * _envelope
+      : 0;
+  double get _fold => config.effect == ReaderPageEffect.paper
+      ? _sign * math.min(28.0, size.width * .065) * _envelope
+      : 0;
+  Offset get displacement =>
+      config.active && config.effect == ReaderPageEffect.cover && config.front
+      ? Offset(
+          _sign * size.width * (config.incoming ? 1 - progress : -progress),
+          0,
+        )
+      : Offset.zero;
+  Matrix4 get _transform => Matrix4.translationValues(displacement.dx, 0, 0);
+
+  Path _side(bool left, double shift) {
+    final x = _edge + shift, height = size.height;
+    final path = Path()
+      ..moveTo(left ? 0 : size.width, 0)
+      ..lineTo(x, 0)
+      ..cubicTo(x + _bend, height * .25, x + _bend, height * .75, x, height)
+      ..lineTo(left ? 0 : size.width, height)
+      ..close();
+    return path;
+  }
+
+  Path get visiblePath => config.effect == ReaderPageEffect.fade
+      ? (Path()..addRect(Offset.zero & size))
+      : config.effect == ReaderPageEffect.cover
+      ? (Path()..addRect(
+          (Offset.zero & size)
+              .shift(displacement)
+              .intersect(Offset.zero & size),
+        ))
+      : _side(
+          config.incoming ? _sign < 0 : _sign > 0,
+          config.incoming ? _fold : 0,
+        );
+  void _tick() {
+    markNeedsPaint();
+    if (config.effect == ReaderPageEffect.cover ||
+        config.effect == ReaderPageEffect.fade) {
+      markNeedsSemanticsUpdate();
+    }
+  }
+
+  void update(ReaderSheetMotion next) {
+    if (attached && next.animation != config.animation) {
+      config.animation.removeListener(_tick);
+      next.animation.addListener(_tick);
+    }
+    config = next;
+    _tick();
+  }
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    config.animation.addListener(_tick);
+  }
+
+  @override
+  void detach() {
+    config.animation.removeListener(_tick);
+    super.detach();
+  }
+
+  @override
+  bool get alwaysNeedsCompositing => child != null;
+  @override
+  void performLayout() {
+    super.performLayout();
+    assert(() {
+      debugLayoutCount++;
+      return true;
+    }());
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (child == null) return;
+    if (!config.active) {
+      super.paint(context, offset);
+      return;
+    }
+    if (config.effect == ReaderPageEffect.cover) {
+      _paintCover(context, offset);
+      return;
+    }
+    if (config.effect == ReaderPageEffect.fade) {
+      final alpha = (opacity * 255).round();
+      if (alpha == 0) return;
+      void paintLeaf(PaintingContext context, Offset offset) {
+        context.canvas.drawRect(offset & size, Paint()..color = config.paper);
+        super.paint(context, offset);
+      }
+
+      if (alpha == 255) {
+        paintLeaf(context, offset);
+      } else {
+        _opacity.layer = context.pushOpacity(
+          offset,
+          alpha,
+          paintLeaf,
+          oldLayer: _opacity.layer,
+        );
+      }
+      return;
+    }
+    final t = progress;
+    if (t <= 0 && config.incoming || t >= 1 && !config.incoming) return;
+    if (t <= 0 || t >= 1) {
+      super.paint(context, offset);
+      return;
+    }
+    _clip.layer = context.pushClipPath(
+      needsCompositing,
+      offset,
+      Offset.zero & size,
+      visiblePath,
+      (context, offset) {
+        if (displacement == Offset.zero) {
+          super.paint(context, offset);
+        } else {
+          _move.layer = context.pushTransform(
+            needsCompositing,
+            offset,
+            _transform,
+            super.paint,
+            oldLayer: _move.layer,
+          );
+        }
+      },
+      oldLayer: _clip.layer,
+    );
+    if (!config.front) return;
+    final canvas = context.canvas;
+    canvas.save();
+    canvas.translate(offset.dx, offset.dy);
+    canvas.clipRect(Offset.zero & size);
+    final spread = math.min(26.0, size.width * .07) * _envelope;
+    final shadow = Rect.fromLTWH(
+      _edge + math.min(0, _fold) - spread,
+      0,
+      _fold.abs() + spread * 2,
+      size.height,
+    );
+    final dark = config.paper.computeLuminance() < .15;
+    canvas.drawRect(
+      shadow,
+      Paint()
+        ..shader = LinearGradient(
+          colors: [
+            Colors.transparent,
+            Colors.black.withValues(alpha: (dark ? .3 : .2) * _envelope),
+            Colors.transparent,
+          ],
+          stops: const [0, .5, 1],
+        ).createShader(shadow),
+    );
+    if (_fold.abs() > .01) {
+      final x = _edge, end = _edge + _fold, h = size.height;
+      final fold = Path()
+        ..moveTo(x, 0)
+        ..cubicTo(x + _bend, h * .25, x + _bend, h * .75, x, h)
+        ..lineTo(end, h)
+        ..cubicTo(end + _bend, h * .75, end + _bend, h * .25, end, 0)
+        ..close();
+      final rect = fold.getBounds();
+      final colors = [
+        Color.lerp(config.paper, Colors.black, dark ? .08 : .15)!,
+        Color.lerp(config.paper, Colors.white, dark ? .14 : .3)!,
+        config.paper,
+      ];
+      canvas.drawPath(
+        fold,
+        Paint()
+          ..shader = LinearGradient(
+            colors: _sign > 0 ? colors : colors.reversed.toList(),
+            stops: const [0, .48, 1],
+          ).createShader(rect),
+      );
+    }
+    canvas.restore();
+  }
+
+  // Cover is one solid sheet sliding over a stationary leaf, not a paper
+  // crease. Cast a shadow only onto the exposed lower leaf, never over ink on
+  // both sides of a synthetic centre seam.
+  void _paintCover(PaintingContext context, Offset offset) {
+    if (config.front && _envelope > .001) {
+      final movesFromRight = config.incoming ? _sign > 0 : _sign < 0;
+      final edge = displacement.dx + (movesFromRight ? 0 : size.width);
+      final width = math.min(22.0, size.width * .055) * _envelope;
+      final rect = Rect.fromLTWH(
+        movesFromRight ? edge - width : edge,
+        0,
+        width,
+        size.height,
+      );
+      final canvas = context.canvas;
+      canvas.save();
+      canvas.translate(offset.dx, offset.dy);
+      canvas.clipRect(Offset.zero & size);
+      final ink = Colors.black.withValues(alpha: .16 * _envelope);
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..shader = LinearGradient(
+            colors: movesFromRight
+                ? [Colors.transparent, ink]
+                : [ink, Colors.transparent],
+          ).createShader(rect),
+      );
+      canvas.restore();
+    }
+    _move.layer = context.pushTransform(needsCompositing, offset, _transform, (
+      context,
+      offset,
+    ) {
+      context.canvas.drawRect(offset & size, Paint()..color = config.paper);
+      super.paint(context, offset);
+    }, oldLayer: _move.layer);
+  }
+
+  @override
+  void applyPaintTransform(RenderBox child, Matrix4 transform) =>
+      transform.multiply(_transform);
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
+      opacity > 0 &&
+      (!config.active || visiblePath.contains(position)) &&
+      result.addWithPaintTransform(
+        transform: _transform,
+        position: position,
+        hitTest: (result, position) =>
+            super.hitTestChildren(result, position: position),
+      );
+  @override
+  void dispose() {
+    _clip.layer = null;
+    _move.layer = null;
+    _opacity.layer = null;
+    super.dispose();
+  }
 }

@@ -365,8 +365,6 @@ class ReaderPurificationStore extends ChangeNotifier {
   bool get hasEnabledRules =>
       _rules.any((rule) => rule.enabled) || _paragraphEdits.isNotEmpty;
 
-  int get enabledCount => _rules.where((rule) => rule.enabled).length;
-
   @visibleForTesting
   void resetForTesting() {
     _rules = [...builtInPresets];
@@ -436,11 +434,6 @@ class ReaderPurificationStore extends ChangeNotifier {
   String? paragraphEditFor(int bookId, int chapterIndex, int paragraphIndex) =>
       _paragraphEdits[_editKey(bookId, chapterIndex, paragraphIndex)];
 
-  bool hasEditsForChapter(int bookId, int chapterIndex) {
-    final prefix = '$bookId:$chapterIndex:';
-    return _paragraphEdits.keys.any((k) => k.startsWith(prefix));
-  }
-
   Future<void> setParagraphEdit({
     required int bookId,
     required int chapterIndex,
@@ -463,17 +456,6 @@ class ReaderPurificationStore extends ChangeNotifier {
     final key = _editKey(bookId, chapterIndex, paragraphIndex);
     if (!_paragraphEdits.containsKey(key)) return;
     final next = Map<String, String>.of(_paragraphEdits)..remove(key);
-    _paragraphEdits = next;
-    notifyListeners();
-    await _persistEdits();
-  }
-
-  Future<void> clearChapterEdits(int bookId, int chapterIndex) async {
-    await ensureLoaded();
-    final prefix = '$bookId:$chapterIndex:';
-    final next = Map<String, String>.of(_paragraphEdits)
-      ..removeWhere((key, _) => key.startsWith(prefix));
-    if (next.length == _paragraphEdits.length) return;
     _paragraphEdits = next;
     notifyListeners();
     await _persistEdits();
@@ -636,17 +618,6 @@ class ReaderPurificationStore extends ChangeNotifier {
       }
     }
     return active;
-  }
-
-  String purifyTitle(String title, {int? bookId}) {
-    if (!hasEnabledRules || title.isEmpty) return title;
-    var current = title;
-    for (final rule in _rules) {
-      if (rule.enabled && rule.applyToTitle && rule.appliesToBook(bookId)) {
-        current = rule.apply(current);
-      }
-    }
-    return current;
   }
 
   String purifyParagraph(

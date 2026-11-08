@@ -112,23 +112,6 @@ class ReaderAnnotationData {
   int get hashCode => Object.hash(style, color, note, updatedAt);
 }
 
-/// One indexed source range with its appearance, without font/layout state.
-class ReaderAnnotationRange {
-  const ReaderAnnotationRange(this.range, this.style, this.color);
-  final ReaderUnderlineRange range;
-  final ReaderMarkStyle style;
-  final ReaderMarkColor color;
-
-  @override
-  bool operator ==(Object other) =>
-      other is ReaderAnnotationRange &&
-      range == other.range &&
-      style == other.style &&
-      color == other.color;
-  @override
-  int get hashCode => Object.hash(range, style, color);
-}
-
 /// An underline in original paragraph coordinates, independent of pagination.
 ///
 /// UTF-16 offsets are end-exclusive. Several ranges may share a chapter so a
@@ -163,16 +146,6 @@ class ReaderUnderlineRange {
       endOffset <= 100000000 &&
       (startParagraph < endParagraph ||
           startParagraph == endParagraph && startOffset < endOffset);
-
-  /// Maps only chapter identity when combining volumes; text is not rewritten.
-  ReaderUnderlineRange inChapter(int id) => ReaderUnderlineRange(
-    chapterId: id,
-    startParagraph: startParagraph,
-    startOffset: startOffset,
-    endParagraph: endParagraph,
-    endOffset: endOffset,
-    contentRevision: contentRevision,
-  );
 
   /// Retains the source range while a coordinate migration updates its format.
   ReaderUnderlineRange withRevision(String revision) => ReaderUnderlineRange(

@@ -9,13 +9,10 @@ abstract final class DockLayout {
   static const horizontalInset = 6.0;
   static const iconSize = 20.0;
   static const labelFontSize = 11.0;
-  static const labelGap = 3.0;
   static const actionMaxWidth = 620.0;
   static const actionGap = 10.0;
   static const actionSideInset = 24.0;
   static const edgeShadeOpacity = 0.0;
-  static const topEdgeShadeOpacity = 0.0;
-  static double widthFor(int items) => itemWidth * items + horizontalInset * 2;
   static bool get _ios =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
 

@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shuyu/app_ui.dart';
-import 'package:shuyu/archive_shelf.dart';
+import 'package:shuyu/archive_wave.dart';
 import 'package:shuyu/catalog.dart';
 import 'package:shuyu/legacy_cover.dart';
 import 'package:shuyu/library_state.dart';

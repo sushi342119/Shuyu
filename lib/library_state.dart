@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'text_anchor.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -19,7 +20,6 @@ import 'performance_preferences.dart';
 import 'app_typography.dart';
 import 'local_platform.dart';
 import 'local_library.dart';
-import 'file_text_anchor.dart';
 import 'recovery_archive.dart';
 import 'reader_underline.dart';
 import 'reader_annotation_range.dart';
@@ -277,20 +277,6 @@ class ReaderBookmark {
     createdOffsetMinutes: createdOffsetMinutes,
   );
 
-  ReaderBookmark withCreation(DateTime at, int? offsetMinutes) =>
-      ReaderBookmark(
-        id: id,
-        chapterTitle: chapterTitle,
-        position: position,
-        quote: quote,
-        category: category,
-        categoryAt: categoryAt,
-        underlineRanges: underlineRanges,
-        annotation: annotation,
-        rangeUpdatedAt: rangeUpdatedAt,
-        createdAt: at.toUtc(),
-        createdOffsetMinutes: offsetMinutes,
-      );
 
   Map<String, Object> toJson() => {
     'id': id,
@@ -472,7 +458,6 @@ class LibraryState extends ChangeNotifier {
             (a, b) => b.position.updatedAt.compareTo(a.position.updatedAt),
           );
           _bookmarks[id] = bookmarks;
-          _updateUnderlineIndex(id, notify: false);
         } catch (_) {
           // Resume records are independent of the bookmark list.
         }
@@ -715,7 +700,6 @@ class LibraryState extends ChangeNotifier {
   final _settings = _StateNotifier();
   final _history = _StateNotifier();
   final _bookmarkChanges = _StateNotifier();
-  final _underlineChanges = _StateNotifier();
   final _searchChanges = _StateNotifier();
   final _shelfViewChanges = _StateNotifier();
   final _readerBehaviorChanges = _StateNotifier();
@@ -728,12 +712,6 @@ class LibraryState extends ChangeNotifier {
   final Map<int, ReadingPosition> _positions = {};
   final Map<int, int> _added = {};
   final Map<int, List<ReaderBookmark>> _bookmarks = {};
-  final Map<int, List<ReaderUnderlineRange>> _underlineRanges = {};
-  final Map<int, Map<int, List<ReaderUnderlineRange>>> _underlinesByChapter =
-      {};
-  final Map<int, List<ReaderAnnotationRange>> _annotationRanges = {};
-  final Map<int, Map<int, List<ReaderAnnotationRange>>> _annotationsByChapter =
-      {};
   final Map<int, int> _shelfRevisions = {};
   List<String> _recentSearches = const [];
   String _shelfSort = 'recentRead';
@@ -861,7 +839,6 @@ class LibraryState extends ChangeNotifier {
   Listenable get settingsChanges => _settings;
   Listenable get historyChanges => _history;
   Listenable get bookmarkChanges => _bookmarkChanges;
-  Listenable get underlineChanges => _underlineChanges;
   Listenable get searchChanges => _searchChanges;
   Listenable get shelfViewChanges => _shelfViewChanges;
   Listenable get readerBehaviorChanges => _readerBehaviorChanges;
@@ -995,82 +972,6 @@ class LibraryState extends ChangeNotifier {
   List<ReaderBookmark> bookmarksFor(int id) =>
       List.unmodifiable(_bookmarks[id] ?? const <ReaderBookmark>[]);
 
-  List<ReaderUnderlineRange> underlinesFor(int id, {int? chapterId}) =>
-      chapterId == null
-      ? _underlineRanges[id] ?? const []
-      : _underlinesByChapter[id]?[chapterId] ?? const [];
-
-  List<ReaderAnnotationRange> annotationsFor(int id, {int? chapterId}) =>
-      chapterId == null
-      ? _annotationRanges[id] ?? const []
-      : _annotationsByChapter[id]?[chapterId] ?? const [];
-
-  bool _updateUnderlineIndex(int id, {bool notify = true}) {
-    final styledMarks =
-        List<ReaderBookmark>.of(_bookmarks[id] ?? const <ReaderBookmark>[])
-          ..sort((a, b) {
-            final edited = b.annotation.updatedAt.compareTo(
-              a.annotation.updatedAt,
-            );
-            return edited != 0 ? edited : b.id.compareTo(a.id);
-          });
-    final annotations = <ReaderAnnotationRange>[
-      for (final mark in styledMarks)
-        for (final range in mark.underlineRanges)
-          ReaderAnnotationRange(
-            range,
-            mark.annotation.style,
-            mark.annotation.color,
-          ),
-    ];
-    final ranges =
-        <ReaderUnderlineRange>[
-          for (final mark in _bookmarks[id] ?? const <ReaderBookmark>[])
-            ...mark.underlineRanges,
-        ]..sort((a, b) {
-          for (final pair in [
-            (a.chapterId, b.chapterId),
-            (a.startParagraph, b.startParagraph),
-            (a.startOffset, b.startOffset),
-            (a.endParagraph, b.endParagraph),
-            (a.endOffset, b.endOffset),
-          ]) {
-            final order = pair.$1.compareTo(pair.$2);
-            if (order != 0) return order;
-          }
-          return a.contentRevision.compareTo(b.contentRevision);
-        });
-    if (listEquals(_underlineRanges[id] ?? const [], ranges) &&
-        listEquals(_annotationRanges[id] ?? const [], annotations)) {
-      return false;
-    }
-    final previous = _underlinesByChapter[id];
-    final chapters = <int, List<ReaderUnderlineRange>>{};
-    for (final range in ranges) {
-      (chapters[range.chapterId] ??= []).add(range);
-    }
-    _underlineRanges[id] = List.unmodifiable(ranges);
-    _underlinesByChapter[id] = {
-      for (final entry in chapters.entries)
-        entry.key: listEquals(previous?[entry.key], entry.value)
-            ? previous![entry.key]!
-            : List.unmodifiable(entry.value),
-    };
-    _annotationRanges[id] = List.unmodifiable(annotations);
-    final styledChapters = <int, List<ReaderAnnotationRange>>{};
-    for (final item in annotations) {
-      (styledChapters[item.range.chapterId] ??= []).add(item);
-    }
-    final oldStyled = _annotationsByChapter[id];
-    _annotationsByChapter[id] = {
-      for (final entry in styledChapters.entries)
-        entry.key: listEquals(oldStyled?[entry.key], entry.value)
-            ? oldStyled![entry.key]!
-            : List.unmodifiable(entry.value),
-    };
-    if (notify && !_disposed) _underlineChanges.notifyListeners();
-    return true;
-  }
 
   List<({int novelId, ReaderBookmark bookmark})> get bookmarkEntries {
     final entries =
@@ -2064,34 +1965,6 @@ class LibraryState extends ChangeNotifier {
     );
   }
 
-  Future<ReaderBookmark> addUnderline({
-    required Novel novel,
-    required ReadingPosition position,
-    required List<ReaderUnderlineRange> ranges,
-    String quote = '',
-  }) async => (await _changeUnderline(
-    novel: novel,
-    position: position,
-    ranges: ranges,
-    quote: quote,
-    toggle: false,
-  ))!;
-
-  Future<bool> toggleUnderline({
-    required Novel novel,
-    required ReadingPosition position,
-    required List<ReaderUnderlineRange> ranges,
-    String quote = '',
-  }) async =>
-      await _changeUnderline(
-        novel: novel,
-        position: position,
-        ranges: ranges,
-        quote: quote,
-        toggle: true,
-      ) !=
-      null;
-
   Future<ReaderBookmark> saveAnnotation({
     required Novel novel,
     required ReadingPosition position,
@@ -2147,7 +2020,6 @@ class LibraryState extends ChangeNotifier {
       final next = [for (final mark in marks) mark.id == id ? result : mark];
       await _writeBookmarks(novelId, next);
       _bookmarks[novelId] = next;
-      _updateUnderlineIndex(novelId);
       if (!_disposed) _bookmarkChanges.notifyListeners();
     });
     return result;
@@ -2233,7 +2105,6 @@ class LibraryState extends ChangeNotifier {
       final next = [for (final mark in marks) mark.id == id ? result : mark];
       await _writeBookmarks(novelId, next);
       _bookmarks[novelId] = next;
-      _updateUnderlineIndex(novelId);
       if (!_disposed) _bookmarkChanges.notifyListeners();
     });
     return result;
@@ -2321,7 +2192,6 @@ class LibraryState extends ChangeNotifier {
           ];
           await _writeBookmarks(novel.id, next);
           _bookmarks[novel.id] = next;
-          _updateUnderlineIndex(novel.id);
           if (!_disposed) _bookmarkChanges.notifyListeners();
           return;
         }
@@ -2329,7 +2199,6 @@ class LibraryState extends ChangeNotifier {
         final next = marks.where((mark) => !ids.contains(mark.id)).toList();
         await _writeBookmarks(novel.id, next);
         _bookmarks[novel.id] = next;
-        _updateUnderlineIndex(novel.id);
         if (!_disposed) _bookmarkChanges.notifyListeners();
         return;
       }
@@ -2368,7 +2237,6 @@ class LibraryState extends ChangeNotifier {
       final next = [mark, ...marks];
       await _writeBookmarks(novel.id, next);
       _bookmarks[novel.id] = next;
-      _updateUnderlineIndex(novel.id);
       if (!_disposed) _bookmarkChanges.notifyListeners();
       result = mark;
     });
@@ -2437,7 +2305,6 @@ class LibraryState extends ChangeNotifier {
       final next = [mark, ...marks];
       await _writeBookmarks(novel.id, next);
       _bookmarks[novel.id] = next;
-      _updateUnderlineIndex(novel.id);
       if (!_disposed) _bookmarkChanges.notifyListeners();
       result = mark;
     });
@@ -2495,7 +2362,6 @@ class LibraryState extends ChangeNotifier {
       final next = [mark, ...marks];
       await _writeBookmarks(novel.id, next);
       _bookmarks[novel.id] = next;
-      _updateUnderlineIndex(novel.id);
       if (!_disposed) _bookmarkChanges.notifyListeners();
       result = mark;
     });
@@ -2512,7 +2378,6 @@ class LibraryState extends ChangeNotifier {
       final next = marks.where((mark) => mark.id != id).toList();
       await _writeBookmarks(novelId, next);
       _bookmarks[novelId] = next;
-      _updateUnderlineIndex(novelId);
       if (!_disposed) _bookmarkChanges.notifyListeners();
     });
   }
@@ -2541,7 +2406,6 @@ class LibraryState extends ChangeNotifier {
       ];
       await _writeBookmarks(novelId, next);
       _bookmarks[novelId] = next;
-      _updateUnderlineIndex(novelId);
       if (!_disposed) _bookmarkChanges.notifyListeners();
     });
   }
@@ -3369,15 +3233,6 @@ class LibraryState extends ChangeNotifier {
     application: true,
   );
 
-  /// Turning advanced off returns blur/opacity to the tier; slider values
-  /// stay stored and come back when advanced is enabled again.
-  Future<void> setGlassAdvanced(bool value) => _writeUiPreference(
-    UiPreferenceKeys.glassAdvanced,
-    value,
-    () => _glassAdvanced = value,
-    glass: true,
-  );
-
   Future<void> setMotionLevel(MotionLevel value) => _writeUiPreference(
     UiPreferenceKeys.motionLevel,
     value.name,
@@ -3825,10 +3680,222 @@ class LibraryState extends ChangeNotifier {
     _settings.dispose();
     _history.dispose();
     _bookmarkChanges.dispose();
-    _underlineChanges.dispose();
     _searchChanges.dispose();
     _shelfViewChanges.dispose();
     _readerBehaviorChanges.dispose();
     super.dispose();
+  }
+}
+
+class FileTextAnchor {
+  FileTextAnchor._(this.file, this.length, this._text);
+  final File file;
+  final int length;
+  final String? _text;
+  static const maxSliceLength = 4 * 1024 * 1024;
+
+  static Future<FileTextAnchor> open(String path) async {
+    final file = File(path);
+    if (await file.length() <= 2 * 1024 * 1024) {
+      final text = await file.readAsString();
+      return FileTextAnchor._(file, text.length, text);
+    }
+    var length = 0;
+    await for (final chunk in file.openRead().transform(utf8.decoder)) {
+      length += chunk.length;
+    }
+    return FileTextAnchor._(file, length, null);
+  }
+
+  Future<String> slice(int start, int end) async {
+    if (start < 0 || end < start || end > length) {
+      throw StateError('阅读锚点范围损坏');
+    }
+    if (end - start > maxSliceLength) {
+      throw const FormatException('单章正文过大，请拆分章节后迁移阅读进度');
+    }
+    if (_text case final text?) return text.substring(start, end);
+    var offset = 0;
+    final result = StringBuffer();
+    await for (final chunk in file.openRead().transform(utf8.decoder)) {
+      final next = offset + chunk.length;
+      if (next > start && offset < end) {
+        result.write(
+          chunk.substring(
+            start > offset ? start - offset : 0,
+            end < next ? end - offset : chunk.length,
+          ),
+        );
+      }
+      offset = next;
+      if (offset >= end) break;
+    }
+    if (result.length != end - start) throw StateError('迁移期间正文发生变化');
+    return result.toString();
+  }
+
+  Stream<String> _chunks(int start, int end) async* {
+    if (start < 0 || end < start || end > length) {
+      throw StateError('阅读锚点范围损坏');
+    }
+    var offset = 0;
+    await for (final chunk in file.openRead().transform(utf8.decoder)) {
+      final next = offset + chunk.length;
+      if (next > start && offset < end) {
+        yield chunk.substring((start - offset).clamp(0, chunk.length),
+            (end - offset).clamp(0, chunk.length));
+      }
+      offset = next;
+      if (offset >= end) break;
+    }
+    if (offset < end) throw StateError('迁移期间正文发生变化');
+  }
+
+  Future<({int start, int end})> trimmedRange(int start, int end) async {
+    int? first;
+    var last = start;
+    var offset = start;
+    await for (final chunk in _chunks(start, end)) {
+      final left = chunk.trimLeft();
+      if (first == null && left.isNotEmpty) first = offset + chunk.length - left.length;
+      final right = chunk.trimRight();
+      if (right.isNotEmpty) last = offset + right.length;
+      offset += chunk.length;
+    }
+    return (start: first ?? end, end: first == null ? end : last);
+  }
+
+  Future<({int index, int start})> paragraphAt(int start, int end, {int? stopAt}) async {
+    var paragraph = 0;
+    var paragraphStart = 0;
+    var consumed = 0;
+    var newline = false;
+    if (stopAt == 0) return (index: 0, start: 0);
+    await for (final chunk in _chunks(start, end)) {
+      for (final unit in chunk.codeUnits) {
+        consumed++;
+        if (unit == 10 && newline) {
+          paragraph++;
+          paragraphStart = consumed;
+          newline = false;
+          if (stopAt != null && paragraph >= stopAt) {
+            return (index: paragraph, start: paragraphStart);
+          }
+        } else {
+          newline = unit == 10;
+        }
+      }
+    }
+    return (index: paragraph, start: paragraphStart);
+  }
+
+  Future<int> relocateFrom(FileTextAnchor old, int offset) async {
+    offset = offset.clamp(0, old.length);
+    if (old._text != null && _text != null) {
+      return relocateTextOffset(old._text, _text, offset);
+    }
+    if (old.file.path == file.path) {
+      if (old.length != length) {
+        throw StateError('迁移期间正文发生变化');
+      }
+      return offset;
+    }
+    final windowStart = (offset - 4096).clamp(0, old.length);
+    final windowEnd = (offset + 4160).clamp(0, old.length);
+    final window = await old.slice(windowStart, windowEnd);
+    final candidates = <({String text, int expected, int adjustment})>[];
+    void add(int start, int end, int adjustment) {
+      final text = window.substring(start - windowStart, end - windowStart);
+      if (text.trim().isNotEmpty) {
+        candidates.add((text: text, expected: start, adjustment: adjustment));
+      }
+    }
+
+    final left = (offset - 32).clamp(0, old.length);
+    final right = (offset + 96).clamp(0, old.length);
+    add(left, right, offset - left);
+    add(offset, right, 0);
+    for (var distance = 64; distance <= 4096; distance *= 2) {
+      for (final sign in [1, -1]) {
+        final start = (offset + sign * distance).clamp(0, old.length);
+        final end = (start + 64).clamp(0, old.length);
+        if (end - start >= 16) add(start, end, sign > 0 ? 0 : end - start);
+      }
+    }
+    final matches = List<int?>.filled(candidates.length, null);
+    var consumed = 0;
+    var tail = '';
+    await for (final chunk in file.openRead().transform(utf8.decoder)) {
+      final text = '$tail$chunk';
+      final base = consumed - tail.length;
+      for (var candidate = 0; candidate < candidates.length; candidate++) {
+        final needle = candidates[candidate];
+        var best = matches[candidate];
+        if (best != null &&
+            base - needle.expected >= (best - needle.expected).abs()) {
+          continue;
+        }
+        var found = text.indexOf(needle.text);
+        while (found >= 0) {
+          final position = base + found;
+          if (best == null ||
+              (position - needle.expected).abs() <
+                  (best - needle.expected).abs()) {
+            best = position;
+          }
+          if (position >= needle.expected) break;
+          found = text.indexOf(needle.text, found + 1);
+        }
+        matches[candidate] = best;
+      }
+      consumed += chunk.length;
+      tail = text.substring((text.length - 127).clamp(0, text.length));
+    }
+    for (var candidate = 0; candidate < candidates.length; candidate++) {
+      if (matches[candidate] case final match?) {
+        return match + candidates[candidate].adjustment;
+      }
+    }
+    return offset.clamp(0, length);
+  }
+
+  Future<
+    ({
+      int chapter,
+      int textOffset,
+      int paragraph,
+      int paragraphStart,
+      double fraction,
+    })
+  >
+  locate(List<LocalChapterIndex> chapters, int global) async {
+    if (chapters.isEmpty) {
+      throw StateError('Cannot anchor an empty chapter table');
+    }
+    var index = chapters.indexWhere(
+      (chapter) => global < chapter.offset + chapter.length,
+    );
+    if (index < 0) index = chapters.length - 1;
+    final chapter = chapters[index];
+    if (chapter.length > maxSliceLength) {
+      final range = await trimmedRange(chapter.offset, chapter.offset + chapter.length);
+      final bodyLength = range.end - range.start;
+      final local = (global - range.start).clamp(0, bodyLength);
+      final paragraph = await paragraphAt(range.start, range.start + local);
+      return (chapter: index, textOffset: local,
+        paragraph: paragraph.index, paragraphStart: paragraph.start,
+        fraction: bodyLength == 0 ? 0.0 : local / bodyLength);
+    }
+    final body = await slice(chapter.offset, chapter.offset + chapter.length);
+    final target = locateTextAnchor(body, [
+      LocalChapterIndex(chapter.title, 0, body.length),
+    ], global - chapter.offset);
+    return (
+      chapter: index,
+      textOffset: target.textOffset,
+      paragraph: target.paragraph,
+      paragraphStart: target.paragraphStart,
+      fraction: target.fraction,
+    );
   }
 }

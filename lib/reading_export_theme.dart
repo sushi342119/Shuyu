@@ -52,9 +52,6 @@ class ReadingExportTheme {
   Color get accent => Color(accentValue);
   Color get secondary => Color.lerp(background, accent, .3)!;
   bool get isDark => background.computeLuminance() < .15;
-  bool get hasCharacter =>
-      identity != ReadingVisualTheme.shelf &&
-      identity != ReadingVisualTheme.ink;
 }
 
 ReadingExportTheme readingExportTheme(ReadingVisualTheme theme) =>

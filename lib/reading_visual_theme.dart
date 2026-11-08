@@ -99,7 +99,6 @@ enum ReadingVisualTheme {
   Color get accent => Color(accentValue);
   Color get secondary => Color(secondaryValue);
   bool get isDark => this == constellation;
-  bool get isAcg => index >= constellation.index;
   bool get prefersSerif => this == editorial || this == ink;
 
   static ReadingVisualTheme fromId(String? id) => switch (id) {

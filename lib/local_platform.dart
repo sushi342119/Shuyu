@@ -106,12 +106,9 @@ abstract final class LocalPlatform {
   static bool get ios => !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
   // Flutter-OH adds this enum value; the stable Android/iOS SDK does not.
   static bool get harmony => !kIsWeb && defaultTargetPlatform.name == 'ohos';
-  static bool get website => ios || harmony;
   static bool get readerAppearance => android || ios || harmony;
   static bool get listening => android || ios || harmony;
-  static bool get nearbyReading => android || ios || harmony;
   static bool get fileActions => android || ios || harmony;
-  static bool get storageDiagnostics => android || ios || harmony;
   static bool get volumePaging => android || harmony;
   /// SDK level and total RAM, used once per launch for the glass tier.
   static Future<Map<Object?, Object?>?> deviceProfile() => channel
