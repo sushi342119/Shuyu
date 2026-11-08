@@ -547,7 +547,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     // Zero chapters: truly disabled (onPressed null), as in v1.7.1.
     ReaderAction(
       icon: CupertinoIcons.textformat_size,
-      caption: '排版',
+      caption: '设置',
       label: '阅读设置',
       onPressed: _total == 0 ? null : _settings,
     ),
@@ -621,16 +621,6 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                         icon: CupertinoIcons.bookmark,
                         label: '添加书签',
                         onPressed: _total == 0 ? null : _quickAddBookmark,
-                      ),
-                      const SizedBox(width: 4),
-                      GlassIconButton(
-                        key: const ValueKey('reader-more-entry'),
-                        icon: CupertinoIcons.ellipsis,
-                        label: '更多',
-                        onPressed: () => showNovelFeedback(
-                          context,
-                          'EPUB 暂不支持章内查找；排版与书签见底部“排版”',
-                        ),
                       ),
                     ],
                   ),

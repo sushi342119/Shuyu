@@ -190,7 +190,7 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
     ),
     const ReaderAction(
       icon: CupertinoIcons.textformat_size,
-      caption: '排版',
+      caption: '设置',
       label: '阅读设置',
       unavailable: 'PDF 不支持排版调节：页面按原版式渲染，可双指缩放',
     ),
@@ -376,16 +376,6 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
                             icon: CupertinoIcons.bookmark,
                             label: '添加书签',
                             onPressed: count == 0 ? null : _addBookmark,
-                          ),
-                          const SizedBox(width: 4),
-                          GlassIconButton(
-                            key: const ValueKey('reader-more-entry'),
-                            icon: CupertinoIcons.ellipsis,
-                            label: '更多',
-                            onPressed: () => showNovelFeedback(
-                              context,
-                              'PDF 不支持查找与排版；可双指缩放页面',
-                            ),
                           ),
                         ],
                       ),

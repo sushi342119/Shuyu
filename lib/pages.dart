@@ -6659,13 +6659,6 @@ class _ReaderPageState extends State<ReaderPage>
                         label: '添加书签',
                         onPressed: _quickAddBookmark,
                       ),
-                      const SizedBox(width: 4),
-                      GlassIconButton(
-                        key: const ValueKey('reader-more-entry'),
-                        icon: CupertinoIcons.ellipsis,
-                        label: '更多',
-                        onPressed: _more,
-                      ),
                     ],
                   ),
                 ),
@@ -7268,33 +7261,6 @@ class _ReaderPageState extends State<ReaderPage>
     );
   }
 
-  Future<void> _more() async {
-    final action = await showGlassMenu<String>(
-      context: context,
-      reduceMotion:
-          widget.state.reduceMotion || MediaQuery.disableAnimationsOf(context),
-      builder: (menuContext) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final (order, id, label) in const [
-            (0, 'find', '章内查找'),
-            (1, 'purify', '正文净化与纠错'),
-            (2, 'settings', '全部阅读设置'),
-          ])
-            GlassMenuItem(
-              order: order,
-              onPressed: () => Navigator.of(menuContext).pop(id),
-              label: label,
-            ),
-        ],
-      ),
-    );
-    if (!mounted) return;
-    if (action == 'find') await _findInChapter();
-    if (action == 'purify') await _openPurificationInChapter();
-    if (action == 'settings') await _settings();
-  }
-
   List<ReaderAction> _readerActions() => [
     ReaderAction(
       key: const ValueKey('reader-catalogue-entry'),
@@ -7306,7 +7272,7 @@ class _ReaderPageState extends State<ReaderPage>
     ),
     ReaderAction(
       icon: CupertinoIcons.textformat_size,
-      caption: '排版',
+      caption: '设置',
       label: '阅读设置',
       onPressed: _settings,
     ),

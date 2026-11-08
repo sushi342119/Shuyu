@@ -216,15 +216,23 @@ void main({
       if (capture != null) await capture(tester, boundary, 'reader-focus-dark');
       await tester.tapAt(const Offset(210, 310));
       await tester.pumpAndSettle();
-      // Header: back, bookmarks, more; the bottom panel adds its action bar.
+      // Header: back, bookmarks; the bottom panel adds its action bar.
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('reader-chrome-header')),
           matching: find.byType(GlassIconButton),
         ),
-        findsNWidgets(3),
+        findsNWidgets(2),
       );
+      expect(find.byKey(const ValueKey('reader-more-entry')), findsNothing);
       expect(find.byKey(const ValueKey('reader-action-bar')), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('reader-action-bar')),
+          matching: find.text('设置'),
+        ),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const ValueKey('reader-bookmarks-entry')),
         findsOneWidget,
