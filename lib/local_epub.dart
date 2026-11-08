@@ -1673,8 +1673,6 @@ const _blockTags = {
   'h5',
   'h6',
   'li',
-  'pre',
-  'blockquote',
 };
 const _skipTags = {'head', 'script', 'style'};
 const _xmlEntities = {'amp', 'lt', 'gt', 'quot', 'apos'};

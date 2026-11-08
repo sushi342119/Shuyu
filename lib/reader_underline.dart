@@ -321,12 +321,21 @@ List<ReaderTextMark> clipReaderParagraphMarks(
 /// Splits [text] at mark and search-match boundaries without changing metrics.
 List<InlineSpan> buildReaderMarkedSpans({
   required String text,
-  required Color foreground,
+  Color? foreground,
+  Color? baseTextColor,
   required bool dark,
   List<ReaderTextMark> marks = const [],
   (int start, int end)? matchRange,
   Color? matchBackgroundColor,
+  int? findStart,
+  int? findEnd,
+  Color? findBackground,
 }) {
+  final effectiveForeground = foreground ?? baseTextColor ?? Colors.black;
+  final effectiveMatchRange =
+      matchRange ??
+      (findStart != null && findEnd != null ? (findStart, findEnd) : null);
+  final effectiveMatchBg = matchBackgroundColor ?? findBackground;
   if (text.isEmpty) return const [TextSpan(text: '')];
   final points = <int>{0, text.length};
   for (final mark in marks) {
@@ -334,7 +343,7 @@ List<InlineSpan> buildReaderMarkedSpans({
     points.add(mark.start.clamp(0, text.length));
     points.add(mark.end.clamp(0, text.length));
   }
-  if (matchRange case (final mStart, final mEnd)
+  if (effectiveMatchRange case (final mStart, final mEnd)
       when mStart >= 0 && mStart < mEnd && mEnd <= text.length) {
     points.add(mStart);
     points.add(mEnd);
@@ -349,9 +358,9 @@ List<InlineSpan> buildReaderMarkedSpans({
     final segEnd = sorted[i + 1];
     if (segStart >= segEnd) continue;
     final inMatch =
-        matchRange != null &&
-        segStart >= matchRange.$1 &&
-        segEnd <= matchRange.$2;
+        effectiveMatchRange != null &&
+        segStart >= effectiveMatchRange.$1 &&
+        segEnd <= effectiveMatchRange.$2;
     ReaderTextMark? underlineMark;
     ReaderTextMark? highlightMark;
     for (final mark in marks) {
@@ -367,10 +376,18 @@ List<InlineSpan> buildReaderMarkedSpans({
     TextStyle? segStyle;
     if (underlineMark != null || highlightMark != null || inMatch) {
       final bg = highlightMark != null
-          ? readerMarkTint(highlightMark.color, foreground, dark: dark)
-          : (inMatch ? matchBackgroundColor : null);
+          ? readerMarkTint(
+              highlightMark.color,
+              effectiveForeground,
+              dark: dark,
+            )
+          : (inMatch ? effectiveMatchBg : null);
       final ulInk = underlineMark != null
-          ? readerMarkInk(underlineMark.color, foreground, dark: dark)
+          ? readerMarkInk(
+              underlineMark.color,
+              effectiveForeground,
+              dark: dark,
+            )
           : null;
       segStyle = TextStyle(
         backgroundColor: bg,
@@ -430,11 +447,12 @@ class ReaderAnnotationOutlines extends SingleChildRenderObjectWidget {
   const ReaderAnnotationOutlines({
     super.key,
     required this.marks,
-    required this.foreground,
+    Color? foreground,
+    Color? baseTextColor,
     required this.dark,
     this.leadingPlaceholders = 0,
     required super.child,
-  });
+  }) : foreground = foreground ?? baseTextColor ?? Colors.black;
 
   final List<ReaderTextMark> marks;
   final Color foreground;

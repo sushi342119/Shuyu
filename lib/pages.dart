@@ -43,6 +43,7 @@ import 'reader_selection.dart';
 import 'reader_text_picker.dart';
 import 'reader_tools.dart';
 import 'reader_underline.dart';
+import 'reading_statistics_data.dart';
 import 'reading_activity.dart';
 import 'reading_history.dart';
 import 'reading_statistics_page.dart';
@@ -6133,7 +6134,7 @@ class _ReaderPageState extends State<ReaderPage>
       final picked = await showJellySheet<Object>(
         context: context,
         reduceMotion: widget.state.reduceMotion,
-        builder: (context) => ReaderMarksSheet(
+        builder: (sheetContext) => ReaderMarksSheet(
           state: widget.state,
           novel: _novel,
           currentChapter: _chapter,
@@ -6141,9 +6142,10 @@ class _ReaderPageState extends State<ReaderPage>
               ? (widget.repository as OfflineNovelRepository).cache
               : null,
           onPickUnderline: _ready && _currentContent != null
-              ? _pickChapterTextInMarksSheet
+              ? () => _pickChapterTextInMarksSheet(sheetContext: sheetContext)
               : null,
-          onEditMark: _editBookmarkAnnotation,
+          onEditMark: (mark) =>
+              _editBookmarkAnnotation(mark, sheetContext: sheetContext),
           onConfigureTocRule: canResplitTxt
               ? (customPattern, maxChapterChars) async {
                   final updated = await _local!.resplitTxtChapters(
@@ -6445,9 +6447,14 @@ class _ReaderPageState extends State<ReaderPage>
     );
   }
 
-  Future<void> _editBookmarkAnnotation(ReaderBookmark mark) async {
+  Future<void> _editBookmarkAnnotation(
+    ReaderBookmark mark, {
+    BuildContext? sheetContext,
+  }) async {
+    final hostContext =
+        sheetContext != null && sheetContext.mounted ? sheetContext : context;
     final updated = await showReaderAnnotationEditor(
-      context,
+      hostContext,
       state: widget.state,
       novelId: _novel.id,
       novel: _novel,
@@ -6459,7 +6466,9 @@ class _ReaderPageState extends State<ReaderPage>
     }
   }
 
-  Future<void> _pickChapterTextInMarksSheet() async {
+  Future<void> _pickChapterTextInMarksSheet({
+    BuildContext? sheetContext,
+  }) async {
     final content = _currentContent;
     if (content == null ||
         content.paragraphs.isEmpty ||
@@ -6489,8 +6498,9 @@ class _ReaderPageState extends State<ReaderPage>
         ranges: seedChange.ranges,
         anchor: anchor,
       );
+      if (sheetContext != null && !sheetContext.mounted) return;
       final picked = await showReaderTextRangePicker(
-        context: context,
+        context: sheetContext ?? context,
         text: projection.text,
         initialRange: projection.initialRange,
         title: '选字划线 / 复制片段',
@@ -8680,7 +8690,7 @@ class _AppearancePerformancePanelState
                 final next = state.haptics.withLevel(level);
                 _save(() async {
                   await state.setHaptics(next);
-                  if (mounted && level != HapticLevel.off) {
+                  if (context.mounted && level != HapticLevel.off) {
                     AppHaptics.preview(
                       context,
                       HapticCue.selection,

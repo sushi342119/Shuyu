@@ -278,9 +278,8 @@ void main({Capture? capture}) {
       );
       await load;
       await tester.pumpAndSettle();
-      await pumpStorage(tester, () => state.setChapter(971000, 0));
-      await pumpStorage(
-        tester,
+      await tester.runAsync(() => state.setChapter(971000, 0));
+      await tester.runAsync(
         () => state.readingActivity.recordInterval(
           bookId: 971000,
           startedAt: DateTime(2026, 11, 8, 9),

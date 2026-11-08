@@ -1027,7 +1027,7 @@ class GlassIconButton extends StatelessWidget {
               ? LiquidGlass(
                   radius: 24,
                   elevated: false,
-                  semanticLabel: semanticLabel,
+                  semanticLabel: label,
                   onTap: onPressed,
                   haptic: haptic,
                   child: content,
@@ -1035,7 +1035,7 @@ class GlassIconButton extends StatelessWidget {
               : _PaintedIconAction(
                   size: size,
                   transparent: transparent,
-                  label: semanticLabel,
+                  label: label,
                   onPressed: onPressed,
                   haptic: haptic,
                   child: content,

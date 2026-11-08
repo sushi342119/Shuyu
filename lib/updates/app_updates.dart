@@ -14,14 +14,14 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.9.1',
+  defaultValue: '1.9.2',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 75);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 76);
 const currentReleaseNotes = '''
-1. 修复超大型多卷合集与高清插画版 EPUB（超过 256 MiB）在 Android 本地扫描复制缓存阶段触发 `MAX_TEXT_BYTES` 限制而扫描失败的问题，统一对齐 1 GiB 上限并优先走 `file://` 直读流。
-2. 修复多看阅读版（Duokan）去壳/精简 EPUB 因残留 `META-INF/encryption.xml`（引用已解密明文章节、已剔除的专属字体/脚本或局部加密封面页）被误判为整本 DRM 加密而扫描失败的问题。
-3. 增强自制网文 EPUB 扫描容错：修复 ZIP 中央目录子流（`subset`）在标记 UTF-8 位但实为 GBK 文件名时抛 `FormatException` 的问题，支持解析 Info-ZIP `0x7075` Unicode 路径扩展字段、越根相对路径（`../`）钳制与同名文件兜底、ZIP Header `uncompressedSize` 不准时的解压自动扩容，以及无 OPF 直接打包 HTML/TXT 或内嵌 `.epub` 的套壳归档。
-4. 细化本地扫描失败诊断文案：支持明确提示「不支持加密的 EPUB」「不支持 RAR/7z 压缩包（请先解压）」「无效的 EPUB：没有可读章节」等安全分类原因，同时自动兼容改了 `.epub` 后缀名的 PDF 与无 BOM UTF-16 文本文件。
+1. 阅读器交互与批注增强：支持正文长按选词、划线、复制、批注、书签与净化快捷操作及行内标记高亮渲染；支持从阅读页顶栏与工具栏再次点击直接取消当前位置书签。
+2. 本地章节切分与升级：支持识别行内紧跟句末标点的章节标题、带书名/前缀的章节标题及单 XHTML 合并多章的 EPUB 目录，并在启动时自动升级已有多章本地书籍目录。
+3. 书架、详情与发现页优化：书架标签筛选新增「未写标签」筛选项；本地书籍详情页支持直接点击书名或作者名内联修改，升级标签编辑器；「发现」页底部替换为书库与阅读概览卡片；修复阅读统计中本地书架书籍重复计入藏书总数的问题。
+4. 设置项整合与精简：将应用字体与阅读器字体统一收归「字体管理」页面，将触感反馈设置合并入「外观与性能」面板，并移除语言选择与 OpenCC 繁简转换相关冗余配置。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

@@ -12,6 +12,7 @@ import 'dock_layout.dart';
 import 'feature_pages.dart';
 import 'glass_dock.dart';
 import 'library_state.dart';
+import 'local_library.dart';
 import 'offline_repository.dart';
 import 'performance_preferences.dart';
 import 'reading_statistics_charts.dart';

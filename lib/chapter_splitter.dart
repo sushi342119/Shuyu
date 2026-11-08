@@ -347,7 +347,7 @@ class ChapterTextIndex {
         return null;
       }
     }
-    final rawSuffix = tail.substring(match.start(1));
+    final rawSuffix = tail.substring(match.end - match.group(1)!.length);
     final start = lineEnd - rawSuffix.length;
     if (start <= _lineStart + _indent) return null;
     final startBytes = lineEndBytes - utf8.encode(rawSuffix).length;

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'bookmark_library_page.dart';
 import 'catalog.dart';
 import 'library_state.dart';
+import 'local_library.dart';
 import 'offline_repository.dart';
 import 'reading_activity.dart';
 import 'reading_statistics_analysis.dart';

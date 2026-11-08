@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'app_ui.dart';
-import 'app_interactions.dart';
 
 /// The whole settings row is tappable; its actual glass selector is the menu's
 /// source. Labels and controls share the same responsive layout in the reader.

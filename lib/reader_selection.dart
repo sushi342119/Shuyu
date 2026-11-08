@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -31,6 +30,7 @@ class ReaderQuoteSelection {
     this.ranges = const [],
   });
   final String text;
+  String get quote => text;
   final int paragraph;
   final int start;
   final int end;
@@ -46,9 +46,11 @@ class ReaderSelectionController extends ValueNotifier<bool> {
 
   ReaderQuoteSelection? get selectedQuote => _selected();
 
-  /// Returns the paragraph index and UTF-16 character offset if [globalPosition]
-  /// lands directly on a laid-out character glyph box.
-  ({int paragraph, int offset})? hitOffsetAt(Offset globalPosition) {
+  /// Returns the paragraph index, UTF-16 character offset, and optional chapter
+  /// if [globalPosition] lands directly on a laid-out character glyph box.
+  ({int paragraph, int offset, int? chapter})? hitOffsetAt(
+    Offset globalPosition,
+  ) {
     for (final fragment in _fragments) {
       final hit = fragment._hitOffsetAt(globalPosition);
       if (hit != null) return hit;
@@ -59,8 +61,7 @@ class ReaderSelectionController extends ValueNotifier<bool> {
   ReaderQuoteSelection? _selected() {
     final ranges =
         [
-          for (final fragment in _fragments)
-            if (fragment._selectedRange() case final selected?) selected,
+          for (final fragment in _fragments) ?fragment._selectedRange(),
         ]..sort((a, b) {
           final chapter = (a.$1.chapter ?? -1).compareTo(b.$1.chapter ?? -1);
           if (chapter != 0) return chapter;
@@ -239,7 +240,9 @@ class _ReaderSelectionState extends State<ReaderSelection> {
                       },
                 onCopy: () {
                   final selected = _controller._selected() ?? quote;
-                  unawaited(Clipboard.setData(ClipboardData(text: selected.text)));
+                  unawaited(
+                    Clipboard.setData(ClipboardData(text: selected.text)),
+                  );
                   _clear();
                   if (widget.onCopy != null) {
                     widget.onCopy!(selected);
@@ -307,13 +310,13 @@ class _ReaderSelectionBar extends StatelessWidget {
     ];
     return Material(
       type: MaterialType.transparency,
-      child: GlassPane(
+      child: LiquidGlass(
         key: const ValueKey('reader-selection-toolbar'),
-        borderRadius: BorderRadius.circular(18),
+        radius: 18,
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
         blur: 16,
-        opacity: .88,
-        lift: 10,
+        tintOpacity: .88,
+        elevated: true,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -344,8 +347,7 @@ class _ReaderSelectionBar extends StatelessWidget {
     required String label,
     required VoidCallback onTap,
   }) => JellyTapSurface(
-    key: key,
-    borderRadius: BorderRadius.circular(12),
+    tapKey: key,
     onTap: onTap,
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -372,17 +374,17 @@ class _ToolbarPosition extends SingleChildLayoutDelegate {
       14.0 + padding.left,
       math.max(14.0 + padding.left, size.width - childSize.width - 14.0),
     );
-    final above = anchor.dy - childSize.height - 16;
-    final top = above >= padding.top + 64
+    final above = anchor.dy - childSize.height - 16.0;
+    final top = above >= padding.top + 64.0
         ? above
-        : (anchor.dy + 22).clamp(
-            padding.top + 12,
+        : (anchor.dy + 22.0).clamp(
+            padding.top + 12.0,
             math.max(
-              padding.top + 12,
-              size.height - childSize.height - padding.bottom - 16,
+              padding.top + 12.0,
+              size.height - childSize.height - padding.bottom - 16.0,
             ),
           );
-    return Offset(left, top);
+    return Offset(left.toDouble(), top.toDouble());
   }
 
   @override
@@ -390,7 +392,8 @@ class _ToolbarPosition extends SingleChildLayoutDelegate {
       anchor != oldDelegate.anchor || padding != oldDelegate.padding;
 }
 
-class _ReaderHandleControls extends TextSelectionControls {
+class _ReaderHandleControls extends TextSelectionControls
+    with TextSelectionHandleControls {
   static const _radius = 5.5;
   static const _stem = 16.0;
 
@@ -429,18 +432,6 @@ class _ReaderHandleControls extends TextSelectionControls {
       ),
     );
   }
-
-  @override
-  Widget buildToolbar(
-    BuildContext context,
-    Rect globalEditableRegion,
-    double textLineHeight,
-    Offset selectionMidpoint,
-    List<TextSelectionPoint> endpoints,
-    TextSelectionDelegate delegate,
-    ValueListenable<ClipboardStatus>? clipboardStatus,
-    Offset? lastSecondaryTapDownPosition,
-  ) => const SizedBox.shrink();
 }
 
 class _HandlePainter extends CustomPainter {
@@ -505,6 +496,8 @@ class ReaderSelectionFragment extends StatefulWidget {
 
 class _ReaderSelectionFragmentState extends State<ReaderSelectionFragment> {
   _SentenceSelectable? _selectable;
+  _SentenceRegistrar? _registrar;
+  SelectionRegistrar? _parentRegistrar;
   ReaderSelectionController? _registeredController;
 
   @override
@@ -515,6 +508,21 @@ class _ReaderSelectionFragmentState extends State<ReaderSelectionFragment> {
       _registeredController?._fragments.remove(this);
       _registeredController = next;
       _registeredController?._fragments.add(this);
+    }
+    final parent = SelectionContainer.maybeOf(context);
+    if (_parentRegistrar != parent) {
+      _parentRegistrar = parent;
+      _registrar = parent == null
+          ? null
+          : _SentenceRegistrar(
+              parent: parent,
+              text: widget.text,
+              leadingPlaceholders: widget.leadingPlaceholders,
+              findParagraph: () => mounted
+                  ? _findRenderParagraph(context.findRenderObject())
+                  : null,
+              onChanged: (selectable) => _selectable = selectable,
+            );
     }
   }
 
@@ -527,6 +535,7 @@ class _ReaderSelectionFragmentState extends State<ReaderSelectionFragment> {
       _registeredController = next;
       _registeredController?._fragments.add(this);
     }
+    _registrar?._update(widget.text, widget.leadingPlaceholders);
     _selectable?._update(widget.text, widget.leadingPlaceholders);
   }
 
@@ -547,7 +556,9 @@ class _ReaderSelectionFragmentState extends State<ReaderSelectionFragment> {
     return found;
   }
 
-  ({int paragraph, int offset})? _hitOffsetAt(Offset globalPosition) {
+  ({int paragraph, int offset, int? chapter})? _hitOffsetAt(
+    Offset globalPosition,
+  ) {
     if (!mounted || widget.text.isEmpty) return null;
     final renderParagraph = _findRenderParagraph(context.findRenderObject());
     if (renderParagraph == null ||
@@ -571,11 +582,18 @@ class _ReaderSelectionFragmentState extends State<ReaderSelectionFragment> {
       );
       if (boxes.any((box) => box.toRect().inflate(6).contains(local))) {
         if (widget.anchorForOffset case final resolve?) {
-          return resolve(candidate);
+          final anchor = resolve(candidate);
+          if (anchor == null) return null;
+          return (
+            paragraph: anchor.paragraph,
+            offset: anchor.offset,
+            chapter: widget.chapter,
+          );
         }
         return (
           paragraph: widget.paragraph,
           offset: widget.baseOffset + candidate,
+          chapter: widget.chapter,
         );
       }
     }
@@ -627,15 +645,10 @@ class _ReaderSelectionFragmentState extends State<ReaderSelectionFragment> {
 
   @override
   Widget build(BuildContext context) {
-    final registrar = SelectionContainer.maybeOf(context);
+    final registrar = _registrar;
     if (registrar == null) return widget.child;
     return SelectionRegistrarScope(
-      registrar: _SentenceRegistrar(
-        parent: registrar,
-        text: widget.text,
-        leadingPlaceholders: widget.leadingPlaceholders,
-        onChanged: (selectable) => _selectable = selectable,
-      ),
+      registrar: registrar,
       child: widget.child,
     );
   }
@@ -644,22 +657,34 @@ class _ReaderSelectionFragmentState extends State<ReaderSelectionFragment> {
 class _SentenceRegistrar extends SelectionRegistrar {
   _SentenceRegistrar({
     required this.parent,
-    required this.text,
-    required this.leadingPlaceholders,
+    required String text,
+    required int leadingPlaceholders,
+    required this.findParagraph,
     required this.onChanged,
-  });
+  }) : _text = text,
+       _leadingPlaceholders = leadingPlaceholders;
   final SelectionRegistrar parent;
-  final String text;
-  final int leadingPlaceholders;
+  String _text;
+  int _leadingPlaceholders;
+  final RenderParagraph? Function() findParagraph;
   final ValueChanged<_SentenceSelectable?> onChanged;
   final _wrappers = <Selectable, _SentenceSelectable>{};
+
+  void _update(String text, int leadingPlaceholders) {
+    _text = text;
+    _leadingPlaceholders = leadingPlaceholders;
+    for (final wrapper in _wrappers.values) {
+      wrapper._update(text, leadingPlaceholders);
+    }
+  }
 
   @override
   void add(Selectable selectable) {
     final wrapper = _SentenceSelectable(
       selectable,
-      text,
-      leadingPlaceholders,
+      _text,
+      _leadingPlaceholders,
+      findParagraph,
     );
     _wrappers[selectable] = wrapper;
     onChanged(wrapper);
@@ -678,10 +703,16 @@ class _SentenceRegistrar extends SelectionRegistrar {
 }
 
 class _SentenceSelectable with Selectable {
-  _SentenceSelectable(this._delegate, this._text, this._leadingPlaceholders);
+  _SentenceSelectable(
+    this._delegate,
+    this._text,
+    this._leadingPlaceholders,
+    this._findParagraph,
+  );
   final Selectable _delegate;
   String _text;
   int _leadingPlaceholders;
+  final RenderParagraph? Function() _findParagraph;
   bool _expandingSentence = false;
 
   void _update(String text, int leadingPlaceholders) {
@@ -708,21 +739,25 @@ class _SentenceSelectable with Selectable {
   }
 
   SelectionResult _selectRange(int start, int end) {
-    final first = _boxAt(start);
-    final last = _boxAt(math.max(start, end - 1));
+    final paragraph = _findParagraph();
+    if (paragraph == null || !paragraph.attached) return SelectionResult.end;
+    final first = _boxAt(paragraph, start);
+    final last = _boxAt(paragraph, math.max(start, end - 1));
     if (first == null || last == null) return SelectionResult.end;
     _expandingSentence = true;
     try {
       _delegate.dispatchSelectionEvent(
         SelectionEdgeUpdateEvent.forStart(
-          globalPosition: localToGlobal(
+          globalPosition: paragraph.localToGlobal(
             Offset(first.left + .5, first.center.dy),
           ),
         ),
       );
       return _delegate.dispatchSelectionEvent(
         SelectionEdgeUpdateEvent.forEnd(
-          globalPosition: localToGlobal(Offset(last.right - .5, last.center.dy)),
+          globalPosition: paragraph.localToGlobal(
+            Offset(last.right - .5, last.center.dy),
+          ),
         ),
       );
     } finally {
@@ -730,14 +765,11 @@ class _SentenceSelectable with Selectable {
     }
   }
 
-  Rect? _boxAt(int offset) {
-    final delegate = _delegate;
-    if (delegate is RenderParagraph) {
-      final boxes = delegate.getBoxesForSelection(
-        TextSelection(baseOffset: offset, extentOffset: offset + 1),
-      );
-      if (boxes.isNotEmpty) return boxes.first.toRect();
-    }
+  Rect? _boxAt(RenderParagraph paragraph, int offset) {
+    final boxes = paragraph.getBoxesForSelection(
+      TextSelection(baseOffset: offset, extentOffset: offset + 1),
+    );
+    if (boxes.isNotEmpty) return boxes.first.toRect();
     return null;
   }
 
@@ -764,7 +796,7 @@ class _SentenceSelectable with Selectable {
   Size get size => _delegate.size;
 
   @override
-  Rect get boundingBoxes => _delegate.boundingBoxes;
+  List<Rect> get boundingBoxes => _delegate.boundingBoxes;
 
   @override
   Matrix4 getTransformTo(RenderObject? ancestor) =>

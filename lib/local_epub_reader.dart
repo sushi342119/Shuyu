@@ -529,9 +529,14 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     }
   }
 
-  Future<void> _editMark(ReaderBookmark mark) async {
+  Future<void> _editMark(
+    ReaderBookmark mark, {
+    BuildContext? sheetContext,
+  }) async {
+    final hostContext =
+        sheetContext != null && sheetContext.mounted ? sheetContext : context;
     final updated = await showReaderAnnotationEditor(
-      context,
+      hostContext,
       state: widget.state,
       novelId: _novel.id,
       novel: _novel,
@@ -551,12 +556,12 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       final picked = await showJellySheet<Object>(
         context: context,
         reduceMotion: widget.state.reduceMotion,
-        builder: (context) => ReaderMarksSheet(
+        builder: (sheetContext) => ReaderMarksSheet(
           state: widget.state,
           novel: _novel,
           currentChapter: _chapter,
           cache: null,
-          onEditMark: _editMark,
+          onEditMark: (mark) => _editMark(mark, sheetContext: sheetContext),
         ),
       );
       if (!mounted) return;

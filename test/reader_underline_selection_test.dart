@@ -7,7 +7,6 @@ import 'package:shuyu/library_state.dart';
 import 'package:shuyu/pages.dart';
 import 'package:shuyu/reader_annotation_editor.dart';
 import 'package:shuyu/reader_catalogue.dart';
-import 'package:shuyu/reader_selection.dart';
 import 'package:shuyu/reader_underline.dart';
 
 class _TestNovelRepository extends DemoNovelRepository {
@@ -40,7 +39,7 @@ void main() {
     addTearDown(state.dispose);
 
     const localNovel = Novel(
-      id: -101,
+      id: 1000000101,
       title: '本地测试书籍',
       author: '作者',
       genre: '本地导入',
