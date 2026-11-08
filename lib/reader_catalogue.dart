@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'app_interactions.dart';
 import 'app_ui.dart';
@@ -460,6 +461,8 @@ class ReaderMarksSheet extends StatefulWidget {
     required this.currentChapter,
     this.cache,
     this.onConfigureTocRule,
+    this.onPickUnderline,
+    this.onEditMark,
   });
   final LibraryState state;
   final Novel novel;
@@ -467,6 +470,8 @@ class ReaderMarksSheet extends StatefulWidget {
   final OfflineCacheStore? cache;
   final Future<Novel?> Function(String? customPattern, int maxChapterChars)?
   onConfigureTocRule;
+  final Future<void> Function()? onPickUnderline;
+  final Future<void> Function(ReaderBookmark mark)? onEditMark;
 
   @override
   State<ReaderMarksSheet> createState() => _ReaderMarksSheetState();
@@ -528,7 +533,10 @@ class _ReaderMarksSheetState extends State<ReaderMarksSheet> {
       SizedBox(
         height: height,
         child: AnimatedBuilder(
-          animation: widget.state.bookmarkChanges,
+          animation: Listenable.merge([
+            widget.state.bookmarkChanges,
+            widget.state.underlineChanges,
+          ]),
           builder: (context, _) => _marks(
             context,
             underlines: _tab == _MarksTab.underlines,
@@ -544,42 +552,147 @@ class _ReaderMarksSheetState extends State<ReaderMarksSheet> {
       for (final mark in widget.state.bookmarksFor(widget.novel.id))
         if (mark.isUnderline == underlines) mark,
     ];
+    final pickButton = underlines && widget.onPickUnderline != null
+        ? GlassTextButton(
+            key: const ValueKey('reader-marks-pick-underline'),
+            compact: true,
+            onPressed: () => widget.onPickUnderline!(),
+            child: const Text('选字划线 / 复制本章片段'),
+          )
+        : null;
     if (marks.isEmpty) {
       return Center(
-        child: Text(
-          underlines ? '还没有划线。长按正文选字后可划线。' : '还没有书签。在排版面板里可添加书签。',
-          style: TextStyle(color: scheme.onSurfaceVariant),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                underlines ? '还没有划线。长按正文选字后可划线。' : '还没有书签。在排版面板里可添加书签。',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+              if (pickButton != null) ...[
+                const SizedBox(height: 14),
+                pickButton,
+              ],
+            ],
+          ),
         ),
       );
     }
-    return ListView.separated(
-      key: ValueKey(underlines ? 'reader-underline-list' : 'reader-bookmark-list'),
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
-      itemCount: marks.length,
-      separatorBuilder: (_, _) => const Divider(height: 1),
-      itemBuilder: (context, index) {
-        final mark = marks[index];
-        final quote = mark.quote.trim();
-        return ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-          minVerticalPadding: 10,
-          title: Text(
-            quote.isEmpty
-                ? mark.chapterTitle
-                : quote.characters.take(40).toString(),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (pickButton != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 10, 18, 0),
+            child: Align(alignment: Alignment.centerRight, child: pickButton),
           ),
-          subtitle: Text(
-            [
-              mark.chapterTitle,
-              if (mark.createdAt case final at?) _relative(at),
-            ].join(' · '),
-            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+        Expanded(
+          child: ListView.separated(
+            key: ValueKey(
+              underlines ? 'reader-underline-list' : 'reader-bookmark-list',
+            ),
+            padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+            itemCount: marks.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final mark = marks[index];
+              final quote = mark.quote.trim();
+              final note = mark.note.trim();
+              return ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                minVerticalPadding: 10,
+                title: Text(
+                  quote.isEmpty
+                      ? mark.chapterTitle
+                      : quote.characters.take(60).toString(),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (note.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          '批注：$note',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.onSurface,
+                          ),
+                        ),
+                      ),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        [
+                          mark.chapterTitle,
+                          if (mark.createdAt case final at?) _relative(at),
+                        ].join(' · '),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (quote.isNotEmpty)
+                      IconButton(
+                        key: ValueKey('reader-mark-copy-${mark.id}'),
+                        tooltip: '复制',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(CupertinoIcons.doc_on_doc, size: 17),
+                        onPressed: () async {
+                          await Clipboard.setData(ClipboardData(text: quote));
+                          if (context.mounted) {
+                            showNovelFeedback(context, '已复制选中内容');
+                          }
+                        },
+                      ),
+                    if (widget.onEditMark != null)
+                      IconButton(
+                        key: ValueKey('reader-mark-edit-${mark.id}'),
+                        tooltip: '批注',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(CupertinoIcons.pencil, size: 17),
+                        onPressed: () => widget.onEditMark!(mark),
+                      ),
+                    IconButton(
+                      key: ValueKey('reader-mark-delete-${mark.id}'),
+                      tooltip: '删除',
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(CupertinoIcons.trash, size: 17),
+                      onPressed: () async {
+                        await widget.state.removeBookmark(
+                          widget.novel.id,
+                          mark.id,
+                        );
+                        if (context.mounted) {
+                          showNovelFeedback(
+                            context,
+                            underlines ? '已删除划线' : '已删除书签',
+                          );
+                        }
+                      },
+                    ),
+                  ],
+                ),
+                onTap: () => Navigator.pop(context, mark),
+              );
+            },
           ),
-          onTap: () => Navigator.pop(context, mark),
-        );
-      },
+        ),
+      ],
     );
   }
 

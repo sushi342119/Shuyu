@@ -459,6 +459,7 @@ class LibraryState extends ChangeNotifier {
             (a, b) => b.position.updatedAt.compareTo(a.position.updatedAt),
           );
           _bookmarks[id] = bookmarks;
+          _updateUnderlineIndex(id, notify: false);
         } catch (_) {
           // Resume records are independent of the bookmark list.
         }
@@ -701,6 +702,7 @@ class LibraryState extends ChangeNotifier {
   final _settings = _StateNotifier();
   final _history = _StateNotifier();
   final _bookmarkChanges = _StateNotifier();
+  final _underlineChanges = _StateNotifier();
   final _searchChanges = _StateNotifier();
   final _shelfViewChanges = _StateNotifier();
   final _readerBehaviorChanges = _StateNotifier();
@@ -714,6 +716,12 @@ class LibraryState extends ChangeNotifier {
   final Map<int, ReadingPosition> _positions = {};
   final Map<int, int> _added = {};
   final Map<int, List<ReaderBookmark>> _bookmarks = {};
+  final Map<int, List<ReaderUnderlineRange>> _underlineRanges = {};
+  final Map<int, Map<int, List<ReaderUnderlineRange>>> _underlinesByChapter =
+      {};
+  final Map<int, List<ReaderAnnotationRange>> _annotationRanges = {};
+  final Map<int, Map<int, List<ReaderAnnotationRange>>> _annotationsByChapter =
+      {};
   final Map<int, int> _shelfRevisions = {};
   List<String> _recentSearches = const [];
   String _shelfSort = 'recentRead';
@@ -841,6 +849,7 @@ class LibraryState extends ChangeNotifier {
   Listenable get settingsChanges => _settings;
   Listenable get historyChanges => _history;
   Listenable get bookmarkChanges => _bookmarkChanges;
+  Listenable get underlineChanges => _underlineChanges;
   Listenable get searchChanges => _searchChanges;
   Listenable get shelfViewChanges => _shelfViewChanges;
   Listenable get readerBehaviorChanges => _readerBehaviorChanges;
@@ -973,6 +982,84 @@ class LibraryState extends ChangeNotifier {
 
   List<ReaderBookmark> bookmarksFor(int id) =>
       List.unmodifiable(_bookmarks[id] ?? const <ReaderBookmark>[]);
+
+  List<ReaderUnderlineRange> underlinesFor(int id, {int? chapterId}) =>
+      chapterId == null
+      ? _underlineRanges[id] ?? const []
+      : _underlinesByChapter[id]?[chapterId] ?? const [];
+
+  List<ReaderAnnotationRange> annotationsFor(int id, {int? chapterId}) =>
+      chapterId == null
+      ? _annotationRanges[id] ?? const []
+      : _annotationsByChapter[id]?[chapterId] ?? const [];
+
+  bool _updateUnderlineIndex(int id, {bool notify = true}) {
+    final styledMarks =
+        List<ReaderBookmark>.of(_bookmarks[id] ?? const <ReaderBookmark>[])
+          ..sort((a, b) {
+            final edited = b.annotation.updatedAt.compareTo(
+              a.annotation.updatedAt,
+            );
+            return edited != 0 ? edited : b.id.compareTo(a.id);
+          });
+    final annotations = <ReaderAnnotationRange>[
+      for (final mark in styledMarks)
+        for (final range in mark.underlineRanges)
+          ReaderAnnotationRange(
+            range,
+            mark.annotation.style,
+            mark.annotation.color,
+            bookmarkId: mark.id,
+          ),
+    ];
+    final ranges =
+        <ReaderUnderlineRange>[
+          for (final mark in _bookmarks[id] ?? const <ReaderBookmark>[])
+            ...mark.underlineRanges,
+        ]..sort((a, b) {
+          for (final pair in [
+            (a.chapterId, b.chapterId),
+            (a.startParagraph, b.startParagraph),
+            (a.startOffset, b.startOffset),
+            (a.endParagraph, b.endParagraph),
+            (a.endOffset, b.endOffset),
+          ]) {
+            final order = pair.$1.compareTo(pair.$2);
+            if (order != 0) return order;
+          }
+          return a.contentRevision.compareTo(b.contentRevision);
+        });
+    if (listEquals(_underlineRanges[id] ?? const [], ranges) &&
+        listEquals(_annotationRanges[id] ?? const [], annotations)) {
+      return false;
+    }
+    final previous = _underlinesByChapter[id];
+    final chapters = <int, List<ReaderUnderlineRange>>{};
+    for (final range in ranges) {
+      (chapters[range.chapterId] ??= []).add(range);
+    }
+    _underlineRanges[id] = List.unmodifiable(ranges);
+    _underlinesByChapter[id] = {
+      for (final entry in chapters.entries)
+        entry.key: listEquals(previous?[entry.key], entry.value)
+            ? previous![entry.key]!
+            : List.unmodifiable(entry.value),
+    };
+    _annotationRanges[id] = List.unmodifiable(annotations);
+    final styledChapters = <int, List<ReaderAnnotationRange>>{};
+    for (final item in annotations) {
+      (styledChapters[item.range.chapterId] ??= []).add(item);
+    }
+    final oldStyled = _annotationsByChapter[id];
+    _annotationsByChapter[id] = {
+      for (final entry in styledChapters.entries)
+        entry.key: listEquals(oldStyled?[entry.key], entry.value)
+            ? oldStyled![entry.key]!
+            : List.unmodifiable(entry.value),
+    };
+    if (notify && !_disposed) _underlineChanges.notifyListeners();
+    return true;
+  }
 
 
   List<({int novelId, ReaderBookmark bookmark})> get bookmarkEntries {
@@ -1219,7 +1306,14 @@ class LibraryState extends ChangeNotifier {
       _known.remove(id);
       _persistedNovels.remove(id);
       _bookmarks.remove(id);
-      if (!_disposed) _bookmarkChanges.notifyListeners();
+      _underlineRanges.remove(id);
+      _underlinesByChapter.remove(id);
+      _annotationRanges.remove(id);
+      _annotationsByChapter.remove(id);
+      if (!_disposed) {
+        _bookmarkChanges.notifyListeners();
+        _underlineChanges.notifyListeners();
+      }
       _historyChanged();
       notifyListeners();
     });
@@ -1522,7 +1616,11 @@ class LibraryState extends ChangeNotifier {
           for (final item in jsonDecode(raw) as List)
             ReaderBookmark.fromJson(Map<String, dynamic>.from(item as Map)),
         ];
-        if (!_disposed) _bookmarkChanges.notifyListeners();
+        _updateUnderlineIndex(id);
+        if (!_disposed) {
+          _bookmarkChanges.notifyListeners();
+          _underlineChanges.notifyListeners();
+        }
       }
       notifyListeners();
       });
@@ -1967,6 +2065,34 @@ class LibraryState extends ChangeNotifier {
     );
   }
 
+  Future<ReaderBookmark> addUnderline({
+    required Novel novel,
+    required ReadingPosition position,
+    required List<ReaderUnderlineRange> ranges,
+    String quote = '',
+  }) async => (await _changeUnderline(
+    novel: novel,
+    position: position,
+    ranges: ranges,
+    quote: quote,
+    toggle: false,
+  ))!;
+
+  Future<bool> toggleUnderline({
+    required Novel novel,
+    required ReadingPosition position,
+    required List<ReaderUnderlineRange> ranges,
+    String quote = '',
+  }) async =>
+      await _changeUnderline(
+        novel: novel,
+        position: position,
+        ranges: ranges,
+        quote: quote,
+        toggle: true,
+      ) !=
+      null;
+
   Future<ReaderBookmark> saveAnnotation({
     required Novel novel,
     required ReadingPosition position,
@@ -2022,6 +2148,7 @@ class LibraryState extends ChangeNotifier {
       final next = [for (final mark in marks) mark.id == id ? result : mark];
       await _writeBookmarks(novelId, next);
       _bookmarks[novelId] = next;
+      _updateUnderlineIndex(novelId);
       if (!_disposed) _bookmarkChanges.notifyListeners();
     });
     return result;
@@ -2107,6 +2234,7 @@ class LibraryState extends ChangeNotifier {
       final next = [for (final mark in marks) mark.id == id ? result : mark];
       await _writeBookmarks(novelId, next);
       _bookmarks[novelId] = next;
+      _updateUnderlineIndex(novelId);
       if (!_disposed) _bookmarkChanges.notifyListeners();
     });
     return result;
@@ -2194,6 +2322,7 @@ class LibraryState extends ChangeNotifier {
           ];
           await _writeBookmarks(novel.id, next);
           _bookmarks[novel.id] = next;
+          _updateUnderlineIndex(novel.id);
           if (!_disposed) _bookmarkChanges.notifyListeners();
           return;
         }
@@ -2201,6 +2330,7 @@ class LibraryState extends ChangeNotifier {
         final next = marks.where((mark) => !ids.contains(mark.id)).toList();
         await _writeBookmarks(novel.id, next);
         _bookmarks[novel.id] = next;
+        _updateUnderlineIndex(novel.id);
         if (!_disposed) _bookmarkChanges.notifyListeners();
         return;
       }
@@ -2209,7 +2339,7 @@ class LibraryState extends ChangeNotifier {
       }
       final first = selected.first;
       final chapter = novel.chapters.indexWhere((c) => c.id == first.chapterId);
-      final sameChapter = position.chapterId > 0
+      final sameChapter = position.chapterId > 0 || first.chapterId > 0
           ? position.chapterId == first.chapterId
           : position.chapter == chapter;
       final anchor = ReadingPosition.fromJson({
@@ -2239,6 +2369,7 @@ class LibraryState extends ChangeNotifier {
       final next = [mark, ...marks];
       await _writeBookmarks(novel.id, next);
       _bookmarks[novel.id] = next;
+      _updateUnderlineIndex(novel.id);
       if (!_disposed) _bookmarkChanges.notifyListeners();
       result = mark;
     });
@@ -2307,6 +2438,7 @@ class LibraryState extends ChangeNotifier {
       final next = [mark, ...marks];
       await _writeBookmarks(novel.id, next);
       _bookmarks[novel.id] = next;
+      _updateUnderlineIndex(novel.id);
       if (!_disposed) _bookmarkChanges.notifyListeners();
       result = mark;
     });
@@ -2364,6 +2496,7 @@ class LibraryState extends ChangeNotifier {
       final next = [mark, ...marks];
       await _writeBookmarks(novel.id, next);
       _bookmarks[novel.id] = next;
+      _updateUnderlineIndex(novel.id);
       if (!_disposed) _bookmarkChanges.notifyListeners();
       result = mark;
     });
@@ -2380,6 +2513,7 @@ class LibraryState extends ChangeNotifier {
       final next = marks.where((mark) => mark.id != id).toList();
       await _writeBookmarks(novelId, next);
       _bookmarks[novelId] = next;
+      _updateUnderlineIndex(novelId);
       if (!_disposed) _bookmarkChanges.notifyListeners();
     });
   }
@@ -2408,6 +2542,7 @@ class LibraryState extends ChangeNotifier {
       ];
       await _writeBookmarks(novelId, next);
       _bookmarks[novelId] = next;
+      _updateUnderlineIndex(novelId);
       if (!_disposed) _bookmarkChanges.notifyListeners();
     });
   }
@@ -3528,6 +3663,13 @@ class LibraryState extends ChangeNotifier {
         _bookmarks
           ..clear()
           ..addAll(marks);
+        _underlineRanges.clear();
+        _underlinesByChapter.clear();
+        _annotationRanges.clear();
+        _annotationsByChapter.clear();
+        for (final id in _bookmarks.keys) {
+          _updateUnderlineIndex(id, notify: false);
+        }
         _hiddenHistory
           ..clear()
           ..addAll(hidden);
@@ -3586,6 +3728,7 @@ class LibraryState extends ChangeNotifier {
         if (!_disposed) {
           _historyChanged();
           _bookmarkChanges.notifyListeners();
+          _underlineChanges.notifyListeners();
           _searchChanges.notifyListeners();
           _shelfViewChanges.notifyListeners();
           if (importPreferences) {
@@ -3682,6 +3825,7 @@ class LibraryState extends ChangeNotifier {
     _settings.dispose();
     _history.dispose();
     _bookmarkChanges.dispose();
+    _underlineChanges.dispose();
     _searchChanges.dispose();
     _shelfViewChanges.dispose();
     _readerBehaviorChanges.dispose();

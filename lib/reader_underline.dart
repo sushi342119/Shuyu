@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 /// Rendering treatment for a saved exact-text bookmark.
 enum ReaderMarkStyle {
@@ -21,6 +22,19 @@ Color readerMarkInk(
   if (value == null) return foreground;
   final ink = Color(value);
   return dark ? Color.lerp(ink, Colors.white, .2)! : ink;
+}
+
+/// Highlight fill uses the same palette without changing glyph metrics.
+Color readerMarkTint(
+  ReaderMarkColor color,
+  Color foreground, {
+  bool dark = false,
+}) {
+  final ink = readerMarkInk(color, foreground, dark: dark);
+  final alpha = color == ReaderMarkColor.ink
+      ? (dark ? .20 : .14)
+      : (dark ? .30 : .22);
+  return ink.withValues(alpha: alpha);
 }
 
 /// A small shared palette; ink follows the reader's current paper contrast.
@@ -136,7 +150,7 @@ class ReaderUnderlineRange {
   final String contentRevision;
 
   bool get isValid =>
-      chapterId > 0 &&
+      chapterId >= 0 &&
       chapterId <= 0x7fffffff &&
       startParagraph >= 0 &&
       endParagraph <= 1000000 &&
@@ -212,6 +226,337 @@ class ReaderUnderlineRange {
     endOffset,
     contentRevision,
   );
+}
+
+/// Indexed chapter mark for rendering without scanning every bookmark note.
+class ReaderAnnotationRange {
+  const ReaderAnnotationRange(
+    this.range,
+    this.style,
+    this.color, {
+    this.bookmarkId = '',
+  });
+  final ReaderUnderlineRange range;
+  final ReaderMarkStyle style;
+  final ReaderMarkColor color;
+  final String bookmarkId;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ReaderAnnotationRange &&
+      range == other.range &&
+      style == other.style &&
+      color == other.color &&
+      bookmarkId == other.bookmarkId;
+
+  @override
+  int get hashCode => Object.hash(range, style, color, bookmarkId);
+}
+
+/// Paragraph-clipped mark used by horizontal, paged and vertical renderers.
+class ReaderTextMark {
+  const ReaderTextMark(
+    this.start,
+    this.end,
+    this.style,
+    this.color, {
+    this.bookmarkId = '',
+  });
+  final int start, end;
+  final ReaderMarkStyle style;
+  final ReaderMarkColor color;
+  final String bookmarkId;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ReaderTextMark &&
+      start == other.start &&
+      end == other.end &&
+      style == other.style &&
+      color == other.color &&
+      bookmarkId == other.bookmarkId;
+
+  @override
+  int get hashCode => Object.hash(start, end, style, color, bookmarkId);
+}
+
+/// Clips chapter-level annotation ranges to a single paragraph or fragment
+/// `[fragmentStart, fragmentStart + textLength)`.
+List<ReaderTextMark> clipReaderParagraphMarks(
+  Iterable<ReaderAnnotationRange> annotations, {
+  required int paragraph,
+  required int textLength,
+  int fragmentStart = 0,
+}) {
+  if (textLength <= 0) return const [];
+  final fragmentEnd = fragmentStart + textLength;
+  final result = <ReaderTextMark>[];
+  for (final item in annotations) {
+    if (item.style == ReaderMarkStyle.none) continue;
+    final range = item.range;
+    if (paragraph < range.startParagraph || paragraph > range.endParagraph) {
+      continue;
+    }
+    final rawStart = paragraph == range.startParagraph ? range.startOffset : 0;
+    final rawEnd = paragraph == range.endParagraph
+        ? range.endOffset
+        : fragmentEnd;
+    final clippedStart = (rawStart - fragmentStart).clamp(0, textLength);
+    final clippedEnd = (rawEnd - fragmentStart).clamp(0, textLength);
+    if (clippedStart < clippedEnd) {
+      result.add(
+        ReaderTextMark(
+          clippedStart,
+          clippedEnd,
+          item.style,
+          item.color,
+          bookmarkId: item.bookmarkId,
+        ),
+      );
+    }
+  }
+  return result;
+}
+
+/// Splits [text] at mark and search-match boundaries without changing metrics.
+List<InlineSpan> buildReaderMarkedSpans({
+  required String text,
+  required Color foreground,
+  required bool dark,
+  List<ReaderTextMark> marks = const [],
+  (int start, int end)? matchRange,
+  Color? matchBackgroundColor,
+}) {
+  if (text.isEmpty) return const [TextSpan(text: '')];
+  final points = <int>{0, text.length};
+  for (final mark in marks) {
+    if (mark.style == ReaderMarkStyle.none) continue;
+    points.add(mark.start.clamp(0, text.length));
+    points.add(mark.end.clamp(0, text.length));
+  }
+  if (matchRange case (final mStart, final mEnd)
+      when mStart >= 0 && mStart < mEnd && mEnd <= text.length) {
+    points.add(mStart);
+    points.add(mEnd);
+  }
+  if (points.length <= 2) {
+    return [TextSpan(text: text)];
+  }
+  final sorted = points.toList()..sort();
+  final spans = <InlineSpan>[];
+  for (var i = 0; i < sorted.length - 1; i++) {
+    final segStart = sorted[i];
+    final segEnd = sorted[i + 1];
+    if (segStart >= segEnd) continue;
+    final inMatch =
+        matchRange != null &&
+        segStart >= matchRange.$1 &&
+        segEnd <= matchRange.$2;
+    ReaderTextMark? underlineMark;
+    ReaderTextMark? highlightMark;
+    for (final mark in marks) {
+      if (mark.start <= segStart && mark.end >= segEnd) {
+        if (mark.style == ReaderMarkStyle.underline && underlineMark == null) {
+          underlineMark = mark;
+        } else if (mark.style == ReaderMarkStyle.highlight &&
+            highlightMark == null) {
+          highlightMark = mark;
+        }
+      }
+    }
+    TextStyle? segStyle;
+    if (underlineMark != null || highlightMark != null || inMatch) {
+      final bg = highlightMark != null
+          ? readerMarkTint(highlightMark.color, foreground, dark: dark)
+          : (inMatch ? matchBackgroundColor : null);
+      final ulInk = underlineMark != null
+          ? readerMarkInk(underlineMark.color, foreground, dark: dark)
+          : null;
+      segStyle = TextStyle(
+        backgroundColor: bg,
+        decoration: underlineMark != null ? TextDecoration.underline : null,
+        decorationColor: ulInk,
+        decorationThickness: underlineMark != null ? 1.6 : null,
+      );
+    }
+    spans.add(
+      TextSpan(
+        text: text.substring(segStart, segEnd),
+        style: segStyle,
+      ),
+    );
+  }
+  return spans;
+}
+
+/// Shared archive frame used for both bookmark landing and saved outlines.
+/// These are paint outsets, so marking never changes reading line breaks.
+Rect readerRegistrationBounds(Rect textBounds) => Rect.fromLTRB(
+  textBounds.left - 8,
+  textBounds.top - 3,
+  textBounds.right + 8,
+  textBounds.bottom + 3,
+);
+
+/// Draws the same restrained corner rule without adding another UI surface.
+void paintReaderRegistrationFrame(
+  Canvas canvas,
+  Rect rect, {
+  required Color ink,
+  Color? fill,
+}) {
+  if (fill != null) {
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(16)),
+      Paint()..color = fill,
+    );
+  }
+  final rule = Paint()
+    ..color = ink
+    ..strokeWidth = 1.3
+    ..style = PaintingStyle.stroke;
+  canvas.drawLine(rect.topLeft, rect.bottomLeft, rule);
+  canvas.drawLine(rect.topLeft, rect.topLeft + const Offset(7, 0), rule);
+  canvas.drawLine(
+    rect.bottomRight - const Offset(7, 0),
+    rect.bottomRight,
+    rule,
+  );
+}
+
+/// Paints saved outline annotations from the already laid out [RenderParagraph].
+/// It neither measures text a second time nor changes paragraph layout.
+class ReaderAnnotationOutlines extends SingleChildRenderObjectWidget {
+  const ReaderAnnotationOutlines({
+    super.key,
+    required this.marks,
+    required this.foreground,
+    required this.dark,
+    this.leadingPlaceholders = 0,
+    required super.child,
+  });
+
+  final List<ReaderTextMark> marks;
+  final Color foreground;
+  final bool dark;
+  final int leadingPlaceholders;
+
+  @override
+  RenderReaderAnnotationOutlines createRenderObject(BuildContext context) =>
+      RenderReaderAnnotationOutlines(
+        marks: marks,
+        foreground: foreground,
+        dark: dark,
+        leadingPlaceholders: leadingPlaceholders,
+      );
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    RenderReaderAnnotationOutlines renderObject,
+  ) => renderObject.update(
+    marks: marks,
+    foreground: foreground,
+    dark: dark,
+    leadingPlaceholders: leadingPlaceholders,
+  );
+}
+
+class RenderReaderAnnotationOutlines extends RenderProxyBox {
+  RenderReaderAnnotationOutlines({
+    required List<ReaderTextMark> marks,
+    required Color foreground,
+    required bool dark,
+    required int leadingPlaceholders,
+  }) : _marks = marks,
+       _foreground = foreground,
+       _dark = dark,
+       _prefix = leadingPlaceholders;
+
+  List<ReaderTextMark> _marks;
+  Color _foreground;
+  bool _dark;
+  int _prefix;
+
+  void update({
+    required List<ReaderTextMark> marks,
+    required Color foreground,
+    required bool dark,
+    required int leadingPlaceholders,
+  }) {
+    if (_marks == marks &&
+        _foreground == foreground &&
+        _dark == dark &&
+        _prefix == leadingPlaceholders) {
+      return;
+    }
+    _marks = marks;
+    _foreground = foreground;
+    _dark = dark;
+    _prefix = leadingPlaceholders;
+    markNeedsPaint();
+  }
+
+  RenderParagraph? _paragraph(RenderObject? node) {
+    if (node is RenderParagraph) return node;
+    RenderParagraph? found;
+    node?.visitChildren((child) {
+      found ??= _paragraph(child);
+    });
+    return found;
+  }
+
+  /// Exposed for tests so outline geometry is verified without pixel snapshots.
+  List<({Rect rect, ReaderMarkColor color})> get outlineBounds {
+    final paragraph = _paragraph(child);
+    if (paragraph == null) return const [];
+    final transform = paragraph.getTransformTo(this);
+    return [
+      for (final mark in _marks)
+        if (mark.style == ReaderMarkStyle.outline && mark.start < mark.end)
+          ...() {
+            final boxes = paragraph.getBoxesForSelection(
+              TextSelection(
+                baseOffset: mark.start + _prefix,
+                extentOffset: mark.end + _prefix,
+              ),
+            );
+            if (boxes.isEmpty) return <({Rect rect, ReaderMarkColor color})>[];
+            var bounds = boxes.first.toRect();
+            for (final box in boxes.skip(1)) {
+              bounds = bounds.expandToInclude(box.toRect());
+            }
+            return [
+              (
+                rect: readerRegistrationBounds(
+                  MatrixUtils.transformRect(transform, bounds),
+                ),
+                color: mark.color,
+              ),
+            ];
+          }(),
+    ];
+  }
+
+  @override
+  Rect get paintBounds => super.paintBounds.inflate(8);
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    super.paint(context, offset);
+    // Indexed marks are newest first; paint their rules last at intersections.
+    for (final outline in outlineBounds.reversed) {
+      paintReaderRegistrationFrame(
+        context.canvas,
+        outline.rect.shift(offset),
+        ink: readerMarkInk(
+          outline.color,
+          _foreground,
+          dark: _dark,
+        ).withValues(alpha: _dark ? .65 : .42),
+      );
+    }
+  }
 }
 
 /// Validates stored annotation ranges without importing application state.

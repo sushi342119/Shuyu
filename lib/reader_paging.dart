@@ -11,7 +11,9 @@ import 'local_platform.dart';
 import 'reader_pagination.dart';
 import 'reader_preferences.dart';
 import 'reader_reflow.dart';
+import 'reader_selection.dart';
 import 'reader_text.dart';
+import 'reader_underline.dart';
 
 /// P3 bridge (design 2026-11 §4 阅读手势, decision 6): tap zones, volume-key
 /// paging and the page body for the existing paged / vertical engine.
@@ -166,40 +168,81 @@ Widget readerPageBody(
   ReaderLeaf page,
   TextStyle style, {
   bool compressPunctuation = true,
-}) {
-  final fragments = [
-    for (final fragment in page.fragments)
-      if (!fragment.image && !fragment.rule && fragment.text.isNotEmpty)
-        fragment,
-  ];
-  Widget buildFragment(ReaderPageFragment fragment) => ClipRect(
-    child: Text.rich(
-      readerParagraphSpan(
-        children: [TextSpan(text: fragment.text)],
-        style: style,
-        indent: fragment.indent,
-        compressPunctuation: compressPunctuation,
-      ),
-      softWrap: true,
-    ),
-  );
-  return Stack(
-    clipBehavior: Clip.none,
-    children: [
-      for (var i = 0; i < fragments.length; i++)
-        Positioned.fromRect(
-          rect: fragments[i].rect,
-          child: ReaderFragmentMotion(
-            fragment: fragments[i],
-            index: i,
-            count: fragments.length,
-            previousBuilder: buildFragment,
-            child: buildFragment(fragments[i]),
-          ),
+  int? chapterId,
+  List<ReaderAnnotationRange> annotations = const [],
+}) => Builder(
+  builder: (context) {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final baseColor = style.color ?? scheme.onSurface;
+    final fragments = [
+      for (final fragment in page.fragments)
+        if (!fragment.image && !fragment.rule && fragment.text.isNotEmpty)
+          fragment,
+    ];
+    Widget buildFragment(ReaderPageFragment fragment) {
+      final marks = annotations.isEmpty
+          ? const <ReaderTextMark>[]
+          : clipReaderParagraphMarks(
+              annotations,
+              paragraph: fragment.paragraph,
+              textLength: fragment.text.length,
+              fragmentStart: fragment.start,
+            );
+      final children = marks.isEmpty
+          ? [TextSpan(text: fragment.text)]
+          : buildReaderMarkedSpans(
+              text: fragment.text,
+              marks: marks,
+              baseTextColor: baseColor,
+              dark: dark,
+            );
+      Widget text = Text.rich(
+        readerParagraphSpan(
+          children: children,
+          style: style,
+          indent: fragment.indent,
+          compressPunctuation: compressPunctuation,
         ),
-    ],
-  );
-}
+        softWrap: true,
+      );
+      if (marks.any((m) => m.style == ReaderMarkStyle.outline)) {
+        text = ReaderAnnotationOutlines(
+          marks: marks,
+          baseTextColor: baseColor,
+          dark: dark,
+          leadingPlaceholders: fragment.indent ? 1 : 0,
+          child: text,
+        );
+      }
+      return ClipRect(child: text);
+    }
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        for (var i = 0; i < fragments.length; i++)
+          Positioned.fromRect(
+            rect: fragments[i].rect,
+            child: ReaderSelectionFragment(
+              paragraph: fragments[i].paragraph,
+              chapter: chapterId,
+              baseOffset: fragments[i].start,
+              leadingPlaceholders: fragments[i].indent ? 1 : 0,
+              text: fragments[i].text,
+              child: ReaderFragmentMotion(
+                fragment: fragments[i],
+                index: i,
+                count: fragments.length,
+                previousBuilder: buildFragment,
+                child: buildFragment(fragments[i]),
+              ),
+            ),
+          ),
+      ],
+    );
+  },
+);
 
 /// 阅读方式 / 点击翻页 / 音量键翻页 in the TXT reader settings. Same
 /// `readerPreferences` record as every other reader setting.

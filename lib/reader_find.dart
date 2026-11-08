@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import 'app_ui.dart';
 import 'reader_content.dart';
+import 'reader_underline.dart';
 
 class ReaderMatch {
   const ReaderMatch(this.paragraph, this.start, this.end);
@@ -261,38 +262,49 @@ class ReaderHighlightText extends StatelessWidget {
     required this.text,
     required this.match,
     required this.style,
+    this.marks = const [],
   });
   final int index;
   final String text;
   final ValueListenable<ReaderMatch?> match;
   final TextStyle style;
+  final List<ReaderTextMark> marks;
   @override
   Widget build(BuildContext context) => ValueListenableBuilder<ReaderMatch?>(
     valueListenable: match,
     builder: (context, selected, _) {
-      if (selected == null ||
-          selected.paragraph != index ||
-          selected.end > text.length) {
+      final hasMatch =
+          selected != null &&
+          selected.paragraph == index &&
+          selected.end <= text.length;
+      if (!hasMatch && marks.isEmpty) {
         return Text(text, key: ValueKey('paragraph-$index'), style: style);
       }
-      return Text.rich(
-        TextSpan(
-          children: [
-            TextSpan(text: text.substring(0, selected.start)),
-            TextSpan(
-              text: text.substring(selected.start, selected.end),
-              style: TextStyle(
-                backgroundColor: Theme.of(
-                  context,
-                ).colorScheme.onSurface.withValues(alpha: .14),
-              ),
-            ),
-            TextSpan(text: text.substring(selected.end)),
-          ],
-        ),
+      final scheme = Theme.of(context).colorScheme;
+      final dark = Theme.of(context).brightness == Brightness.dark;
+      final spans = buildReaderMarkedSpans(
+        text: text,
+        marks: marks,
+        baseTextColor: style.color ?? scheme.onSurface,
+        dark: dark,
+        findStart: hasMatch ? selected.start : null,
+        findEnd: hasMatch ? selected.end : null,
+        findBackground: scheme.onSurface.withValues(alpha: .14),
+      );
+      Widget child = Text.rich(
+        TextSpan(children: spans),
         key: ValueKey('paragraph-$index'),
         style: style,
       );
+      if (marks.any((m) => m.style == ReaderMarkStyle.outline)) {
+        child = ReaderAnnotationOutlines(
+          marks: marks,
+          baseTextColor: style.color ?? scheme.onSurface,
+          dark: dark,
+          child: child,
+        );
+      }
+      return child;
     },
   );
 }

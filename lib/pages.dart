@@ -40,7 +40,11 @@ import 'reader_content.dart';
 import 'reader_illustrations.dart';
 import 'reader_find.dart';
 import 'reader_purification.dart';
+import 'reader_annotation_editor.dart';
+import 'reader_selection.dart';
+import 'reader_text_picker.dart';
 import 'reader_tools.dart';
+import 'reader_underline.dart';
 import 'reading_activity.dart';
 import 'reading_history.dart';
 import 'reading_statistics_page.dart';
@@ -63,6 +67,8 @@ import 'updates/app_updates.dart';
 import 'wenku_errors.dart';
 
 export 'app_ui.dart' show sectionHeader;
+export 'reader_underline.dart'
+    show readerRegistrationBounds, paintReaderRegistrationFrame;
 
 final _readerWhitespace = RegExp(r'\s+');
 
@@ -5181,6 +5187,7 @@ class _ReaderPageState extends State<ReaderPage>
   int _chapterRevealFirst = 0;
   late final AnimationController _chrome;
   bool _chromeTarget = true;
+  final _selection = ReaderSelectionController();
 
   @override
   void initState() {
@@ -5274,6 +5281,7 @@ class _ReaderPageState extends State<ReaderPage>
     _followTicket++;
     _followScroll.dispose();
     WidgetsBinding.instance.removeObserver(this);
+    _selection.dispose();
     _scroll.dispose();
     _chapterReveal.dispose();
     _chrome.dispose();
@@ -5605,6 +5613,7 @@ class _ReaderPageState extends State<ReaderPage>
     if (index < 0 || index >= _novel.chapters.length) {
       return;
     }
+    _selection.clear();
     _pagedTurn = 0;
     if (!listeningFollow) _suspendListeningFollow();
     _clearBookmarkLanding();
@@ -5652,6 +5661,7 @@ class _ReaderPageState extends State<ReaderPage>
         _novel.chapters.isEmpty) {
       return;
     }
+    _selection.clear();
     var catalogueRevision = _novel.chapters.first.revision;
     final canResplitTxt =
         _local != null &&
@@ -5671,6 +5681,10 @@ class _ReaderPageState extends State<ReaderPage>
           cache: widget.repository is OfflineNovelRepository
               ? (widget.repository as OfflineNovelRepository).cache
               : null,
+          onPickUnderline: _ready && _currentContent != null
+              ? _pickChapterTextInMarksSheet
+              : null,
+          onEditMark: _editBookmarkAnnotation,
           onConfigureTocRule: canResplitTxt
               ? (customPattern, maxChapterChars) async {
                   final updated = await _local!.resplitTxtChapters(
@@ -5800,7 +5814,25 @@ class _ReaderPageState extends State<ReaderPage>
     }
   }
 
-  void _tapAt(Offset position, Size size) {
+  void _tapAt(Offset position, Size size, {Offset? globalPosition}) {
+    if (_selection.value) {
+      _selection.clear();
+      return;
+    }
+    if (globalPosition != null) {
+      final hit = _selection.hitOffsetAt(globalPosition);
+      if (hit != null) {
+        final mark = _underlineBookmarkAt(
+          hit.paragraph,
+          hit.offset,
+          chapterId: hit.chapter,
+        );
+        if (mark != null) {
+          unawaited(_editBookmarkAnnotation(mark));
+          return;
+        }
+      }
+    }
     final prefs = widget.state.readerPreferences;
     if (prefs.edgeDeadZone > 0 &&
         (position.dx < prefs.edgeDeadZone ||
@@ -5830,7 +5862,276 @@ class _ReaderPageState extends State<ReaderPage>
     }
   }
 
+  ReadingPosition? _positionForParagraph(int paragraphIndex, int startOffset) {
+    final content = _currentContent;
+    if (content == null ||
+        _novel.chapters.isEmpty ||
+        paragraphIndex < 0 ||
+        paragraphIndex >= content.paragraphs.length) {
+      return _currentPosition(bookmark: true);
+    }
+    final base = _currentPosition(bookmark: true);
+    final chapter = _novel.chapters[_chapter];
+    final length = content.paragraphs[paragraphIndex].length;
+    final fraction = length <= 0
+        ? 0.0
+        : (startOffset / length).clamp(0.0, 1.0);
+    return ReadingPosition(
+      chapter: _chapter,
+      chapterId: chapter.id,
+      revision: chapter.revision,
+      contentRevision: content.revision,
+      textOffset: paragraphTextOffset(content.paragraphs, paragraphIndex),
+      offset: base?.offset ?? 0,
+      fraction: base?.fraction ?? 0,
+      fontSize: widget.state.fontSize,
+      lineHeight: widget.state.lineHeight,
+      width: base?.width ?? _layoutWidth,
+      updatedAt: DateTime.now().millisecondsSinceEpoch,
+      paragraphIndex: paragraphIndex,
+      paragraphFraction: fraction,
+      textScale: _textScale,
+      typeface: _layoutFontId,
+    );
+  }
+
+  List<ReaderUnderlineRange> _selectionToUnderlineRanges(
+    ReaderQuoteSelection selection,
+  ) {
+    if (_novel.chapters.isEmpty) return const [];
+    final fallbackChapterId = _novel.chapters[_chapter].id;
+    final contentRevision = _currentContent?.revision ?? '';
+    final byChapter = <int, List<ReaderQuoteRange>>{};
+    for (final range in selection.ranges) {
+      final chapterId = range.chapter ?? fallbackChapterId;
+      (byChapter[chapterId] ??= []).add(range);
+    }
+    final out = <ReaderUnderlineRange>[];
+    for (final entry in byChapter.entries) {
+      final ranges = entry.value
+        ..sort((a, b) => a.paragraph != b.paragraph
+            ? a.paragraph.compareTo(b.paragraph)
+            : a.start.compareTo(b.start));
+      final first = ranges.first;
+      final last = ranges.last;
+      final candidate = ReaderUnderlineRange(
+        chapterId: entry.key,
+        startParagraph: first.paragraph,
+        startOffset: first.start,
+        endParagraph: last.paragraph,
+        endOffset: last.end,
+        contentRevision: contentRevision,
+      );
+      if (candidate.isValid) out.add(candidate);
+    }
+    return canonicalReaderUnderlineRanges(out);
+  }
+
+  ReaderBookmark? _underlineBookmarkAt(
+    int paragraph,
+    int offset, {
+    int? chapterId,
+  }) {
+    if (_novel.chapters.isEmpty) return null;
+    final targetChapterId = chapterId ?? _novel.chapters[_chapter].id;
+    for (final mark in widget.state.bookmarksFor(_novel.id)) {
+      if (!mark.isUnderline) continue;
+      for (final range in mark.underlineRanges) {
+        if (range.chapterId != targetChapterId) continue;
+        if (paragraph < range.startParagraph ||
+            paragraph > range.endParagraph) {
+          continue;
+        }
+        if (paragraph == range.startParagraph && offset < range.startOffset) {
+          continue;
+        }
+        if (paragraph == range.endParagraph && offset >= range.endOffset) {
+          continue;
+        }
+        return mark;
+      }
+    }
+    return null;
+  }
+
+  Future<ReaderAnnotationContext?> _annotationContext(
+    List<ReaderUnderlineRange> ranges,
+    ReadingPosition anchor,
+  ) async {
+    final offline = await loadOfflineReaderAnnotationContext(
+      repository: widget.repository,
+      state: widget.state,
+      novelId: _novel.id,
+      ranges: ranges,
+      anchor: anchor,
+      novel: _novel,
+    );
+    if (offline != null) return offline;
+    final content = _currentContent;
+    if (content == null || _novel.chapters.isEmpty) return null;
+    final chapter = _novel.chapters[_chapter];
+    return ReaderAnnotationContext(
+      novelId: _novel.id,
+      novel: _novel,
+      chapters: [
+        ReaderAnnotationChapterSource(
+          chapterId: chapter.id,
+          title: chapter.title,
+          content: content,
+        ),
+      ],
+    );
+  }
+
+  Future<void> _editBookmarkAnnotation(ReaderBookmark mark) async {
+    final updated = await showReaderAnnotationEditor(
+      context,
+      state: widget.state,
+      novelId: _novel.id,
+      novel: _novel,
+      bookmark: mark,
+      rangeContextResolver: _annotationContext,
+    );
+    if (mounted && updated != null) {
+      showNovelFeedback(context, '已更新标记与批注');
+    }
+  }
+
+  Future<void> _pickChapterTextInMarksSheet() async {
+    final content = _currentContent;
+    if (content == null ||
+        content.paragraphs.isEmpty ||
+        _novel.chapters.isEmpty) {
+      return;
+    }
+    final currentPos = _currentPosition(bookmark: true);
+    var paragraphIndex = (currentPos?.paragraphIndex ?? 0).clamp(
+      0,
+      content.paragraphs.length - 1,
+    );
+    for (var i = 0; i < content.paragraphs.length; i++) {
+      final candidate = (paragraphIndex + i) % content.paragraphs.length;
+      final text = content.paragraphs[candidate];
+      if (text.trim().isNotEmpty && readerIllustrationUrl(text) == null) {
+        paragraphIndex = candidate;
+        break;
+      }
+    }
+    final anchor = _positionForParagraph(paragraphIndex, 0);
+    if (anchor == null) return;
+    try {
+      final ctx = await _annotationContext(const [], anchor);
+      if (!mounted || ctx == null) return;
+      final seedChange = ctx.paragraphAt(anchor);
+      final projection = ctx.project(
+        ranges: seedChange.ranges,
+        anchor: anchor,
+      );
+      final picked = await showReaderTextRangePicker(
+        context: context,
+        text: projection.text,
+        initialRange: projection.initialRange,
+        title: '选字划线 / 复制片段',
+        scopeLabel: projection.scopeLabel,
+        confirmLabel: '添加划线',
+        reduceMotion: widget.state.reduceMotion,
+        maxSelectionCodeUnits: 12000,
+      );
+      if (!mounted || picked == null) return;
+      final change = projection.apply(picked);
+      final first = change.ranges.first;
+      final pos = _positionForParagraph(
+        first.startParagraph,
+        first.startOffset,
+      );
+      if (pos == null) return;
+      await widget.state.addUnderline(
+        novel: _novel,
+        position: pos,
+        ranges: change.ranges,
+        quote: change.quote,
+      );
+      if (mounted) showNovelFeedback(context, '已添加划线');
+    } catch (error) {
+      if (mounted) {
+        showNovelFeedback(
+          context,
+          error is FormatException ? error.message : '划线未保存，请重试',
+        );
+      }
+    }
+  }
+
+  Future<void> _toggleSelectionUnderline(ReaderQuoteSelection selection) async {
+    final ranges = _selectionToUnderlineRanges(selection);
+    if (ranges.isEmpty) return;
+    final first = selection.ranges.first;
+    final position = _positionForParagraph(first.paragraph, first.start);
+    if (position == null) return;
+    try {
+      final added = await widget.state.toggleUnderline(
+        novel: _novel,
+        position: position,
+        ranges: ranges,
+        quote: selection.quote,
+      );
+      if (!mounted) return;
+      showNovelFeedback(context, added ? '已添加划线' : '已取消划线');
+    } catch (_) {
+      if (mounted) showNovelFeedback(context, '划线未保存，请重试');
+    }
+  }
+
+  Future<void> _annotateSelection(ReaderQuoteSelection selection) async {
+    final ranges = _selectionToUnderlineRanges(selection);
+    if (ranges.isEmpty) return;
+    final first = selection.ranges.first;
+    final position = _positionForParagraph(first.paragraph, first.start);
+    if (position == null) return;
+    final mark = await showReaderAnnotationEditor(
+      context,
+      state: widget.state,
+      novelId: _novel.id,
+      novel: _novel,
+      position: position,
+      ranges: ranges,
+      quote: selection.quote,
+      initialStyle: ReaderMarkStyle.underline,
+      rangeContextResolver: _annotationContext,
+    );
+    if (mounted && mark != null) {
+      showNovelFeedback(context, '已保存标记与批注');
+    }
+  }
+
+  Future<void> _bookmarkSelection(ReaderQuoteSelection selection) async {
+    final first = selection.ranges.first;
+    final position = _positionForParagraph(first.paragraph, first.start);
+    if (position == null) return;
+    try {
+      final mark = await widget.state.addBookmark(
+        novel: _novel,
+        position: position,
+        quote: selection.quote,
+      );
+      if (!mounted) return;
+      if (mark != null) {
+        _activeBookmarkId = mark.id;
+        showNovelFeedback(context, '已添加摘录书签');
+      }
+    } catch (_) {
+      if (mounted) showNovelFeedback(context, '书签保存失败，请重试');
+    }
+  }
+
+  Future<void> _purifySelection(ReaderQuoteSelection selection) async {
+    final first = selection.ranges.first;
+    final position = _positionForParagraph(first.paragraph, first.start);
+    await _openPurificationInChapter(position, selection.quote);
+  }
+
   void _pageBy(int direction) {
+    _selection.clear();
     if (_paginated) {
       if (_ready &&
           !_toolsOpen &&
@@ -5961,20 +6262,45 @@ class _ReaderPageState extends State<ReaderPage>
               ),
       );
     }
-    return ReaderHighlightText(
-      text: ReaderPurificationStore.shared.purifyParagraph(
-        paragraphs[index],
-        bookId: _novel.id,
-        chapterIndex: _chapter,
-        paragraphIndex: index,
-        chapterTitle: _chapter >= 0 && _chapter < _novel.chapters.length
-            ? _novel.chapters[_chapter].title
-            : null,
-        isFirstParagraph: index == 0,
+    final purified = ReaderPurificationStore.shared.purifyParagraph(
+      paragraphs[index],
+      bookId: _novel.id,
+      chapterIndex: _chapter,
+      paragraphIndex: index,
+      chapterTitle: _chapter >= 0 && _chapter < _novel.chapters.length
+          ? _novel.chapters[_chapter].title
+          : null,
+      isFirstParagraph: index == 0,
+    );
+    final chapterId = _chapter >= 0 && _chapter < _novel.chapters.length
+        ? _novel.chapters[_chapter].id
+        : null;
+    return ReaderSelectionFragment(
+      paragraph: index,
+      chapter: chapterId,
+      text: purified,
+      child: AnimatedBuilder(
+        animation: widget.state.underlineChanges,
+        builder: (context, _) {
+          final annotations = chapterId == null
+              ? const <ReaderAnnotationRange>[]
+              : widget.state.annotationsFor(_novel.id, chapterId: chapterId);
+          final marks = annotations.isEmpty
+              ? const <ReaderTextMark>[]
+              : clipReaderParagraphMarks(
+                  annotations,
+                  paragraph: index,
+                  textLength: purified.length,
+                );
+          return ReaderHighlightText(
+            text: purified,
+            index: index,
+            match: _findMatch,
+            style: style,
+            marks: marks,
+          );
+        },
       ),
-      index: index,
-      match: _findMatch,
-      style: style,
     );
   }
 
@@ -6600,14 +6926,22 @@ class _ReaderPageState extends State<ReaderPage>
                             enabled:
                                 widget.state.readerPreferences.volumePaging,
                             onPage: _pageBy,
-                            child: GestureDetector(
-                              key: const ValueKey('reader-content-tap'),
-                              behavior: HitTestBehavior.translucent,
-                              onTapUp: (details) => _tapAt(
-                                details.localPosition,
-                                context.size ?? MediaQuery.sizeOf(context),
+                            child: ReaderSelection(
+                              controller: _selection,
+                              onUnderline: _toggleSelectionUnderline,
+                              onAnnotate: _annotateSelection,
+                              onBookmark: _bookmarkSelection,
+                              onPurify: _purifySelection,
+                              child: GestureDetector(
+                                key: const ValueKey('reader-content-tap'),
+                                behavior: HitTestBehavior.translucent,
+                                onTapUp: (details) => _tapAt(
+                                  details.localPosition,
+                                  context.size ?? MediaQuery.sizeOf(context),
+                                  globalPosition: details.globalPosition,
+                                ),
+                                child: _article(context, chapter, dark),
                               ),
-                              child: _article(context, chapter, dark),
                             ),
                           ),
                         ),
@@ -6768,7 +7102,7 @@ class _ReaderPageState extends State<ReaderPage>
 
   /// 横排翻页 body (design decision 6). Uses the paged engine that
   /// shipped unused in v1.7.1; scroll-only features (find landing, listening
-  /// follow, underline rendering) stay in 上下滚动.
+  /// follow) stay in 上下滚动.
   Widget _pagedArticle(
     BuildContext context,
     ReaderContent content,
@@ -6804,59 +7138,77 @@ class _ReaderPageState extends State<ReaderPage>
     }
     final restore = _pagedRestore;
     final chapterIndex = _chapter;
-    return ReaderPagedView(
-      key: ValueKey(('reader-paged', prefs.mode, _novel.id)),
-      content: content,
-      preferences: prefs,
-      style: style,
-      controller: _paged,
-      title: _novel.chapters[chapterIndex].title,
-      bookTitle: _novel.title,
-      chrome: _chrome,
-      padding: EdgeInsets.fromLTRB(
-        prefs.marginLeft ?? prefs.margin,
-        media.top + FrostedHeader.toolbarHeight + 8,
-        prefs.marginRight ?? prefs.margin,
-        media.bottom + 28,
-      ),
-      pageBuilder: (page) => readerPageBody(page, style),
-      pageBuilderKey: (style, prefs.indent),
-      chapterKey: (_novel.id, chapterIndex),
-      chapterTurnDirection: _pagedTurn,
-      position: restore,
-      reduceMotion:
-          widget.state.reduceMotion || MediaQuery.disableAnimationsOf(context),
-      onReady: () {
-        if (!mounted || chapterIndex != _chapter) return;
-        _restorePending = null;
-        _restoring = false;
-        _updateProgressFromScroll();
-      },
-      onChanged: () {
-        if (!mounted || chapterIndex != _chapter) return;
-        _updateProgressFromScroll();
-        _idleSave?.cancel();
-        _idleSave = Timer(const Duration(milliseconds: 160), () {
-          _idleSave = null;
-          if (mounted && chapterIndex == _chapter) {
-            _savePosition(notify: false);
-          }
-        });
-      },
-      onUserScroll: () {
-        _suspendListeningFollow(userDrag: true);
-        _clearBookmarkLanding();
-      },
-      onBoundary: (direction) {
-        final target = chapterIndex + direction.sign;
-        if (target < 0 || target >= _novel.chapters.length) {
-          showNovelFeedback(context, direction < 0 ? '已是第一章' : '已是最后一章');
-          return;
-        }
-        _go(target);
-        // _go resets the turn; a boundary turn keeps its direction so the
-        // previous chapter opens on its last page.
-        _pagedTurn = direction.sign;
+    final chapterId = _novel.chapters[chapterIndex].id;
+    return AnimatedBuilder(
+      animation: widget.state.underlineChanges,
+      builder: (context, _) {
+        final annotations = widget.state.annotationsFor(
+          _novel.id,
+          chapterId: chapterId,
+        );
+        return ReaderPagedView(
+          key: ValueKey(('reader-paged', prefs.mode, _novel.id)),
+          content: content,
+          preferences: prefs,
+          style: style,
+          controller: _paged,
+          title: _novel.chapters[chapterIndex].title,
+          bookTitle: _novel.title,
+          chrome: _chrome,
+          padding: EdgeInsets.fromLTRB(
+            prefs.marginLeft ?? prefs.margin,
+            media.top + FrostedHeader.toolbarHeight + 8,
+            prefs.marginRight ?? prefs.margin,
+            media.bottom + 28,
+          ),
+          pageBuilder: (page) => readerPageBody(
+            page,
+            style,
+            chapterId: chapterId,
+            annotations: annotations,
+          ),
+          pageBuilderKey: (style, prefs.indent, annotations),
+          chapterKey: (_novel.id, chapterIndex),
+          chapterTurnDirection: _pagedTurn,
+          position: restore,
+          reduceMotion:
+              widget.state.reduceMotion ||
+              MediaQuery.disableAnimationsOf(context),
+          onReady: () {
+            if (!mounted || chapterIndex != _chapter) return;
+            _restorePending = null;
+            _restoring = false;
+            _updateProgressFromScroll();
+          },
+          onChanged: () {
+            if (!mounted || chapterIndex != _chapter) return;
+            _selection.clear();
+            _updateProgressFromScroll();
+            _idleSave?.cancel();
+            _idleSave = Timer(const Duration(milliseconds: 160), () {
+              _idleSave = null;
+              if (mounted && chapterIndex == _chapter) {
+                _savePosition(notify: false);
+              }
+            });
+          },
+          onUserScroll: () {
+            _selection.clear();
+            _suspendListeningFollow(userDrag: true);
+            _clearBookmarkLanding();
+          },
+          onBoundary: (direction) {
+            final target = chapterIndex + direction.sign;
+            if (target < 0 || target >= _novel.chapters.length) {
+              showNovelFeedback(context, direction < 0 ? '已是第一章' : '已是最后一章');
+              return;
+            }
+            _go(target);
+            // _go resets the turn; a boundary turn keeps its direction so the
+            // previous chapter opens on its last page.
+            _pagedTurn = direction.sign;
+          },
+        );
       },
     );
   }
@@ -7580,44 +7932,6 @@ class ReaderFollowScroll {
     WidgetsBinding.instance.ensureVisualUpdate();
     return frame;
   }
-}
-
-/// Shared archive frame used for both bookmark landing and saved outlines.
-/// These are paint outsets, so marking never changes reading line breaks.
-Rect readerRegistrationBounds(Rect textBounds) => Rect.fromLTRB(
-  textBounds.left - 8,
-  textBounds.top - 3,
-  textBounds.right + 8,
-  textBounds.bottom + 3,
-);
-
-/// Draws the same restrained corner rule without adding another UI surface.
-void paintReaderRegistrationFrame(
-  Canvas canvas,
-  Rect rect, {
-  required Color ink,
-  Color? fill,
-}) {
-  if (fill != null) {
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        rect,
-        const Radius.circular(ArchiveDesign.panelRadius),
-      ),
-      Paint()..color = fill,
-    );
-  }
-  final rule = Paint()
-    ..color = ink
-    ..strokeWidth = 1.3
-    ..style = PaintingStyle.stroke;
-  canvas.drawLine(rect.topLeft, rect.bottomLeft, rule);
-  canvas.drawLine(rect.topLeft, rect.topLeft + const Offset(7, 0), rule);
-  canvas.drawLine(
-    rect.bottomRight - const Offset(7, 0),
-    rect.bottomRight,
-    rule,
-  );
 }
 
 /// A temporary archive registration plane, never a text glow or blur layer.

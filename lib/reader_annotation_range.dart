@@ -34,7 +34,7 @@ class ReaderAnnotationContext {
     required List<ReaderAnnotationChapterSource> chapters,
     this.novel,
   }) : chapters = List.unmodifiable(chapters) {
-    if (novelId <= 0 ||
+    if (novelId == 0 ||
         novel != null && novel!.id != novelId ||
         chapters.map((source) => source.chapterId).toSet().length !=
             chapters.length) {

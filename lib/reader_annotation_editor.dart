@@ -1,6 +1,8 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import 'app_interactions.dart';
 import 'app_ui.dart';
 import 'catalog.dart';
 import 'feature_pages.dart';
@@ -573,10 +575,31 @@ class _ReaderAnnotationEditorState extends State<ReaderAnnotationEditor> {
               ),
             ],
             const SizedBox(height: 8),
-            GlassTextButton(
-              key: const ValueKey('annotation-adjust-range'),
-              onPressed: _saving || _selectingRange ? null : _adjustRange,
-              child: AppText(_selectingRange ? '正在载入原文…' : '调整原文范围'),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                GlassTextButton(
+                  key: const ValueKey('annotation-adjust-range'),
+                  onPressed: _saving || _selectingRange ? null : _adjustRange,
+                  child: AppText(_selectingRange ? '正在载入原文…' : '调整原文范围'),
+                ),
+                if (_quote.trim().isNotEmpty)
+                  GlassTextButton(
+                    key: const ValueKey('annotation-copy-quote'),
+                    onPressed: _saving
+                        ? null
+                        : () async {
+                            final text = _quote.trim();
+                            if (text.isEmpty) return;
+                            await Clipboard.setData(ClipboardData(text: text));
+                            if (context.mounted) {
+                              showNovelFeedback(context, '已复制选中内容');
+                            }
+                          },
+                    child: const AppText('复制原文'),
+                  ),
+              ],
             ),
             if (_rangeChange != null)
               const Padding(

@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'app_interactions.dart';
 import 'app_ui.dart';
 
 
@@ -464,6 +465,28 @@ class _ReaderTextRangePickerState extends State<ReaderTextRangePicker> {
                   ),
                 ),
               ),
+            ),
+            TextButton(
+              key: const ValueKey('reader-text-picker-copy'),
+              style: TextButton.styleFrom(
+                minimumSize: const Size(0, 40),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              onPressed: _range == null
+                  ? null
+                  : () async {
+                      final range = _range!;
+                      final selected = widget.text
+                          .substring(range.start, range.end)
+                          .trim();
+                      if (selected.isEmpty) return;
+                      await Clipboard.setData(ClipboardData(text: selected));
+                      if (context.mounted) {
+                        showNovelFeedback(context, '已复制选中内容');
+                      }
+                    },
+              child: const AppText('复制'),
             ),
             TextButton(
               style: TextButton.styleFrom(

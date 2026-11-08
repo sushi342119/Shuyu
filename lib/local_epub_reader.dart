@@ -15,10 +15,13 @@ import 'local_epub.dart';
 import 'reader_purification.dart';
 import 'reading_activity.dart';
 import 'local_library.dart';
+import 'reader_annotation_editor.dart';
 import 'reader_catalogue.dart';
 import 'reader_chrome.dart';
+import 'reader_selection.dart';
 import 'reader_skeleton.dart';
 import 'reader_tools.dart';
+import 'reader_underline.dart';
 
 class LocalEpubReaderPage extends StatefulWidget {
   const LocalEpubReaderPage({
@@ -66,6 +69,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
 
   // keepScrollOffset: false —— 每章换新 ListView，不能让 PageStorage 把上一章偏移带过来。
   final ScrollController _scroll = ScrollController(keepScrollOffset: false);
+  final ReaderSelectionController _selection = ReaderSelectionController();
   final ValueNotifier<double> _progressValue = ValueNotifier(0);
   bool _progressDragging = false;
   bool _progressPointerCancelled = false;
@@ -322,6 +326,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
   void _goTo(int chapter, {bool restart = false}) {
     if (chapter < 0 || chapter >= _total) return;
     if (chapter == _chapter && !restart) return;
+    _selection.clear();
     _jumpTicket++;
     _idleSave?.cancel();
     _idleSave = null;
@@ -364,24 +369,173 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
   }
 
   void _toggleChrome() {
+    if (_selection.value) {
+      _selection.clear();
+      return;
+    }
     if (_total > 0 && !_sheetOpen) _showChrome(!_chromeTarget);
+  }
+
+  void _tapContent(TapUpDetails details) {
+    if (_selection.value) {
+      _selection.clear();
+      return;
+    }
+    final hit = _selection.hitOffsetAt(details.globalPosition);
+    if (hit != null && _total > 0) {
+      final targetChapterId = hit.chapter ?? _novel.chapters[_chapter].id;
+      for (final mark in widget.state.bookmarksFor(_novel.id)) {
+        if (!mark.isUnderline) continue;
+        for (final range in mark.underlineRanges) {
+          if (range.chapterId != targetChapterId) continue;
+          if (hit.paragraph < range.startParagraph ||
+              hit.paragraph > range.endParagraph) {
+            continue;
+          }
+          if (hit.paragraph == range.startParagraph &&
+              hit.offset < range.startOffset) {
+            continue;
+          }
+          if (hit.paragraph == range.endParagraph &&
+              hit.offset >= range.endOffset) {
+            continue;
+          }
+          unawaited(_editMark(mark));
+          return;
+        }
+      }
+    }
+    _toggleChrome();
+  }
+
+  ReadingPosition _positionForBlock(int paragraphIndex) {
+    final chapter = _novel.chapters[_chapter];
+    return ReadingPosition(
+      chapter: _chapter,
+      chapterId: chapter.id,
+      revision: chapter.revision,
+      offset: _hasLayout ? _scroll.offset : 0,
+      fraction: _chapterRatio,
+      fontSize: widget.state.fontSize,
+      lineHeight: widget.state.lineHeight,
+      width: MediaQuery.sizeOf(context).width,
+      updatedAt: DateTime.now().millisecondsSinceEpoch,
+      paragraphIndex: paragraphIndex,
+    );
+  }
+
+  List<ReaderUnderlineRange> _selectionToUnderlineRanges(
+    ReaderQuoteSelection selection,
+  ) {
+    if (_total == 0) return const [];
+    final chapterId = _novel.chapters[_chapter].id;
+    final ranges = List.of(selection.ranges)
+      ..sort((a, b) => a.paragraph != b.paragraph
+          ? a.paragraph.compareTo(b.paragraph)
+          : a.start.compareTo(b.start));
+    if (ranges.isEmpty) return const [];
+    final first = ranges.first;
+    final last = ranges.last;
+    final candidate = ReaderUnderlineRange(
+      chapterId: chapterId,
+      startParagraph: first.paragraph,
+      startOffset: first.start,
+      endParagraph: last.paragraph,
+      endOffset: last.end,
+    );
+    return candidate.isValid
+        ? canonicalReaderUnderlineRanges([candidate])
+        : const [];
+  }
+
+  Future<void> _toggleSelectionUnderline(ReaderQuoteSelection selection) async {
+    final ranges = _selectionToUnderlineRanges(selection);
+    if (ranges.isEmpty) return;
+    try {
+      final added = await widget.state.toggleUnderline(
+        novel: _novel,
+        position: _positionForBlock(selection.ranges.first.paragraph),
+        ranges: ranges,
+        quote: selection.quote,
+      );
+      if (mounted) {
+        showNovelFeedback(context, added ? '已添加划线' : '已取消划线');
+      }
+    } catch (_) {
+      if (mounted) showNovelFeedback(context, '划线未保存，请重试');
+    }
+  }
+
+  Future<void> _annotateSelection(ReaderQuoteSelection selection) async {
+    final ranges = _selectionToUnderlineRanges(selection);
+    if (ranges.isEmpty) return;
+    final mark = await showReaderAnnotationEditor(
+      context,
+      state: widget.state,
+      novelId: _novel.id,
+      novel: _novel,
+      position: _positionForBlock(selection.ranges.first.paragraph),
+      ranges: ranges,
+      quote: selection.quote,
+      initialStyle: ReaderMarkStyle.underline,
+    );
+    if (mounted && mark != null) {
+      showNovelFeedback(context, '已保存标记与批注');
+    }
+  }
+
+  Future<void> _bookmarkSelection(ReaderQuoteSelection selection) async {
+    try {
+      final mark = await widget.state.addBookmark(
+        novel: _novel,
+        position: _positionForBlock(selection.ranges.first.paragraph),
+        quote: selection.quote,
+      );
+      if (mounted && mark != null) {
+        showNovelFeedback(context, '已添加摘录书签');
+      }
+    } catch (_) {
+      if (mounted) showNovelFeedback(context, '书签保存失败，请重试');
+    }
+  }
+
+  Future<void> _editMark(ReaderBookmark mark) async {
+    final updated = await showReaderAnnotationEditor(
+      context,
+      state: widget.state,
+      novelId: _novel.id,
+      novel: _novel,
+      bookmark: mark,
+    );
+    if (mounted && updated != null) {
+      showNovelFeedback(context, '已更新标记与批注');
+    }
   }
 
   Future<void> _catalogue() async {
     if (_sheetOpen || _total == 0) return;
+    _selection.clear();
     _sheetOpen = true;
     _syncReadingActivity();
     try {
-      final index = await showJellySheet<int>(
+      final picked = await showJellySheet<Object>(
         context: context,
         reduceMotion: widget.state.reduceMotion,
-        builder: (context) => ReaderCatalogue(
+        builder: (context) => ReaderMarksSheet(
+          state: widget.state,
           novel: _novel,
           currentChapter: _chapter,
           cache: null,
+          onEditMark: _editMark,
         ),
       );
-      if (mounted && index != null) _goTo(index, restart: true);
+      if (!mounted) return;
+      if (picked is ReaderBookmark) {
+        final chapter = widget.state.chapterForPosition(_novel, picked.position);
+        if (chapter != null) _goTo(chapter, restart: true);
+      } else if (picked is int) {
+        _goTo(picked, restart: true);
+      }
     } finally {
       _sheetOpen = false;
       _syncReadingActivity();
@@ -433,6 +587,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
 
   Future<void> _settings({bool bookmarks = false}) async {
     if (_sheetOpen || _total == 0) return;
+    _selection.clear();
     _sheetOpen = true;
     _syncReadingActivity();
     try {
@@ -511,6 +666,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       );
     }
     _idleSave?.cancel();
+    _selection.dispose();
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     _progressValue.dispose();
@@ -570,21 +726,27 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
         child: Stack(
           children: [
             Positioned.fill(
-              child: GestureDetector(
-                key: const ValueKey('reader-content-tap'),
-                behavior: HitTestBehavior.translucent,
-                onTap: _toggleChrome,
-                child: ColoredBox(
-                  color: Theme.of(context).colorScheme.surface,
-                  child: _total == 0
-                      ? _message('暂无章节')
-                      : AnimatedBuilder(
-                          animation: Listenable.merge([
-                            widget.state.readerSettingsChanges,
-                            ReaderPurificationStore.shared,
-                          ]),
-                          builder: (context, _) => _content(context),
-                        ),
+              child: ReaderSelection(
+                controller: _selection,
+                onUnderline: _toggleSelectionUnderline,
+                onAnnotate: _annotateSelection,
+                onBookmark: _bookmarkSelection,
+                child: GestureDetector(
+                  key: const ValueKey('reader-content-tap'),
+                  behavior: HitTestBehavior.translucent,
+                  onTapUp: _tapContent,
+                  child: ColoredBox(
+                    color: Theme.of(context).colorScheme.surface,
+                    child: _total == 0
+                        ? _message('暂无章节')
+                        : AnimatedBuilder(
+                            animation: Listenable.merge([
+                              widget.state.readerSettingsChanges,
+                              ReaderPurificationStore.shared,
+                            ]),
+                            builder: (context, _) => _content(context),
+                          ),
+                  ),
                 ),
               ),
             ),
@@ -811,7 +973,12 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                   ),
                 );
               }
-              return _block(data.blocks[index - 1], data.images, cacheWidth);
+              return _block(
+                index - 1,
+                data.blocks[index - 1],
+                data.images,
+                cacheWidth,
+              );
             },
           ),
         );
@@ -820,6 +987,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
   }
 
   Widget _block(
+    int blockIndex,
     EpubBlock block,
     Map<String, Uint8List> images,
     int cacheWidth,
@@ -839,18 +1007,59 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
               ),
       );
     }
+    final purified = ReaderPurificationStore.shared.purifyParagraph(
+      block.text ?? '',
+      bookId: _novel.id,
+      chapterIndex: _chapter,
+    );
+    final chapterId = _total > 0 ? _novel.chapters[_chapter].id : null;
+    final style = TextStyle(
+      fontSize: widget.state.fontSize,
+      height: widget.state.lineHeight,
+      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: .87),
+    );
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
-      child: Text(
-        ReaderPurificationStore.shared.purifyParagraph(
-          block.text ?? '',
-          bookId: _novel.id,
-          chapterIndex: _chapter,
-        ),
-        style: TextStyle(
-          fontSize: widget.state.fontSize,
-          height: widget.state.lineHeight,
-          color: Theme.of(context).colorScheme.onSurface.withValues(alpha: .87),
+      child: ReaderSelectionFragment(
+        paragraph: blockIndex,
+        chapter: chapterId,
+        text: purified,
+        child: AnimatedBuilder(
+          animation: widget.state.underlineChanges,
+          builder: (context, _) {
+            final annotations = chapterId == null
+                ? const <ReaderAnnotationRange>[]
+                : widget.state.annotationsFor(_novel.id, chapterId: chapterId);
+            final marks = annotations.isEmpty
+                ? const <ReaderTextMark>[]
+                : clipReaderParagraphMarks(
+                    annotations,
+                    paragraph: blockIndex,
+                    textLength: purified.length,
+                  );
+            if (marks.isEmpty) {
+              return Text(purified, style: style);
+            }
+            final dark = Theme.of(context).brightness == Brightness.dark;
+            final baseColor =
+                style.color ?? Theme.of(context).colorScheme.onSurface;
+            final spans = buildReaderMarkedSpans(
+              text: purified,
+              marks: marks,
+              baseTextColor: baseColor,
+              dark: dark,
+            );
+            Widget child = Text.rich(TextSpan(children: spans), style: style);
+            if (marks.any((m) => m.style == ReaderMarkStyle.outline)) {
+              child = ReaderAnnotationOutlines(
+                marks: marks,
+                baseTextColor: baseColor,
+                dark: dark,
+                child: child,
+              );
+            }
+            return child;
+          },
         ),
       ),
     );

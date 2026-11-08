@@ -110,6 +110,9 @@ Future<ReaderAnnotationContext?> loadOfflineReaderAnnotationContext({
       (localBook == null ? null : localStore!.toNovel(localBook)) ??
       offline?.cache.book(novelId)?.novel ??
       state.cachedNovel(novelId);
+  if (localBook != null && novel != null && novel.chapters.isEmpty) {
+    novel = novel.withChapters(await localStore!.chapters(novelId));
+  }
   if (novel == null || novel.id != novelId || novel.chapters.isEmpty) {
     return null;
   }
@@ -118,7 +121,8 @@ Future<ReaderAnnotationContext?> loadOfflineReaderAnnotationContext({
   }
   final requiredIds = ranges.isEmpty
       ? <int>{
-          if (anchor.chapterId > 0)
+          if (anchor.chapterId >= 0 &&
+              novel.chapters.any((c) => c.id == anchor.chapterId))
             anchor.chapterId
           else if (anchor.chapter >= 0 &&
               anchor.chapter < novel.chapters.length)
