@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shuyu/bookmark_library_page.dart';
 import 'package:shuyu/catalog.dart';
 import 'package:shuyu/library_state.dart';
 import 'package:shuyu/pages.dart';
@@ -33,7 +34,7 @@ class _TestNovelRepository extends DemoNovelRepository {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('ReaderUnderlineRange and LibraryState support chapterId >= 0 (including local chapter 0)', () async {
+  test('ReaderUnderlineRange and LibraryState support chapterId >= 0 and overlapping toggle removal', () async {
     SharedPreferences.setMockInitialValues({});
     final state = await LibraryState.load();
     addTearDown(state.dispose);
@@ -79,11 +80,18 @@ void main() {
     expect(state.underlinesFor(localNovel.id, chapterId: 0), [range]);
     expect(state.annotationsFor(localNovel.id, chapterId: 0), hasLength(1));
 
+    const partialOverlap = ReaderUnderlineRange(
+      chapterId: 0,
+      startParagraph: 0,
+      startOffset: 1,
+      endParagraph: 0,
+      endOffset: 4,
+    );
     final removed = await state.toggleUnderline(
       novel: localNovel,
       position: position,
-      ranges: const [range],
-      quote: '春眠不觉晓，',
+      ranges: const [partialOverlap],
+      quote: '眠不觉',
     );
     expect(removed, isFalse);
     expect(state.underlinesFor(localNovel.id, chapterId: 0), isEmpty);
@@ -157,6 +165,7 @@ void main() {
 
     await tester.longPressAt(tester.getTopLeft(paragraph0) + const Offset(24, 12));
     await tester.pumpAndSettle();
+    expect(find.text('删除划线'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('reader-selection-copy')));
     await tester.pumpAndSettle();
     expect(clipboardText, isNotNull);
@@ -180,5 +189,82 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(ReaderAnnotationEditor), findsOneWidget);
     expect(find.byKey(const ValueKey('annotation-copy-quote')), findsOneWidget);
+    expect(find.byKey(const ValueKey('annotation-delete-mark')), findsOneWidget);
+  });
+
+  testWidgets('BookmarkLibraryPage cards expose direct delete buttons for bookmarks and underlines', (tester) async {
+    SharedPreferences.setMockInitialValues({'reduce_motion': true});
+    final state = await LibraryState.load();
+    addTearDown(state.dispose);
+
+    const novel = Novel(
+      id: 88,
+      title: '划线测试作品',
+      author: '测试作者',
+      genre: '文学',
+      summary: '测试删除书签与划线',
+      colors: [Color(0xFF222222), Color(0xFF444444)],
+      chapters: [
+        NovelChapter('第一章 晨光', '', id: 8801),
+      ],
+    );
+    const position = ReadingPosition(
+      chapter: 0,
+      chapterId: 8801,
+      offset: 0,
+      fraction: 0,
+      fontSize: 19,
+      width: 360,
+      updatedAt: 1,
+      paragraphIndex: 0,
+    );
+    final bookmark = await state.addBookmark(
+      novel: novel,
+      position: position,
+      quote: '春眠不觉晓',
+    );
+    final underline = await state.addUnderline(
+      novel: novel,
+      position: position,
+      ranges: const [
+        ReaderUnderlineRange(
+          chapterId: 8801,
+          startParagraph: 0,
+          startOffset: 6,
+          endParagraph: 0,
+          endOffset: 12,
+        ),
+      ],
+      quote: '处处闻啼鸟。',
+    );
+    expect(bookmark, isNotNull);
+    expect(state.bookmarksFor(novel.id), hasLength(2));
+
+    final repo = _TestNovelRepository(novel, '春眠不觉晓，处处闻啼鸟。');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BookmarkLibraryPage(
+          state: state,
+          repository: repo,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('划线测试作品'));
+    await tester.pumpAndSettle();
+
+    final deleteUnderline = find.byKey(ValueKey('bookmark-delete-${underline.id}'));
+    final deleteBookmark = find.byKey(ValueKey('bookmark-delete-${bookmark!.id}'));
+    expect(deleteUnderline, findsOneWidget);
+    expect(deleteBookmark, findsOneWidget);
+
+    await tester.tap(deleteUnderline);
+    await tester.pumpAndSettle();
+    expect(state.bookmarksFor(novel.id).map((m) => m.id), [bookmark.id]);
+
+    await tester.tap(deleteBookmark);
+    await tester.pumpAndSettle();
+    expect(state.bookmarksFor(novel.id), isEmpty);
   });
 }

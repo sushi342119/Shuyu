@@ -492,11 +492,23 @@ class _ReaderToolsState extends State<ReaderTools> {
                                       fontWeight: FontWeight.w500,
                                     ),
                                   ),
+                                  if (mark.quote.trim().isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      mark.quote.trim(),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Theme.of(context).colorScheme.onSurface,
+                                      ),
+                                    ),
+                                  ],
                                   const SizedBox(height: 5),
                                   Text(
                                     chapter == null
                                         ? '章节已从目录移除'
-                                        : '第 ${chapter + 1} 章 · ${(mark.position.fraction * 100).round()}%',
+                                        : '第 ${chapter + 1} 章 · ${(mark.position.fraction * 100).round()}% · ${mark.kindLabel}',
                                     style: TextStyle(
                                       fontSize: 12,
                                       color: Theme.of(
@@ -510,8 +522,9 @@ class _ReaderToolsState extends State<ReaderTools> {
                           ),
                         ),
                         GlassIconButton(
+                          key: ValueKey('reader-tool-bookmark-delete-${mark.id}'),
                           icon: CupertinoIcons.trash,
-                          label: '删除书签 ${mark.id}',
+                          label: '删除${mark.kindLabel} ${mark.id}',
                           onPressed: () => _remove(mark),
                         ),
                       ],

@@ -608,6 +608,35 @@ int _comparePoint(int aParagraph, int aOffset, int bParagraph, int bOffset) =>
     ? aOffset.compareTo(bOffset)
     : aParagraph.compareTo(bParagraph);
 
+/// Returns true when any range in [a] shares a chapter and character span with [b].
+bool readerUnderlineRangesOverlap(
+  Iterable<ReaderUnderlineRange> a,
+  Iterable<ReaderUnderlineRange> b,
+) {
+  for (final left in a) {
+    for (final right in b) {
+      if (left.chapterId != right.chapterId) continue;
+      if (_comparePoint(
+                left.startParagraph,
+                left.startOffset,
+                right.endParagraph,
+                right.endOffset,
+              ) <
+              0 &&
+          _comparePoint(
+                right.startParagraph,
+                right.startOffset,
+                left.endParagraph,
+                left.endOffset,
+              ) <
+              0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 bool _consistentRevisions(Iterable<ReaderUnderlineRange> ranges) {
   final revisions = <int, String>{};
   for (final range in ranges) {

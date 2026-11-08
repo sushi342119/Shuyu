@@ -599,6 +599,12 @@ class _ReaderAnnotationEditorState extends State<ReaderAnnotationEditor> {
                           },
                     child: const Text('复制原文'),
                   ),
+                if (widget.bookmark != null)
+                  GlassTextButton(
+                    key: const ValueKey('annotation-delete-mark'),
+                    onPressed: _saving ? null : _delete,
+                    child: Text('删除${widget.bookmark!.kindLabel}'),
+                  ),
               ],
             ),
             if (_rangeChange != null)

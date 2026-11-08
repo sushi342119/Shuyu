@@ -14,14 +14,13 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.9.2',
+  defaultValue: '1.9.3',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 76);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 77);
 const currentReleaseNotes = '''
-1. 阅读器交互与批注增强：支持正文长按选词、划线、复制、批注、书签与净化快捷操作及行内标记高亮渲染；支持从阅读页顶栏与工具栏再次点击直接取消当前位置书签。
-2. 本地章节切分与升级：支持识别行内紧跟句末标点的章节标题、带书名/前缀的章节标题及单 XHTML 合并多章的 EPUB 目录，并在启动时自动升级已有多章本地书籍目录。
-3. 书架、详情与发现页优化：书架标签筛选新增「未写标签」筛选项；本地书籍详情页支持直接点击书名或作者名内联修改，升级标签编辑器；「发现」页底部替换为书库与阅读概览卡片；修复阅读统计中本地书架书籍重复计入藏书总数的问题。
-4. 设置项整合与精简：将应用字体与阅读器字体统一收归「字体管理」页面，将触感反馈设置合并入「外观与性能」面板，并移除语言选择与 OpenCC 繁简转换相关冗余配置。
+1. 「书签与划线」页面新增一键删除按钮：在「我的 → 书签与划线」及阅读统计书签列表的每张书签与划线卡片底部新增垃圾桶删除按钮，无需进入二级批注编辑弹窗即可直接删除，并优化操作按钮间距。
+2. 阅读器选字工具栏支持「删除划线」与「删除书签」：在 TXT 与 EPUB 阅读器中选中已划线或已加书签的正文片段时，浮动工具栏自动显示「删除划线」或「删除书签」；支持选中已有划线的任意重叠片段一键取消划线，不再要求首尾字符完全一致。
+3. 批注面板与阅读工具栏书签列表优化：点击正文已有划线打开「书签与批注」面板时，在顶部原文操作栏直接提供「删除划线 / 删除书签」按钮；阅读器设置面板的书签列表新增摘录正文预览与类型标签展示。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

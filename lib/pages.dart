@@ -6576,7 +6576,51 @@ class _ReaderPageState extends State<ReaderPage>
     }
   }
 
+  bool _isSelectionUnderlined(ReaderQuoteSelection selection) {
+    final ranges = _selectionToUnderlineRanges(selection);
+    if (ranges.isEmpty) return false;
+    return widget.state.bookmarksFor(_novel.id).any(
+      (mark) =>
+          mark.isUnderline &&
+          readerUnderlineRangesOverlap(mark.underlineRanges, ranges),
+    );
+  }
+
+  ReaderBookmark? _selectionBookmarkMatch(ReaderQuoteSelection selection) {
+    final first = selection.ranges.firstOrNull;
+    if (first == null) return null;
+    final excerpt = selection.quote.trim();
+    for (final mark in widget.state.bookmarksFor(_novel.id)) {
+      if (mark.isUnderline ||
+          widget.state.chapterForPosition(_novel, mark.position) != _chapter) {
+        continue;
+      }
+      if (excerpt.isNotEmpty && mark.quote == excerpt) {
+        return mark;
+      }
+      if (mark.position.paragraphIndex == first.paragraph &&
+          (mark.quote.isEmpty || mark.quote == excerpt)) {
+        return mark;
+      }
+    }
+    return null;
+  }
+
+  bool _isSelectionBookmarked(ReaderQuoteSelection selection) =>
+      _selectionBookmarkMatch(selection) != null;
+
   Future<void> _bookmarkSelection(ReaderQuoteSelection selection) async {
+    final existing = _selectionBookmarkMatch(selection);
+    if (existing != null) {
+      try {
+        await widget.state.removeBookmark(_novel.id, existing.id);
+        if (_activeBookmarkId == existing.id) _clearBookmarkLanding();
+        if (mounted) showNovelFeedback(context, '已取消书签');
+      } catch (_) {
+        if (mounted) showNovelFeedback(context, '书签删除失败，请重试');
+      }
+      return;
+    }
     final first = selection.ranges.first;
     final position = _positionForParagraph(first.paragraph, first.start);
     if (position == null) return;
@@ -7029,12 +7073,14 @@ class _ReaderPageState extends State<ReaderPage>
     final matched = <ReaderBookmark>[];
     for (final mark in marks) {
       if (mark.isUnderline ||
-          mark.quote.isNotEmpty ||
           widget.state.chapterForPosition(_novel, mark.position) != _chapter) {
         continue;
       }
       if (mark.id == _activeBookmarkId) {
         matched.add(mark);
+        continue;
+      }
+      if (mark.quote.isNotEmpty) {
         continue;
       }
       if (_paginated) {
@@ -7425,8 +7471,10 @@ class _ReaderPageState extends State<ReaderPage>
                             child: ReaderSelection(
                               controller: _selection,
                               onUnderline: _toggleSelectionUnderline,
+                              isUnderlined: _isSelectionUnderlined,
                               onAnnotate: _annotateSelection,
                               onBookmark: _bookmarkSelection,
+                              isBookmarked: _isSelectionBookmarked,
                               onPurify: _purifySelection,
                               child: GestureDetector(
                                 key: const ValueKey('reader-content-tap'),

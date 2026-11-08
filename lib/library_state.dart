@@ -2324,14 +2324,17 @@ class LibraryState extends ChangeNotifier {
     await _queuePositionWrite(() async {
       final marks = _bookmarks[novel.id] ?? const <ReaderBookmark>[];
       final matching = marks.where((mark) {
-        return mark.isUnderline &&
-            listEquals(
-              canonicalReaderUnderlineRanges(
-                mark.underlineRanges,
-                chapterOrder: novel.chapters.map((chapter) => chapter.id),
-              ),
-              selected,
-            );
+        if (!mark.isUnderline) return false;
+        if (toggle) {
+          return readerUnderlineRangesOverlap(mark.underlineRanges, selected);
+        }
+        return listEquals(
+          canonicalReaderUnderlineRanges(
+            mark.underlineRanges,
+            chapterOrder: novel.chapters.map((chapter) => chapter.id),
+          ),
+          selected,
+        );
       }).toList();
       final existing = matching.firstOrNull;
       if (existing != null) {

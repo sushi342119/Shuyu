@@ -137,17 +137,21 @@ class ReaderSelection extends StatefulWidget {
     super.key,
     this.controller,
     this.onUnderline,
+    this.isUnderlined,
     this.onCopy,
     this.onAnnotate,
     this.onBookmark,
+    this.isBookmarked,
     this.onPurify,
     required this.child,
   });
   final ReaderSelectionController? controller;
   final ValueChanged<ReaderQuoteSelection>? onUnderline;
+  final bool Function(ReaderQuoteSelection)? isUnderlined;
   final ValueChanged<ReaderQuoteSelection>? onCopy;
   final ValueChanged<ReaderQuoteSelection>? onAnnotate;
   final ValueChanged<ReaderQuoteSelection>? onBookmark;
+  final bool Function(ReaderQuoteSelection)? isBookmarked;
   final ValueChanged<ReaderQuoteSelection>? onPurify;
   final Widget child;
 
@@ -223,6 +227,8 @@ class _ReaderSelectionState extends State<ReaderSelection> {
           contextMenuBuilder: (context, state) {
             final quote = _controller._selected();
             if (quote == null) return const SizedBox.shrink();
+            final underlined = widget.isUnderlined?.call(quote) ?? false;
+            final bookmarked = widget.isBookmarked?.call(quote) ?? false;
             return CustomSingleChildLayout(
               delegate: _ToolbarPosition(
                 anchor:
@@ -231,6 +237,8 @@ class _ReaderSelectionState extends State<ReaderSelection> {
                 padding: MediaQuery.paddingOf(context),
               ),
               child: _ReaderSelectionBar(
+                underlined: underlined,
+                bookmarked: bookmarked,
                 onUnderline: widget.onUnderline == null
                     ? null
                     : () {
@@ -283,12 +291,16 @@ class _ReaderSelectionState extends State<ReaderSelection> {
 
 class _ReaderSelectionBar extends StatelessWidget {
   const _ReaderSelectionBar({
+    this.underlined = false,
+    this.bookmarked = false,
     this.onUnderline,
     required this.onCopy,
     this.onAnnotate,
     this.onBookmark,
     this.onPurify,
   });
+  final bool underlined;
+  final bool bookmarked;
   final VoidCallback? onUnderline;
   final VoidCallback onCopy;
   final VoidCallback? onAnnotate;
@@ -299,12 +311,20 @@ class _ReaderSelectionBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final actions = <(Key, String, VoidCallback)>[
       if (onUnderline != null)
-        (const ValueKey('reader-selection-underline'), '划线', onUnderline!),
+        (
+          const ValueKey('reader-selection-underline'),
+          underlined ? '删除划线' : '划线',
+          onUnderline!,
+        ),
       (const ValueKey('reader-selection-copy'), '复制', onCopy),
       if (onAnnotate != null)
         (const ValueKey('reader-selection-annotate'), '批注', onAnnotate!),
       if (onBookmark != null)
-        (const ValueKey('reader-selection-bookmark'), '书签', onBookmark!),
+        (
+          const ValueKey('reader-selection-bookmark'),
+          bookmarked ? '删除书签' : '书签',
+          onBookmark!,
+        ),
       if (onPurify != null)
         (const ValueKey('reader-selection-purify'), '净化', onPurify!),
     ];

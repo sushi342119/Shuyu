@@ -412,6 +412,13 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
         ),
   );
 
+  Future<void> _delete(int id, ReaderBookmark mark) async {
+    await widget.state.removeBookmark(id, mark.id);
+    if (mounted) {
+      showNovelFeedback(context, '已删除${mark.kindLabel}');
+    }
+  }
+
   String _buildMarkdownExport() {
     final local = widget.state.localLibrary;
     final entries = libraryBookmarks(widget.state, books: local);
@@ -800,7 +807,7 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
                                     ),
                                   ),
                                   const SizedBox(width: 8),
-                                  if (mark.quote.isNotEmpty)
+                                  if (mark.quote.isNotEmpty) ...[
                                     GlassIconButton(
                                       key: ValueKey(
                                         'bookmark-share-${mark.id}',
@@ -845,6 +852,8 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
                                         );
                                       },
                                     ),
+                                    const SizedBox(width: 8),
+                                  ],
                                   GlassIconButton(
                                     icon: CupertinoIcons.folder,
                                     label:
@@ -856,10 +865,19 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
                                       mark,
                                     ),
                                   ),
+                                  const SizedBox(width: 8),
                                   GlassIconButton(
                                     icon: CupertinoIcons.square_pencil,
                                     label: '查看与编辑批注 ${mark.id}',
                                     onPressed: () => _edit(entry.novelId, mark),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  GlassIconButton(
+                                    key: ValueKey('bookmark-delete-${mark.id}'),
+                                    icon: CupertinoIcons.trash,
+                                    label: '删除${mark.kindLabel} ${mark.id}',
+                                    onPressed: () =>
+                                        _delete(entry.novelId, mark),
                                   ),
                                 ],
                               ),
