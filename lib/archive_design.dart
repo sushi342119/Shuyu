@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'app_language.dart';
 
 import 'archive_motion.dart';
 import 'library_reflow.dart';
@@ -166,7 +165,7 @@ class ArchiveMasthead extends StatelessWidget {
                 children: [
                   // Keep the navigation landmark immediately readable; the
                   // archive address below it performs the terminal assembly.
-                  AppText(
+                  Text(
                     title,
                     maxLines: 1,
                     style: const TextStyle(
@@ -205,7 +204,7 @@ class ArchiveCode extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final label = AppText(
+    final label = Text(
       text,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
@@ -294,7 +293,7 @@ class ArchiveSection extends StatelessWidget {
           ArchivePart(
             start: .16,
             end: .82,
-            child: AppText(
+            child: Text(
               title,
               style: const TextStyle(
                 fontSize: 18,
@@ -306,7 +305,7 @@ class ArchiveSection extends StatelessWidget {
           ),
           if (subtitle.isNotEmpty) ...[
             const SizedBox(height: 5),
-            AppText(
+            Text(
               subtitle,
               style: TextStyle(
                 fontSize: 12,
@@ -342,7 +341,7 @@ class ArchiveRouteTitle extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              AppText(
+              Text(
                 title,
                 textAlign: TextAlign.center,
                 maxLines: 1,

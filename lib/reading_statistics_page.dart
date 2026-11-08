@@ -193,7 +193,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
                 child: Row(
                   children: [
                     Expanded(
-                      child: AppText(
+                      child: Text(
                         module == ReadingReportModule.books
                             ? '阅读广度与相伴书单'
                             : module.label,
@@ -357,7 +357,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
             const ArchiveSection(title: '统计日期', code: 'READING / DATE RANGE'),
             if (_range.custom) ...[
               const SizedBox(height: 12),
-              AppText(_rangeCaption, style: _muted(sheet)),
+              Text(_rangeCaption, style: _muted(sheet)),
             ],
             const SizedBox(height: 14),
             for (final (index, period) in const [7, 30, 90, 365].indexed)
@@ -527,7 +527,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
                   children: [
                     ArchiveIcon(CupertinoIcons.hand_draw, size: 17),
                     SizedBox(width: 8),
-                    AppText(
+                    Text(
                       '本机累计',
                       style: TextStyle(
                         fontSize: 14,
@@ -547,7 +547,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
                         const ArchiveIcon(CupertinoIcons.clock, size: 17),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: AppText(
+                          child: Text(
                             _rangeCaption,
                             key: const ValueKey('statistics-range-caption'),
                             maxLines: 2,
@@ -576,7 +576,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
               children: [
                 ArchiveIcon(CupertinoIcons.slider_horizontal_3, size: 17),
                 SizedBox(width: 6),
-                AppText('视图'),
+                Text('视图'),
               ],
             ),
           ),
@@ -657,12 +657,12 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
           children: [
             const ArchiveIcon(CupertinoIcons.book, size: 32),
             const SizedBox(height: 20),
-            AppText(
+            Text(
               '下一次翻页，从这里开始',
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 12),
-            AppText(
+            Text(
               '阅读、收藏或留下记号后，再来看看自己的阅读轨迹。',
               style: _muted(context).copyWith(fontSize: 14, height: 1.7),
             ),
@@ -670,7 +670,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
             GlassTextButton(
               compact: true,
               onPressed: () => Navigator.maybePop(context),
-              child: const AppText('返回阅读'),
+              child: const Text('返回阅读'),
             ),
           ],
         ),
@@ -682,7 +682,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
         const ArchiveSection(title: '阅读总览', code: 'READING / AT A GLANCE'),
         const SizedBox(height: 20),
         if (_hasDays || data.analysis.coverage.hasTimeDetail) ...[
-          AppText(
+          Text(
             _hasDays ? '所选区间 · 阅读时长' : '已测时段 · 阅读时长',
             style: _muted(context),
           ),
@@ -708,7 +708,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
         ],
         if (_hasCollection || _hasProgress || _hasMarks) ...[
           const SizedBox(height: 30),
-          AppText(
+          Text(
             '当前文库 · ${_now.year}.${_now.month}.${_now.day}',
             style: _muted(context),
           ),
@@ -750,14 +750,14 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
           Row(
             children: [
               Expanded(
-                child: AppText(
+                child: Text(
                   statisticsDate(data.dates[_selected]),
                   style: _muted(context),
                 ),
               ),
               if (data.seconds[_selected] case final seconds?)
                 Flexible(
-                  child: AppText(
+                  child: Text(
                     statisticsDuration(seconds),
                     textAlign: TextAlign.end,
                     style: const TextStyle(
@@ -795,7 +795,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: AppText(
+                child: Text(
                   data.peakDate == null
                       ? '让下一次翻页成为起点'
                       : '${statisticsDate(data.peakDate!)}，是这段时间最投入的一天',
@@ -815,7 +815,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
             ],
           ),
           const SizedBox(height: 7),
-          AppText(
+          Text(
             data.activeRatio == null
                 ? '尚未开始记录'
                 : '活跃占比 ${(data.activeRatio! * 100).round()}%  ·  ${data.activeDays == 0 ? '暂无活跃日' : '活跃日平均 ${statisticsDuration(data.activeAverageSeconds)}'}${data.peakDate == null ? '' : '  ·  峰值 ${statisticsDuration(data.peakSeconds)}'}',
@@ -823,7 +823,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
           ),
           if (data.hasCompleteComparison) ...[
             const SizedBox(height: 6),
-            AppText(
+            Text(
               '上一个 $_period 天：${statisticsDuration(data.previousPeriodSeconds)}${data.previousPeriodSeconds == 0 ? '' : '  ·  本期${data.periodSeconds >= data.previousPeriodSeconds ? '增加' : '减少'} ${statisticsDuration((data.periodSeconds - data.previousPeriodSeconds).abs())}'}',
               style: _muted(context).copyWith(height: 1.6),
             ),
@@ -839,7 +839,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
       const ArchiveSection(title: '阅读的广度', code: '02 / BOOKS ALONG THE WAY'),
       if (_hasBreadth) ...[
         const SizedBox(height: 14),
-        AppText('每天读过的书 · 本', style: _muted(context)),
+        Text('每天读过的书 · 本', style: _muted(context)),
         const SizedBox(height: 12),
         ReadingBookBreadthChart(dates: _data.dates, counts: _data.bookCounts),
       ],
@@ -876,7 +876,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
         ),
         const SizedBox(height: 12),
         if (seconds != null)
-          AppText(
+          Text(
             '${statisticsDate(selected)} · ${statisticsDuration(seconds)}',
             style: _muted(context),
           ),
@@ -933,7 +933,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
       children: [
         const ArchiveSection(title: '书页回声', code: 'CURRENT / SAVED EXCERPTS'),
         const SizedBox(height: 18),
-        AppText(
+        Text(
           '当前保存 · ${_now.year}.${_now.month}.${_now.day}',
           style: _muted(context),
         ),
@@ -953,7 +953,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
             ),
             reduceMotion: widget.state.reduceMotion,
           ),
-          child: const AppText('查看书签与划线'),
+          child: const Text('查看书签与划线'),
         ),
         ReadingStatisticsAnalysisView(
           bookFor: _knownBook,
@@ -962,7 +962,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
         ),
         if (excerpts.isNotEmpty) ...[
           const SizedBox(height: 22),
-          AppText('保存的引用 · 全部记录', style: _muted(context)),
+          Text('保存的引用 · 全部记录', style: _muted(context)),
           const SizedBox(height: 18),
         ],
         for (final excerpt in excerpts.take(3))
@@ -981,7 +981,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    AppText(
+                    Text(
                       excerpt.quote,
                       maxLines: 4,
                       overflow: TextOverflow.ellipsis,
@@ -990,7 +990,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
                     if (excerpt.title != null || excerpt.chapter.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
-                        child: AppText(
+                        child: Text(
                           [
                             if (excerpt.title != null) '《${excerpt.title}》',
                             if (excerpt.chapter.isNotEmpty) excerpt.chapter,
@@ -1017,7 +1017,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
         const ArchiveSection(title: '书页足迹', code: '03 / READING & EXCERPTS'),
         if (data.readingBooks > 0) ...[
           const SizedBox(height: 20),
-          AppText(
+          Text(
             '当前阅读进度 · ${_now.year}.${_now.month}.${_now.day}',
             style: _muted(context),
           ),
@@ -1033,7 +1033,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
             context,
             start: .18,
             end: .7,
-            child: AppText('当前阅读进度', style: _label),
+            child: Text('当前阅读进度', style: _label),
           ),
           const SizedBox(height: 8),
           ReadingProgressBands(
@@ -1041,7 +1041,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
             reduceMotion: widget.state.reduceMotion,
           ),
           const SizedBox(height: 10),
-          AppText('按当前已读取目录的章节进度估算。', style: _muted(context)),
+          Text('按当前已读取目录的章节进度估算。', style: _muted(context)),
         ],
         ReadingStatisticsAnalysisView(
           bookFor: _knownBook,
@@ -1100,7 +1100,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
           ),
         ),
         const SizedBox(height: 12),
-        AppText('共 $total 本藏书', style: _muted(context)),
+        Text('共 $total 本藏书', style: _muted(context)),
       ],
     );
     final authors = Column(
@@ -1110,7 +1110,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
           context,
           start: .12,
           end: .68,
-          child: AppText('藏书最多的作者', style: _label),
+          child: Text('藏书最多的作者', style: _label),
         ),
         const SizedBox(height: 12),
         if (data.authors.isNotEmpty)
@@ -1197,7 +1197,7 @@ class _Number extends StatelessWidget {
   final String value;
   final double size;
   @override
-  Widget build(BuildContext context) => AppText(
+  Widget build(BuildContext context) => Text(
     value,
     style: TextStyle(
       fontSize: size,
@@ -1219,7 +1219,7 @@ class _Metric extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        AppText(label, style: _muted(context)),
+        Text(label, style: _muted(context)),
         const SizedBox(height: 8),
         Wrap(
           spacing: 5,
@@ -1228,7 +1228,7 @@ class _Metric extends StatelessWidget {
             _ChangingValue(value: value, child: _Number(value)),
             Padding(
               padding: const EdgeInsets.only(bottom: 2),
-              child: AppText(unit, style: _muted(context)),
+              child: Text(unit, style: _muted(context)),
             ),
           ],
         ),
@@ -1287,10 +1287,10 @@ class _RankLine extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: AppText(label, style: const TextStyle(fontSize: 13)),
+                child: Text(label, style: const TextStyle(fontSize: 13)),
               ),
               const SizedBox(width: 12),
-              AppText('$value $unit', style: _muted(context)),
+              Text('$value $unit', style: _muted(context)),
             ],
           ),
           const SizedBox(height: 7),

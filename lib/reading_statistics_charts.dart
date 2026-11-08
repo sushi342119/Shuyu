@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 
-import 'app_language.dart';
 import 'archive_design.dart';
 import 'archive_motion.dart';
 import 'reading_statistics_shared_charts.dart';
@@ -22,14 +21,11 @@ class ReadingBookBreadthChart extends StatelessWidget {
   final List<int?> counts;
   @override
   Widget build(BuildContext context) => Semantics(
-    label: appText(context, '每日读过的书籍数量'),
-    value: appText(
-      context,
-      [
-        for (var i = 0; i < math.min(dates.length, counts.length); i++)
-          '${_dateLabel(dates[i])} ${counts[i] == null ? '尚未记录' : '${counts[i]} 本'}',
-      ].join('，'),
-    ),
+    label: '每日读过的书籍数量',
+    value: [
+      for (var i = 0; i < math.min(dates.length, counts.length); i++)
+        '${_dateLabel(dates[i])} ${counts[i] == null ? '尚未记录' : '${counts[i]} 本'}',
+    ].join('，'),
     child: ReadingStatisticsBars(
       labels: [for (final date in dates) '${date.month}.${date.day}'],
       values: [for (final count in counts) count?.toDouble()],
@@ -142,13 +138,13 @@ class _ReadingRhythmChartState extends State<ReadingRhythmChart>
     }
 
     return Semantics(
-      label: appText(context, '阅读时长曲线'),
-      value: appText(context, selectedValue),
+      label: '阅读时长曲线',
+      value: selectedValue,
       increasedValue: count > 0 && selected < count - 1
-          ? appText(context, _dateLabel(dates[selected + 1]))
+          ? _dateLabel(dates[selected + 1])
           : null,
       decreasedValue: count > 0 && selected > 0
-          ? appText(context, _dateLabel(dates[selected - 1]))
+          ? _dateLabel(dates[selected - 1])
           : null,
       onIncrease: count > 0 && selected < count - 1
           ? () => select(selected + 1)
@@ -242,7 +238,7 @@ class _ReadingRhythmChartState extends State<ReadingRhythmChart>
                     child: ExcludeSemantics(
                       child: Row(
                         children: [
-                          AppText(
+                          Text(
                             '分钟',
                             style: labelStyle,
                             textScaler: TextScaler.noScaling,
@@ -311,7 +307,7 @@ class _TraceLegend extends StatelessWidget {
         ),
       ),
       const SizedBox(width: 5),
-      AppText(label, style: style, textScaler: TextScaler.noScaling),
+      Text(label, style: style, textScaler: TextScaler.noScaling),
     ],
   );
 }
@@ -812,10 +808,7 @@ class _ReadingActivityCalendarState extends State<ReadingActivityCalendar>
                   selectedDate: selectedDate,
                   labels: [
                     for (var i = 0; i < count; i++)
-                      appText(
-                        context,
-                        '${_dateLabel(visibleDates[i])}，${_secondsLabel(visibleSeconds[i])}',
-                      ),
+                      '${_dateLabel(visibleDates[i])}，${_secondsLabel(visibleSeconds[i])}',
                   ],
                   onSelected: onSelected,
                 ),

@@ -58,7 +58,7 @@ class ReadingWidgetSkinPicker extends StatelessWidget {
                 compact: true,
                 selected: value == skin,
                 onPressed: onChanged == null ? null : () => onChanged!(skin),
-                child: AppText(skin.label),
+                child: Text(skin.label),
               ),
           ],
         ),
@@ -132,7 +132,7 @@ class _WidgetCardsPageState extends State<ReadingWidgetSettingsPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const AppText(
+            const Text(
               '选择桌面内容',
               style: TextStyle(fontSize: 21, fontWeight: FontWeight.w600),
             ),
@@ -140,7 +140,7 @@ class _WidgetCardsPageState extends State<ReadingWidgetSettingsPage> {
             for (final design in ReadingWidgetCards.designs)
               GlassTextButton(
                 onPressed: () => Navigator.pop(context, design),
-                child: AppText(design.label),
+                child: Text(design.label),
               ),
           ],
         ),
@@ -176,7 +176,7 @@ class _WidgetCardsPageState extends State<ReadingWidgetSettingsPage> {
                           Row(
                             children: [
                               Expanded(
-                                child: AppText(
+                                child: Text(
                                   card.label,
                                   style: const TextStyle(
                                     fontSize: 17,
@@ -189,7 +189,7 @@ class _WidgetCardsPageState extends State<ReadingWidgetSettingsPage> {
                                     ? () => _open(card)
                                     : null,
                                 compact: true,
-                                child: AppText(
+                                child: Text(
                                   widget.bindTo == null
                                       ? '设置'
                                       : _bindingCard == card.id
@@ -218,16 +218,16 @@ class _WidgetCardsPageState extends State<ReadingWidgetSettingsPage> {
                   ),
                 GlassTextButton(
                   onPressed: _bindingCard == null ? _add : null,
-                  child: const AppText('新建小组件'),
+                  child: const Text('新建小组件'),
                 ),
                 if (cards.error != null)
                   GlassTextButton(
                     onPressed: cards.publish,
-                    child: AppText(cards.error!),
+                    child: Text(cards.error!),
                   ),
                 if (widget.bindTo == null) ...[
                   const SizedBox(height: 16),
-                  const AppText(
+                  const Text(
                     '添加到桌面时选择内容与尺寸。每张卡片单独设置，可同时放置不同内容。',
                     style: TextStyle(fontSize: 13, height: 1.6),
                   ),
@@ -379,7 +379,7 @@ class _ReadingWidgetSettingsPageState extends State<ReadingWidgetCardEditor> {
                 groupValue: _previewSize,
                 children: {
                   for (final size in ReadingDesktopSize.values)
-                    size: AppText(switch (size) {
+                    size: Text(switch (size) {
                       ReadingDesktopSize.small => '小 2×2',
                       ReadingDesktopSize.medium => '中 4×2',
                       ReadingDesktopSize.large => '大 4×4',
@@ -415,9 +415,9 @@ class _ReadingWidgetSettingsPageState extends State<ReadingWidgetCardEditor> {
                 context,
                 groupValue: _card.appearance,
                 children: const {
-                  ReadingWidgetAppearance.system: AppText('跟随系统'),
-                  ReadingWidgetAppearance.light: AppText('浅色'),
-                  ReadingWidgetAppearance.dark: AppText('深色'),
+                  ReadingWidgetAppearance.system: Text('跟随系统'),
+                  ReadingWidgetAppearance.light: Text('浅色'),
+                  ReadingWidgetAppearance.dark: Text('深色'),
                 },
                 onValueChanged: (value) {
                   if (!_saving) _configure(appearance: value);
@@ -430,7 +430,7 @@ class _ReadingWidgetSettingsPageState extends State<ReadingWidgetCardEditor> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    AppText(
+                    Text(
                       _controller.dailyGoalMinutes == 0
                           ? '按自己的节奏阅读'
                           : readingGoalCaption(
@@ -454,7 +454,7 @@ class _ReadingWidgetSettingsPageState extends State<ReadingWidgetCardEditor> {
                             onPressed: _saving
                                 ? null
                                 : () => _configure(dailyGoalMinutes: goal),
-                            child: AppText(goal == 0 ? '不设目标' : '$goal 分钟'),
+                            child: Text(goal == 0 ? '不设目标' : '$goal 分钟'),
                           ),
                         GlassTextButton(
                           key: const ValueKey('reading-goal-custom'),
@@ -466,7 +466,7 @@ class _ReadingWidgetSettingsPageState extends State<ReadingWidgetCardEditor> {
                             60,
                           ].contains(_controller.dailyGoalMinutes),
                           onPressed: _saving ? null : _editGoal,
-                          child: AppText(
+                          child: Text(
                             [
                                   0,
                                   15,
@@ -492,7 +492,7 @@ class _ReadingWidgetSettingsPageState extends State<ReadingWidgetCardEditor> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const AppText(
+                          const Text(
                             '显示书籍信息',
                             style: TextStyle(
                               fontSize: 15,
@@ -500,7 +500,7 @@ class _ReadingWidgetSettingsPageState extends State<ReadingWidgetCardEditor> {
                             ),
                           ),
                           const SizedBox(height: 6),
-                          AppText('在桌面显示书名与章节', style: _supporting),
+                          Text('在桌面显示书名与章节', style: _supporting),
                         ],
                       ),
                     ),
@@ -528,7 +528,7 @@ class _ReadingWidgetSettingsPageState extends State<ReadingWidgetCardEditor> {
                   children: [
                     const ArchiveIcon(CupertinoIcons.arrow_clockwise, size: 18),
                     const SizedBox(width: 10),
-                    AppText(_saving ? '正在更新' : '更新桌面组件'),
+                    Text(_saving ? '正在更新' : '更新桌面组件'),
                   ],
                 ),
               ),
@@ -537,11 +537,11 @@ class _ReadingWidgetSettingsPageState extends State<ReadingWidgetCardEditor> {
                   padding: const EdgeInsets.only(top: 12),
                   child: Semantics(
                     liveRegion: true,
-                    child: AppText(notice, style: _supporting),
+                    child: Text(notice, style: _supporting),
                   ),
                 ),
               const SizedBox(height: 18),
-              AppText(
+              Text(
                 LocalPlatform.ios
                     ? '长按主屏幕空白处，添加“阅读留白”小组件。'
                     : LocalPlatform.harmony
@@ -591,7 +591,7 @@ class _ReadingGoalEditorState extends State<_ReadingGoalEditor> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const AppText(
+        const Text(
           '每日阅读目标',
           style: TextStyle(fontSize: 21, fontWeight: FontWeight.w600),
         ),
@@ -610,11 +610,11 @@ class _ReadingGoalEditorState extends State<_ReadingGoalEditor> {
           ),
         ),
         const SizedBox(height: 24),
-        GlassTextButton(onPressed: _save, child: const AppText('保存')),
+        GlassTextButton(onPressed: _save, child: const Text('保存')),
         const SizedBox(height: 8),
         GlassTextButton(
           onPressed: () => Navigator.pop(context),
-          child: const AppText('取消'),
+          child: const Text('取消'),
         ),
       ],
     ),

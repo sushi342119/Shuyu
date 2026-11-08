@@ -885,7 +885,7 @@ class _QuoteCardPageState extends State<QuoteCardPage> {
         child: ListView(
           padding: featurePadding(context),
           children: [
-            if (_cards.isEmpty) const AppText('选取一段原文后，即可制作摘录图片。'),
+            if (_cards.isEmpty) const Text('选取一段原文后，即可制作摘录图片。'),
             if (_cards.isNotEmpty)
               SizedBox(
                 height: math.min(560, MediaQuery.sizeOf(context).height * .55),
@@ -905,7 +905,7 @@ class _QuoteCardPageState extends State<QuoteCardPage> {
                                         'quote-artwork-retry',
                                       ),
                                       onPressed: _loadArtwork,
-                                      child: const AppText('重试主题图片'),
+                                      child: const Text('重试主题图片'),
                                     ),
                             )
                           : TweenAnimationBuilder<double>(
@@ -943,7 +943,7 @@ class _QuoteCardPageState extends State<QuoteCardPage> {
                 child: _artworkLoading && _artwork != null
                     ? const Center(
                         key: ValueKey('quote-theme-loading'),
-                        child: AppText(
+                        child: Text(
                           '正在准备主题…',
                           style: TextStyle(fontSize: 12),
                         ),
@@ -959,7 +959,7 @@ class _QuoteCardPageState extends State<QuoteCardPage> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  AppText('主题 · ${_appearance.label}'),
+                  Text('主题 · ${_appearance.label}'),
                   const SizedBox(width: 10),
                   Icon(
                     _choosingTheme
@@ -1011,7 +1011,7 @@ class _QuoteCardPageState extends State<QuoteCardPage> {
                         ? null
                         : () => setState(() => _page--),
                   ),
-                  AppText('${_page + 1} / ${_cards.length}'),
+                  Text('${_page + 1} / ${_cards.length}'),
                   GlassIconButton(
                     icon: CupertinoIcons.chevron_right,
                     label: '下一张摘录',
@@ -1024,7 +1024,7 @@ class _QuoteCardPageState extends State<QuoteCardPage> {
             const SizedBox(height: 12),
             Row(
               children: [
-                const Expanded(child: AppText('显示书籍信息')),
+                const Expanded(child: Text('显示书籍信息')),
                 AppControls.toggle(
                   context,
                   key: const ValueKey('quote-book-details'),
@@ -1036,7 +1036,7 @@ class _QuoteCardPageState extends State<QuoteCardPage> {
             const SizedBox(height: 12),
             Row(
               children: [
-                const Expanded(child: AppText('图标水印')),
+                const Expanded(child: Text('图标水印')),
                 AppControls.toggle(
                   context,
                   key: const ValueKey('quote-watermark'),
@@ -1075,7 +1075,7 @@ class _QuoteCardPageState extends State<QuoteCardPage> {
                     builder: (onPressed) => GlassTextButton(
                       key: const ValueKey('quote-save-image'),
                       onPressed: onPressed,
-                      child: AppText(
+                      child: Text(
                         _busy
                             ? '正在生成…'
                             : _cards.length > 1
@@ -1094,7 +1094,7 @@ class _QuoteCardPageState extends State<QuoteCardPage> {
                           (_watermark && _icon == null)
                       ? null
                       : () => _export(true),
-                  child: AppText(_cards.length > 1 ? '分享此页' : '分享图片'),
+                  child: Text(_cards.length > 1 ? '分享此页' : '分享图片'),
                 ),
               ],
             ),
@@ -1103,7 +1103,7 @@ class _QuoteCardPageState extends State<QuoteCardPage> {
               GlassTextButton(
                 key: const ValueKey('quote-artwork-retry'),
                 onPressed: _busy ? null : _loadArtwork,
-                child: const AppText('重试主题图片'),
+                child: const Text('重试主题图片'),
               ),
           ],
         ),

@@ -90,14 +90,6 @@ Future<void> main() async {
         await state.refreshSystemPalette();
       } catch (_) {}
     }
-    if (chineseLocale(
-          state.language.locale ?? binding.platformDispatcher.locale,
-        ).countryCode !=
-        'CN') {
-      try {
-        await ChineseText.prepare();
-      } catch (_) {}
-    }
     try {
       await TagStore.load();
     } catch (_) {}
@@ -245,10 +237,6 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
       ReadingWidgetController.forState(state);
   late final ReadingWidgetCards _widgetCards =
       ReadingWidgetCards.forState(state);
-  Locale _systemLocale = chineseLocale(
-    WidgetsBinding.instance.platformDispatcher.locale,
-  );
-  int _localeRequest = 0;
   Object? _themeKey;
   final _themes = <Brightness, ThemeData>{};
 
@@ -261,18 +249,6 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
         if (mounted) return _widgetCards.attach();
       }).catchError((Object _) {}),
     );
-  }
-
-  @override
-  Future<void> didChangeLocales(List<Locale>? locales) async {
-    final ticket = ++_localeRequest;
-    final next = chineseLocale(locales?.firstOrNull);
-    if (state.language == AppLanguage.system && next.countryCode != 'CN') {
-      await ChineseText.prepare();
-    }
-    if (mounted && ticket == _localeRequest) {
-      setState(() => _systemLocale = next);
-    }
   }
 
   @override
@@ -337,15 +313,9 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
         _lastFontId = state.appFontId;
         return MaterialApp(
           title: '书屿',
-          locale: state.language.locale ?? _systemLocale,
-          supportedLocales: const [
-            Locale('zh', 'CN'),
-            Locale('zh', 'HK'),
-            Locale('zh', 'TW'),
-          ],
+          locale: const Locale('zh', 'CN'),
+          supportedLocales: const [Locale('zh', 'CN')],
           localizationsDelegates: GlobalMaterialLocalizations.delegates,
-          localeResolutionCallback: (locale, _) =>
-              chineseLocale(state.language.locale ?? locale),
           debugShowCheckedModeBanner: false,
           scrollBehavior: const NovelScrollBehavior(),
           theme: _theme(Brightness.light),

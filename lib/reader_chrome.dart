@@ -348,7 +348,7 @@ class _RenderReaderLocation extends RenderProxyBox {
   }
 }
 
-/// A chapter label, not a second text system: the existing AppText stays on one
+/// A chapter label, not a second text system: the existing Text stays on one
 /// line in a horizontal viewport. Only an overflowing, currently visible label
 /// schedules movement; pauses leave no frame ticker running.
 class ReaderChapterTitle extends StatefulWidget {
@@ -561,7 +561,7 @@ class _ReaderChapterTitleState extends State<ReaderChapterTitle>
             primary: false,
             child: ConstrainedBox(
               constraints: BoxConstraints(minWidth: constraints.maxWidth),
-              child: AppText(
+              child: Text(
                 widget.text,
                 maxLines: 1,
                 softWrap: false,

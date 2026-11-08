@@ -198,7 +198,7 @@ class ReaderPageSkeleton extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        AppText(
+        Text(
           title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -1627,7 +1627,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
                               if (widget.showPageCount) ...[
                                 const SizedBox(width: 12),
                                 IgnorePointer(
-                                  child: AppText(
+                                  child: Text(
                                     count,
                                     key: key(
                                       'reader-page-count',
@@ -1676,7 +1676,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
                         ),
                         if (widget.showPageCount) ...[
                           const SizedBox(width: 12),
-                          AppText(
+                          Text(
                             count,
                             key: key('reader-page-count', leaf: leaves - 1),
                             maxLines: 1,
@@ -1757,11 +1757,11 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const AppText('本章排版失败'),
+              const Text('本章排版失败'),
               GlassTextButton(
                 key: const ValueKey('reader-pagination-retry'),
                 onPressed: () => setState(() => _layoutKey = null),
-                child: const AppText('重试'),
+                child: const Text('重试'),
               ),
             ],
           ),
@@ -2692,7 +2692,7 @@ class _ReaderScrollLocationState extends State<ReaderScrollLocation> {
                     children: [
                       Expanded(
                         child: widget.footer && widget.bookTitle != null
-                            ? AppText(
+                            ? Text(
                                 widget.bookTitle!,
                                 key: const ValueKey('reader-scroll-book-title'),
                                 maxLines: 1,
@@ -2706,7 +2706,7 @@ class _ReaderScrollLocationState extends State<ReaderScrollLocation> {
                               ),
                       ),
                       const SizedBox(width: 12),
-                      AppText(
+                      Text(
                         '$_percent%',
                         key: const ValueKey('reader-scroll-percent'),
                       ),

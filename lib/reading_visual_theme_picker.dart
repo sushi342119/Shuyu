@@ -95,7 +95,7 @@ class ReadingVisualThemePicker extends StatelessWidget {
               },
             ),
             const SizedBox(height: 12),
-            AppText(
+            Text(
               _presentation(value).description,
               style: TextStyle(
                 fontSize: 13,
@@ -151,7 +151,7 @@ class ReadingVisualThemePicker extends StatelessWidget {
                   Row(
                     children: [
                       Expanded(
-                        child: AppText(
+                        child: Text(
                           presentation.label,
                           style: TextStyle(
                             color: presentation.foreground,
@@ -330,7 +330,7 @@ class _ExportThemeGalleryState extends State<_ExportThemeGallery> {
                 const SizedBox(height: 8),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: AppText(
+                  child: Text(
                     p.label,
                     style: _type(p, 13).copyWith(
                       color: ink.withValues(alpha: selected ? 1 : .6),

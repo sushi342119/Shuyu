@@ -49,7 +49,7 @@ Future<TextRange?> showReaderTextRangePicker({
         Row(
           children: [
             Expanded(
-              child: AppText(
+              child: Text(
                 title,
                 style: const TextStyle(
                   fontSize: 20,
@@ -67,7 +67,7 @@ Future<TextRange?> showReaderTextRangePicker({
         ),
         const SizedBox(height: 4),
         if (scopeLabel != null && scopeLabel.trim().isNotEmpty) ...[
-          AppText(
+          Text(
             scopeLabel,
             style: TextStyle(
               fontSize: 12,
@@ -388,14 +388,14 @@ class _ReaderTextRangePickerState extends State<ReaderTextRangePicker> {
                 _extend = !_extend;
                 _anchor = _extend ? _range : null;
               }),
-              child: AppText(_extend ? '连选中' : '连续选择'),
+              child: Text(_extend ? '连选中' : '连续选择'),
             ),
           ],
         ),
         if (_extend)
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
-            child: AppText(
+            child: Text(
               '点选起点与终点，连续保留中间文字',
               style: TextStyle(
                 fontSize: 12,
@@ -411,7 +411,7 @@ class _ReaderTextRangePickerState extends State<ReaderTextRangePicker> {
                       (_unit == ReaderTextUnit.word ? _geometryError : null)) !=
                   null
               ? Center(
-                  child: AppText(
+                  child: Text(
                     (_error ?? _geometryError)!,
                     style: const TextStyle(height: 1.6),
                   ),
@@ -422,7 +422,7 @@ class _ReaderTextRangePickerState extends State<ReaderTextRangePicker> {
                         !_geometryReady
               ? const Center(child: CupertinoActivityIndicator())
               : document.chunks.isEmpty
-              ? const Center(child: AppText('没有可选择的文字'))
+              ? const Center(child: Text('没有可选择的文字'))
               : CustomScrollView(
                   key: const ValueKey('reader-text-picker-scroll'),
                   center: _center,
@@ -452,7 +452,7 @@ class _ReaderTextRangePickerState extends State<ReaderTextRangePicker> {
               child: Semantics(
                 label: _range == null ? _preview : '已选文字：$_preview',
                 excludeSemantics: true,
-                child: AppText(
+                child: Text(
                   _preview,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
@@ -486,7 +486,7 @@ class _ReaderTextRangePickerState extends State<ReaderTextRangePicker> {
                         showNovelFeedback(context, '已复制选中内容');
                       }
                     },
-              child: const AppText('复制'),
+              child: const Text('复制'),
             ),
             TextButton(
               style: TextButton.styleFrom(
@@ -500,14 +500,14 @@ class _ReaderTextRangePickerState extends State<ReaderTextRangePicker> {
                       _range = null;
                       _anchor = null;
                     }),
-              child: const AppText('重选'),
+              child: const Text('重选'),
             ),
           ],
         ),
         if (error != null)
           Padding(
             padding: const EdgeInsets.only(top: 6),
-            child: AppText(
+            child: Text(
               error,
               style: TextStyle(
                 fontSize: 12,
@@ -524,7 +524,7 @@ class _ReaderTextRangePickerState extends State<ReaderTextRangePicker> {
                 child: GlassTextButton(
                   compact: true,
                   onPressed: widget.onCancel,
-                  child: const AppText('取消'),
+                  child: const Text('取消'),
                 ),
               ),
               const SizedBox(width: 10),
@@ -536,7 +536,7 @@ class _ReaderTextRangePickerState extends State<ReaderTextRangePicker> {
                 onPressed: _range == null || error != null
                     ? null
                     : () => widget.onConfirm(_range!),
-                child: AppText(widget.confirmLabel),
+                child: Text(widget.confirmLabel),
               ),
             ),
           ],
@@ -568,7 +568,7 @@ class _ReaderTextRangePickerState extends State<ReaderTextRangePicker> {
       builder: (context, snapshot) => Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: snapshot.hasError
-            ? const AppText('分词未完成，可切换按字选择。')
+            ? const Text('分词未完成，可切换按字选择。')
             : !snapshot.hasData
             ? const SizedBox(
                 height: 40,
@@ -619,7 +619,7 @@ class _ReaderTextRangePickerState extends State<ReaderTextRangePicker> {
                   : scheme.outlineVariant,
             ),
           ),
-          child: AppText(
+          child: Text(
             label,
             style: const TextStyle(fontSize: 15, height: 1.4),
           ),

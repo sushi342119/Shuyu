@@ -95,7 +95,7 @@ class _MomentComposition {
     FontWeight weight = FontWeight.w400,
     double height = 1.5,
     TextAlign align = TextAlign.start,
-  }) => AppText(
+  }) => Text(
     value,
     textAlign: align,
     style: TextStyle(

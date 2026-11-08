@@ -1,6 +1,5 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'app_language.dart';
 
 enum ReadingAnalysisChartKind {
   bars,
@@ -68,18 +67,8 @@ class ReadingAnalysisChart extends StatelessWidget {
           child: CustomPaint(
             painter: ReadingAnalysisPainter(
               kind: kind,
-              data: [
-                for (final d in data)
-                  ReadingAnalysisDatum(
-                    appText(context, d.label),
-                    d.value,
-                    secondary: d.secondary,
-                    cells: d.cells,
-                    first: d.first,
-                    completed: d.completed,
-                  ),
-              ],
-              labels: labels.map((label) => appText(context, label)).toList(),
+              data: data,
+              labels: labels,
               fontFamily:
                   Theme.of(context).textTheme.bodyMedium?.fontFamily ??
                   'CupertinoSystemText',

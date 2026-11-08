@@ -199,7 +199,7 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                AppText(
+                Text(
                   reader
                       ? widget.bookId != null &&
                                 state.independentReaderStyle(widget.bookId!)
@@ -209,7 +209,7 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 5),
-                AppText(
+                Text(
                   downloadableFont(choice) != null &&
                           !state.fonts.available(choice)
                       ? '${state.fontLabel(choice)} · 未下载，暂用系统字体'
@@ -254,7 +254,7 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
             children: [
               SizedBox(
                 width: 38,
-                child: AppText(
+                child: Text(
                   'Aa',
                   style: TextStyle(
                     fontFamily: effectiveReady ? family : null,
@@ -267,7 +267,7 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    AppText(
+                    Text(
                       id == followAppFont ? '跟随 App' : state.fontLabel(id),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -277,7 +277,7 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
                       ),
                     ),
                     const SizedBox(height: 5),
-                    AppText(
+                    Text(
                       download != null && !state.fonts.available(id)
                           ? '下载并使用 · ${download.sizeLabel}'
                           : failed
@@ -358,7 +358,7 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
                   ],
                   _selection(reader: true),
                   const SizedBox(height: 10),
-                  AppText(
+                  Text(
                     '右上角可导入 TTF、OTF 字体，单款 32 MiB 以内。',
                     style: TextStyle(
                       fontSize: 12,
@@ -391,7 +391,7 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
                   if ((error ?? widget.state.fontError) case final message?)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      child: AppText(
+                      child: Text(
                         message,
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.error,
@@ -403,7 +403,7 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
                       onPressed: busy
                           ? null
                           : () => _perform(widget.state.loadFonts),
-                      child: const AppText('重试读取字体'),
+                      child: const Text('重试读取字体'),
                     ),
                   for (final font in widget.state.importedFonts)
                     Padding(
@@ -411,7 +411,7 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
                       child: Row(
                         children: [
                           Expanded(
-                            child: AppText(
+                            child: Text(
                               font.displayName,
                               style: const TextStyle(height: 1.6),
                             ),
@@ -433,7 +433,7 @@ class _FontSettingsPageState extends State<FontSettingsPage> {
                       child: Row(
                         children: [
                           Expanded(
-                            child: AppText(
+                            child: Text(
                               font.name,
                               style: const TextStyle(height: 1.6),
                             ),
@@ -520,7 +520,7 @@ class _DownloadableFontRow extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    AppText(
+                    Text(
                       font.name,
                       style: const TextStyle(
                         fontSize: 14,
@@ -528,7 +528,7 @@ class _DownloadableFontRow extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 5),
-                    AppText(
+                    Text(
                       font.description,
                       style: TextStyle(
                         fontSize: 12,
@@ -540,7 +540,7 @@ class _DownloadableFontRow extends StatelessWidget {
                     ValueListenableBuilder<FontDownloadProgress?>(
                       valueListenable: fonts.downloadChanges,
                       builder: (context, progress, child) => active
-                          ? AppText(
+                          ? Text(
                               progress?.validating == true
                                   ? '正在校验字体…'
                                   : '${((progress?.received ?? 0) / 1048576).toStringAsFixed(1)} / ${((progress?.total ?? font.transferBytes) / 1048576).toStringAsFixed(1)} MiB',
@@ -553,7 +553,7 @@ class _DownloadableFontRow extends StatelessWidget {
                               ),
                             )
                           : child!,
-                      child: AppText(
+                      child: Text(
                         available
                             ? '已下载 · 可离线使用'
                             : failed
@@ -572,7 +572,7 @@ class _DownloadableFontRow extends StatelessWidget {
                         id: font.id,
                         builder: (ready, _) => Padding(
                           padding: const EdgeInsets.only(top: 8),
-                          child: AppText(
+                          child: Text(
                             font.previewText,
                             style: TextStyle(
                               fontFamily: ready ? fonts.family(font.id) : null,
@@ -809,7 +809,7 @@ class _ArchiveTransferButtonState extends State<ArchiveTransferButton>
     final semanticValue = [
       if (widget.working && value != null)
         '${(value.clamp(0, 1) * 100).floor()}%',
-      if (widget.status case final status?) appText(context, status),
+      ?widget.status,
     ].join(' · ');
     return MergeSemantics(
       child: Semantics(

@@ -61,12 +61,12 @@ Future<void> organizeBookmark(
               children: [
                 GlassTextButton(
                   onPressed: () => Navigator.pop(sheet, ''),
-                  child: const AppText('未分类'),
+                  child: const Text('未分类'),
                 ),
                 for (final name in names)
                   GlassTextButton(
                     onPressed: () => Navigator.pop(sheet, name),
-                    child: AppText(name),
+                    child: Text(name),
                   ),
               ],
             ),
@@ -99,7 +99,6 @@ Future<ReaderAnnotationContext?> loadOfflineReaderAnnotationContext({
   required List<ReaderUnderlineRange> ranges,
   required ReadingPosition anchor,
   Novel? novel,
-  Locale? locale,
 }) async {
   final offline = repository is OfflineNovelRepository ? repository : null;
   if (offline != null) await offline.cache.load();
@@ -157,9 +156,7 @@ Future<ReaderAnnotationContext?> loadOfflineReaderAnnotationContext({
       if (requiredIds.contains(chapter.id)) return null;
       continue;
     }
-    final source = await (await ReaderContent.parse(
-      body,
-    )).localizedAsync(chineseLocale(locale));
+    final source = await ReaderContent.parse(body);
     sources.add(
       ReaderAnnotationChapterSource(
         chapterId: chapter.id,
@@ -412,7 +409,6 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
           ranges: ranges,
           anchor: anchor,
           novel: _known(id),
-          locale: Localizations.maybeLocaleOf(context),
         ),
   );
 
@@ -644,7 +640,7 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
                               reduceMotion: widget.state.reduceMotion,
                             ),
                             const SizedBox(height: 12),
-                            AppText(
+                            Text(
                               '${entries.length} 条记录 · ${groups.length} 本书',
                               style: TextStyle(
                                 fontSize: 12,
@@ -659,7 +655,7 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
                                 padding: const EdgeInsets.symmetric(
                                   vertical: 36,
                                 ),
-                                child: AppText(
+                                child: Text(
                                   query.isEmpty
                                       ? '长按正文选择喜欢的句子，点「书签」即可收藏。\n已有的位置书签也会显示在这里。'
                                       : widget.state.bookmarkEntries.any(
@@ -703,14 +699,14 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
                                           crossAxisAlignment:
                                               CrossAxisAlignment.start,
                                           children: [
-                                            AppText(
+                                            Text(
                                               book?.title ?? '书籍 $row',
                                               style: const TextStyle(
                                                 fontWeight: FontWeight.w600,
                                               ),
                                             ),
                                             const SizedBox(height: 6),
-                                            AppText(
+                                            Text(
                                               '${marks.length} 条书签与标记',
                                               style: const TextStyle(
                                                 fontSize: 12,
@@ -755,7 +751,7 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
                                 const SizedBox(height: 20),
                               ],
                               if (mark.quote.isEmpty && mark.note.isEmpty) ...[
-                                AppText(
+                                Text(
                                   mark.kindLabel,
                                   style: const TextStyle(
                                     fontWeight: FontWeight.w600,
@@ -764,7 +760,7 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
                                 const SizedBox(height: 10),
                               ],
                               if (_category != '_book') ...[
-                                AppText(
+                                Text(
                                   novel?.title ?? '书籍 ${entry.novelId}',
                                   style: const TextStyle(
                                     fontWeight: FontWeight.w600,
@@ -772,7 +768,7 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
                                 ),
                                 const SizedBox(height: 6),
                               ],
-                              AppText(
+                              Text(
                                 mark.chapterTitle,
                                 style: TextStyle(
                                   fontSize: 12,
@@ -784,7 +780,7 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
                               ),
                               if (mark.category.isNotEmpty) ...[
                                 const SizedBox(height: 6),
-                                AppText(
+                                Text(
                                   '分类 · ${mark.category}',
                                   style: const TextStyle(fontSize: 12),
                                 ),
@@ -798,7 +794,7 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
                                       onPressed: _opening == null
                                           ? () => _open(entry.novelId, mark)
                                           : null,
-                                      child: AppText(
+                                      child: Text(
                                         _opening == mark.id ? '正在打开…' : '回到原文',
                                       ),
                                     ),
@@ -988,7 +984,7 @@ class _AppSearchFieldState extends State<AppSearchField> {
                 widget.onSubmitted?.call(value);
               },
               decoration: InputDecoration(
-                hintText: appText(context, widget.hint),
+                hintText: widget.hint,
                 hintStyle: TextStyle(
                   fontSize: 14,
                   height: 1.25,
@@ -1012,7 +1008,7 @@ class _AppSearchFieldState extends State<AppSearchField> {
                     width: 40,
                     height: 46,
                     child: ArchiveIconButton(
-                      tooltip: appText(context, '清空搜索'),
+                      tooltip: '清空搜索',
                       onPressed: () {
                         _text.clear();
                         widget.onChanged?.call('');
@@ -1071,7 +1067,7 @@ class ReaderBookmarkExcerpt extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: AppText(
+                  child: Text(
                     compact ? '摘录' : '原文摘录',
                     style: TextStyle(
                       fontSize: 11,
@@ -1083,7 +1079,7 @@ class ReaderBookmarkExcerpt extends StatelessWidget {
                 Flexible(
                   child: Align(
                     alignment: Alignment.centerRight,
-                    child: AppText(
+                    child: Text(
                       mark.kindLabel,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -1094,7 +1090,7 @@ class ReaderBookmarkExcerpt extends StatelessWidget {
               ],
             ),
             SizedBox(height: compact ? 4 : 8),
-            AppText(
+            Text(
               mark.quote,
               maxLines: quoteMaxLines,
               overflow: TextOverflow.ellipsis,
@@ -1116,7 +1112,7 @@ class ReaderBookmarkExcerpt extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              AppText(
+              Text(
                 '批注',
                 style: TextStyle(
                   fontSize: 11,
@@ -1126,7 +1122,7 @@ class ReaderBookmarkExcerpt extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: AppText(
+                child: Text(
                   mark.note,
                   maxLines: noteMaxLines,
                   overflow: TextOverflow.ellipsis,
@@ -1142,7 +1138,7 @@ class ReaderBookmarkExcerpt extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              AppText(
+              Text(
                 '个人批注',
                 style: TextStyle(
                   fontSize: 11,
@@ -1151,7 +1147,7 @@ class ReaderBookmarkExcerpt extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 7),
-              AppText(
+              Text(
                 mark.note,
                 maxLines: noteMaxLines,
                 overflow: TextOverflow.ellipsis,

@@ -18,7 +18,6 @@ import 'catalog.dart';
 import 'glass_dock.dart';
 import 'haptic_preferences.dart';
 import 'library_state.dart';
-import 'setting_menu.dart';
 import 'listening/controller.dart';
 import 'listening/models.dart' show hasSpeechText;
 import 'listening/widgets.dart';
@@ -3705,11 +3704,6 @@ class SettingsPage extends StatelessWidget {
                       ],
                     ),
                   ],
-                  _settingsDivider(context),
-                  LanguageSettingMenu(
-                    key: const ValueKey('settings-language'),
-                    state: state,
-                  ),
                   _settingsSubgroupHeader(context, '阅读与排版工具箱'),
                   _settingsToolList(context, [
                     _SettingsBentoItem(

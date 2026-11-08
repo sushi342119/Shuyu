@@ -55,13 +55,13 @@ class CloudLibraryPage extends StatelessWidget {
         children: [
           const ArchiveSection(title: '网盘来源', code: 'BOOKS / DOCUMENTS'),
           const SizedBox(height: 12),
-          const AppText(
+          const Text(
             '浏览网盘，选择书籍后导入本机。导入完成即可离线阅读。',
             style: TextStyle(fontSize: 13, height: 1.65),
           ),
           const SizedBox(height: 24),
           if (settings.error != null)
-            AppText(
+            Text(
               settings.error!,
               style: TextStyle(color: Theme.of(context).colorScheme.error),
             ),
@@ -74,7 +74,7 @@ class CloudLibraryPage extends StatelessWidget {
                   Row(
                     children: [
                       Expanded(
-                        child: AppText(
+                        child: Text(
                           kind == CloudSourceKind.quark
                               ? '夸克网盘 · 实验性'
                               : kind.label,
@@ -93,7 +93,7 @@ class CloudLibraryPage extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  AppText(switch (kind) {
+                  Text(switch (kind) {
                     CloudSourceKind.webdav =>
                       '连接 OpenList、AList、NAS 或其他 WebDAV 服务。百度网盘等可先在 OpenList 挂载。',
                     CloudSourceKind.quark =>
@@ -102,7 +102,7 @@ class CloudLibraryPage extends StatelessWidget {
                   }, style: const TextStyle(fontSize: 13, height: 1.65)),
                   const SizedBox(height: 12),
                   if (settings[kind] case final config?) ...[
-                    AppText(
+                    Text(
                       kind != CloudSourceKind.quark
                           ? config.endpoint.host
                           : '已保存本机连接',
@@ -122,7 +122,7 @@ class CloudLibraryPage extends StatelessWidget {
                       children: [
                         GlassTextButton(
                           onPressed: () => _edit(context, kind),
-                          child: const AppText('修改连接'),
+                          child: const Text('修改连接'),
                         ),
                         GlassTextButton(
                           onPressed: () async {
@@ -137,7 +137,7 @@ class CloudLibraryPage extends StatelessWidget {
                               }
                             }
                           },
-                          child: const AppText('移除连接'),
+                          child: const Text('移除连接'),
                         ),
                       ],
                     ),
@@ -285,7 +285,7 @@ class _CloudConnectionPageState extends State<CloudConnectionPage> {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        AppText(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+        Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(height: 9),
         CupertinoTextField(
           key: ValueKey('cloud-field-$label'),
@@ -314,7 +314,7 @@ class _CloudConnectionPageState extends State<CloudConnectionPage> {
         ),
         if (helper != null) ...[
           const SizedBox(height: 7),
-          AppText(
+          Text(
             helper,
             style: TextStyle(
               fontSize: 12,
@@ -344,7 +344,7 @@ class _CloudConnectionPageState extends State<CloudConnectionPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (widget.kind == CloudSourceKind.webdav) ...[
-              const AppText(
+              const Text(
                 'OpenList 地址一般以 /dav/ 结尾。账号需要 WebDAV 读取权限。',
                 style: TextStyle(height: 1.65),
               ),
@@ -354,7 +354,7 @@ class _CloudConnectionPageState extends State<CloudConnectionPage> {
               _field('密码', _password, secret: true),
               Row(
                 children: [
-                  const Expanded(child: AppText('允许 HTTP 连接')),
+                  const Expanded(child: Text('允许 HTTP 连接')),
                   AppControls.toggle(
                     context,
                     value: _http,
@@ -366,14 +366,14 @@ class _CloudConnectionPageState extends State<CloudConnectionPage> {
                 expanded: _http,
                 child: const Padding(
                   padding: EdgeInsets.symmetric(vertical: 12),
-                  child: AppText(
+                  child: Text(
                     'HTTP 不加密传输账号和书籍，仅在可信局域网中使用。',
                     style: TextStyle(height: 1.6),
                   ),
                 ),
               ),
             ] else if (widget.kind == CloudSourceKind.s3) ...[
-              AppText(
+              Text(
                 widget.syncConnection
                     ? '两台设备填写相同的桶与同步文件路径。同步需要读取、写入此文件的权限，只有点按「立即同步」才会传输。'
                     : '填写存储服务的 Endpoint 和桶名。连接只需列目录、读取对象的权限。',
@@ -400,7 +400,7 @@ class _CloudConnectionPageState extends State<CloudConnectionPage> {
               _field('Session Token（可选）', _token, secret: true),
               Row(
                 children: [
-                  const Expanded(child: AppText('路径式寻址')),
+                  const Expanded(child: Text('路径式寻址')),
                   AppControls.toggle(
                     context,
                     value: _pathStyle,
@@ -413,7 +413,7 @@ class _CloudConnectionPageState extends State<CloudConnectionPage> {
               const SizedBox(height: 12),
               Row(
                 children: [
-                  const Expanded(child: AppText('允许 HTTP 连接')),
+                  const Expanded(child: Text('允许 HTTP 连接')),
                   AppControls.toggle(
                     context,
                     value: _http,
@@ -425,19 +425,19 @@ class _CloudConnectionPageState extends State<CloudConnectionPage> {
                 expanded: _http,
                 child: const Padding(
                   padding: EdgeInsets.symmetric(vertical: 12),
-                  child: AppText(
+                  child: Text(
                     'HTTP 不加密传输连接信息和书籍，仅在可信局域网中使用。',
                     style: TextStyle(height: 1.6),
                   ),
                 ),
               ),
               const SizedBox(height: 12),
-              const AppText(
+              const Text(
                 '凭据只保存在本机加密存储，不写入阅读备份。',
                 style: TextStyle(fontSize: 12, height: 1.6),
               ),
             ] else ...[
-              const AppText(
+              const Text(
                 '在电脑登录 pan.quark.cn，打开开发者工具的「网络」，复制网盘请求中的 Cookie 请求头。只填写 Cookie 的值。',
                 style: TextStyle(height: 1.7),
               ),
@@ -448,7 +448,7 @@ class _CloudConnectionPageState extends State<CloudConnectionPage> {
                 hint: '__pus=…; __puus=…',
                 secret: true,
               ),
-              const AppText(
+              const Text(
                 '登录凭据仅加密保存在这台设备。导入只读取文件，不移动或删除网盘内容。',
                 style: TextStyle(height: 1.65),
               ),
@@ -461,7 +461,7 @@ class _CloudConnectionPageState extends State<CloudConnectionPage> {
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 16),
-                child: AppText(
+                child: Text(
                   _error!,
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
@@ -481,7 +481,7 @@ class _CloudConnectionPageState extends State<CloudConnectionPage> {
             if (_busy && !widget.syncConnection)
               GlassTextButton(
                 onPressed: () => _testing?.cancel(),
-                child: const AppText('取消连接'),
+                child: const Text('取消连接'),
               ),
           ],
         ),
@@ -721,7 +721,7 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
                     Row(
                       children: [
                         Expanded(
-                          child: AppText(
+                          child: Text(
                             _folders.last.name,
                             style: const TextStyle(
                               fontSize: 20,
@@ -739,18 +739,18 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
                       ],
                     ),
                     const SizedBox(height: 10),
-                    const AppText(
+                    const Text(
                       '支持电子书与常见文档，可勾选批量导入；ZIP 内的分卷会一起识别。',
                       style: TextStyle(height: 1.65),
                     ),
                     const SizedBox(height: 16),
                     if (_importing) ...[
-                      AppText(
+                      Text(
                         '正在导入 · $_current',
                         style: const TextStyle(height: 1.6),
                       ),
                       const SizedBox(height: 8),
-                      AppText(
+                      Text(
                         _committing
                             ? '正在解析目录与插图'
                             : '${(_received / 1024).round()} KB${_total == null ? '' : ' / ${(_total! / 1024).round()} KB'}',
@@ -762,7 +762,7 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
                                 _cancelled = true;
                                 _client.cancel();
                               },
-                        child: const AppText('取消导入'),
+                        child: const Text('取消导入'),
                       ),
                     ] else if (_selected.isNotEmpty) ...[
                       GlassPillButton(
@@ -773,7 +773,7 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
                       const SizedBox(height: 12),
                     ],
                     if (_error != null) ...[
-                      AppText(
+                      Text(
                         _error!,
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.error,
@@ -784,7 +784,7 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
                         onPressed: _loading || _importing
                             ? null
                             : () => _load(),
-                        child: const AppText('刷新目录'),
+                        child: const Text('刷新目录'),
                       ),
                     ],
                     if (_loading &&
@@ -794,7 +794,7 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
                     if (!_loading && _error == null && _entries.isEmpty)
                       const Padding(
                         padding: EdgeInsets.symmetric(vertical: 32),
-                        child: AppText(
+                        child: Text(
                           '这个目录没有可导入的书籍。',
                           textAlign: TextAlign.center,
                         ),
@@ -837,7 +837,7 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    AppText(
+                                    Text(
                                       entry.name,
                                       style: const TextStyle(
                                         fontSize: 16,
@@ -845,7 +845,7 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
                                       ),
                                     ),
                                     if (!entry.folder)
-                                      AppText(
+                                      Text(
                                         _imported.contains(entry.id)
                                             ? '已导入'
                                             : entry.size > 0
@@ -908,7 +908,7 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
                     if (!_loading && _next != null)
                       GlassTextButton(
                         onPressed: _importing ? null : () => _load(more: true),
-                        child: const AppText('加载更多文件'),
+                        child: const Text('加载更多文件'),
                       ),
                   ],
                 ),

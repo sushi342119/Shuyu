@@ -150,7 +150,7 @@ class _ReadingReportPageState extends State<ReadingReportPage> {
                   onPressed: () => _update(
                     _options.copyWith(period: period, clearDates: true),
                   ),
-                  child: AppText('近 $period 天'),
+                  child: Text('近 $period 天'),
                 ),
               GlassTextButton(
                 compact: true,
@@ -167,7 +167,7 @@ class _ReadingReportPageState extends State<ReadingReportPage> {
                     );
                   }
                 },
-                child: const AppText('自定义区间'),
+                child: const Text('自定义区间'),
               ),
             ],
           ),
@@ -212,7 +212,7 @@ class _ReadingReportPageState extends State<ReadingReportPage> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              AppText(
+                              Text(
                                 '${exportTheme.label} · ${_options.title}',
                                 style: TextStyle(
                                   fontSize: 22,
@@ -221,7 +221,7 @@ class _ReadingReportPageState extends State<ReadingReportPage> {
                                 ),
                               ),
                               const SizedBox(height: 4),
-                              AppText(
+                              Text(
                                 '${statisticsDate(_data.dates.first)} — ${statisticsDate(_data.dates.last)} · 累计 ${statisticsDuration(_data.periodSeconds)}',
                                 style: TextStyle(
                                   fontSize: 13,
@@ -283,7 +283,7 @@ class _ReadingReportPageState extends State<ReadingReportPage> {
                             ),
                           ],
                           const SizedBox(height: 16),
-                          AppText(
+                          Text(
                             _options.note,
                             style: TextStyle(
                               fontSize: 12,
@@ -335,9 +335,9 @@ class _ReportMetricTile extends StatelessWidget {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      AppText(label, style: TextStyle(fontSize: 12, color: muted)),
+      Text(label, style: TextStyle(fontSize: 12, color: muted)),
       const SizedBox(height: 4),
-      AppText(
+      Text(
         value,
         style: TextStyle(
           fontSize: 18,

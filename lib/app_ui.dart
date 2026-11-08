@@ -18,8 +18,6 @@ import 'cover_arrival.dart';
 import 'glass_optics.dart';
 import 'glass_palette.dart';
 import 'app_palette.dart';
-import 'app_language.dart';
-export 'app_language.dart';
 import 'legacy_cover.dart';
 import 'loading_ui.dart';
 import 'motion_ui.dart';
@@ -1014,12 +1012,11 @@ class GlassIconButton extends StatelessWidget {
             ),
       ),
     );
-    final semanticLabel = appText(context, label);
     final action = Semantics(
       button: true,
       enabled: onPressed != null,
       child: Tooltip(
-        message: semanticLabel,
+        message: label,
         triggerMode: TooltipTriggerMode.manual,
         excludeFromSemantics: true,
         child: _scaleCompactFace(
@@ -1169,7 +1166,7 @@ class _PaintedIconActionState extends State<_PaintedIconAction> {
   ({double width, double height}) actionSize(String text) {
     final painter = TextPainter(
       text: TextSpan(
-        text: appText(context, text),
+        text: text,
         style: textStyle.merge(
           const TextStyle(
             fontSize: DockLayout.labelFontSize,
@@ -1331,7 +1328,7 @@ class GlassPillButton extends StatelessWidget {
                               ),
                               const SizedBox(width: 9),
                               Flexible(
-                                child: AppText(
+                                child: Text(
                                   label,
                                   maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
@@ -1741,7 +1738,7 @@ class NovelCover extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
-            AppText(
+            Text(
               novel.title,
               textScaler: TextScaler.noScaling,
               maxLines: 3,
@@ -1754,7 +1751,7 @@ class NovelCover extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-            AppText(
+            Text(
               novel.author,
               textScaler: TextScaler.noScaling,
               maxLines: 1,
@@ -1982,14 +1979,14 @@ class ContentNotice extends StatelessWidget {
             color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
           const SizedBox(height: 16),
-          AppText(
+          Text(
             title,
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
           ),
           if (message != null) ...[
             const SizedBox(height: 8),
-            AppText(
+            Text(
               message!,
               textAlign: TextAlign.center,
               style: TextStyle(
@@ -2001,7 +1998,7 @@ class ContentNotice extends StatelessWidget {
           ],
           if (onRetry != null) ...[
             const SizedBox(height: 16),
-            GlassTextButton(onPressed: onRetry, child: AppText(actionLabel)),
+            GlassTextButton(onPressed: onRetry, child: Text(actionLabel)),
           ],
           ?secondaryAction,
         ],
@@ -2420,7 +2417,7 @@ class GlassMenuItem extends StatelessWidget {
                   ),
                 SizedBox(width: icon == null ? 10 : 14),
                 Expanded(
-                  child: AppText(
+                  child: Text(
                     label,
                     style: TextStyle(
                       color: selected

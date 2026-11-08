@@ -44,7 +44,7 @@ class GlassChoiceGroup<T> extends StatelessWidget {
     children: [
       Padding(
         padding: const EdgeInsets.only(top: 14, bottom: 4),
-        child: AppText(
+        child: Text(
           label,
           style: TextStyle(fontSize: labelSize, fontWeight: FontWeight.w600),
         ),
@@ -92,7 +92,7 @@ class GlassChoiceGroup<T> extends StatelessWidget {
                     const SizedBox(width: 6),
                   ],
                   Flexible(
-                    child: AppText(
+                    child: Text(
                       entry.value,
                       style: TextStyle(
                         fontSize: optionSize,
@@ -346,7 +346,7 @@ class _ReaderAnnotationEditorState extends State<ReaderAnnotationEditor> {
                   code: 'BOOKMARK / SOURCE RANGE',
                 ),
                 const SizedBox(height: 12),
-                const AppText(
+                const Text(
                   '仅调整所选片段，其他片段与隐藏文字保持不变。',
                   style: TextStyle(fontSize: 12, height: 1.6),
                 ),
@@ -355,7 +355,7 @@ class _ReaderAnnotationEditorState extends State<ReaderAnnotationEditor> {
                   GlassTextButton(
                     key: ValueKey('annotation-range-component-$index'),
                     onPressed: () => Navigator.pop(sheet, index),
-                    child: AppText(
+                    child: Text(
                       '片段 ${index + 1} · ${source.chapters.where((s) => s.chapterId == range.chapterId).firstOrNull?.title ?? '原章节'} · 第 ${range.startParagraph + 1}–${range.endParagraph + 1} 段',
                     ),
                   ),
@@ -582,7 +582,7 @@ class _ReaderAnnotationEditorState extends State<ReaderAnnotationEditor> {
                 GlassTextButton(
                   key: const ValueKey('annotation-adjust-range'),
                   onPressed: _saving || _selectingRange ? null : _adjustRange,
-                  child: AppText(_selectingRange ? '正在载入原文…' : '调整原文范围'),
+                  child: Text(_selectingRange ? '正在载入原文…' : '调整原文范围'),
                 ),
                 if (_quote.trim().isNotEmpty)
                   GlassTextButton(
@@ -597,14 +597,14 @@ class _ReaderAnnotationEditorState extends State<ReaderAnnotationEditor> {
                               showNovelFeedback(context, '已复制选中内容');
                             }
                           },
-                    child: const AppText('复制原文'),
+                    child: const Text('复制原文'),
                   ),
               ],
             ),
             if (_rangeChange != null)
               const Padding(
                 padding: EdgeInsets.only(top: 6),
-                child: AppText(
+                child: Text(
                   '范围将在保存后更新；隐藏文字和其他片段保持不变。',
                   style: TextStyle(fontSize: 12, height: 1.6),
                 ),
@@ -643,7 +643,7 @@ class _ReaderAnnotationEditorState extends State<ReaderAnnotationEditor> {
               onChanged: (value) => setState(() => _color = value),
             ),
             const SizedBox(height: 20),
-            const AppText(
+            const Text(
               '个人批注',
               style: TextStyle(fontWeight: FontWeight.w600),
             ),
@@ -700,7 +700,7 @@ class _ReaderAnnotationEditorState extends State<ReaderAnnotationEditor> {
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 12),
-                child: AppText(
+                child: Text(
                   _error!,
                   style: TextStyle(color: scheme.error, height: 1.5),
                 ),
@@ -715,7 +715,7 @@ class _ReaderAnnotationEditorState extends State<ReaderAnnotationEditor> {
               const SizedBox(height: 8),
               GlassTextButton(
                 onPressed: _saving ? null : _delete,
-                child: const AppText('删除这条记录'),
+                child: const Text('删除这条记录'),
               ),
             ],
           ],

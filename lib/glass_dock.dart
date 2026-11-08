@@ -523,7 +523,7 @@ class _GlassDockState extends State<GlassDock> with TickerProviderStateMixin {
             (widget.animateInactiveIcons || widget.selectedIndex == index),
       ),
     );
-    final label = AppText(
+    final label = Text(
       item.label,
       maxLines: 1,
       style: TextStyle(

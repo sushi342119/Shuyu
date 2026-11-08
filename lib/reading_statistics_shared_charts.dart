@@ -69,7 +69,7 @@ class _ReadingStatisticsBarsState extends State<ReadingStatisticsBars> {
 
   @override
   Widget build(BuildContext context) => Semantics(
-    label: appText(context, widget.semanticLabel),
+    label: widget.semanticLabel,
     value: [
       for (
         var i = 0;
@@ -332,12 +332,12 @@ class ReadingProgressBands extends StatelessWidget {
                 Row(
                   children: [
                     Expanded(
-                      child: AppText(
+                      child: Text(
                         const ['0–25%', '25–50%', '50–75%', '75–100%'][i],
                         style: TextStyle(fontSize: labelSize),
                       ),
                     ),
-                    AppText(
+                    Text(
                       '${bands[i]} 本',
                       style: TextStyle(fontSize: labelSize),
                     ),
@@ -402,7 +402,7 @@ class ReadingActivityRing extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              AppText(
+              Text(
                 ratio == null ? '—' : '${(ratio! * 100).round()}%',
                 style: TextStyle(
                   fontSize: size * .21,
@@ -412,7 +412,7 @@ class ReadingActivityRing extends StatelessWidget {
               if (caption != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 5),
-                  child: AppText(
+                  child: Text(
                     caption!,
                     style: TextStyle(
                       fontSize: size * .045,

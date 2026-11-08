@@ -15,7 +15,6 @@ import 'package:path_provider/path_provider.dart';
 import 'catalog.dart';
 import 'library_backup.dart';
 import 'book_tags.dart';
-import 'app_language.dart';
 import 'haptic_preferences.dart';
 import 'performance_preferences.dart';
 import 'app_typography.dart';
@@ -867,30 +866,12 @@ class LibraryState extends ChangeNotifier {
   String get shelfFilter => _shelfFilter;
   bool get keepScreenOn => _keepScreenOn;
   ThemeMode get theme => _theme;
-  AppLanguage get language => AppLanguage.fromRecord(_prefs.get('appLanguage'));
   double get fontSize => _fontSize;
   double get lineHeight => _lineHeight;
   int get debugMetadataEncodeCount => _metadataEncodes;
   // Existing route/reader callers must follow the visible motion selector too.
   bool get reduceMotion => _reduceMotion || _motionLevel == MotionLevel.off;
   HapticPreferences get haptics => _haptics;
-
-  Future<void> setLanguage(AppLanguage value) async {
-    if (_restoreBarrier case final barrier?) {
-      return barrier.future.then((_) => setLanguage(value));
-    }
-    await _queuePositionWrite(() async {
-      if (value != AppLanguage.simplified) await ChineseText.prepare();
-      final current = language;
-      await writeLibraryPreference(_prefs, 'appLanguage', value.name);
-      if (current != value && !_disposed) {
-        _application.notifyListeners();
-        _readerSettings.notifyListeners();
-        _settings.notifyListeners();
-        notifyListeners();
-      }
-    });
-  }
 
   /// 当前字体 ID（稳定 ID，持久化）。
   String get appFontId => _appFontId;
@@ -3525,7 +3506,6 @@ class LibraryState extends ChangeNotifier {
       'reading_history_hidden': _hiddenHistory.map((id) => '$id').toList(),
       'recentSearches': _recentSearches,
       'theme': _theme.name,
-      'appLanguage': language.name,
       'readerFontSize': _fontSize,
       'readerLineHeight': _lineHeight,
       'reduceMotion': _reduceMotion,

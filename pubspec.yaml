@@ -102,11 +102,9 @@ flutter:
     - assets/licenses/poi.txt
     - assets/licenses/bouncycastle.txt
     - assets/licenses/desugar-jdk.txt
-    - assets/licenses/opencc.txt
     - assets/licenses/juniversalchardet.txt
     - assets/licenses/cronet.txt
     - assets/licenses/dart-jieba.txt
-    - assets/opencc/
     - assets/tokenizer/jieba-1.0.1.dgz
   fonts:
     - family: SourceHanSerifCN

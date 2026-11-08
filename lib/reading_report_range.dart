@@ -112,7 +112,7 @@ class _ReadingReportDateSheetState extends State<ReadingReportDateSheet> {
         AppControls.segments<bool>(
           context,
           groupValue: _editingEnd,
-          children: const {false: AppText('开始日期'), true: AppText('结束日期')},
+          children: const {false: Text('开始日期'), true: Text('结束日期')},
           onValueChanged: (value) {
             if (value != null) setState(() => _editingEnd = value);
           },
@@ -137,7 +137,7 @@ class _ReadingReportDateSheetState extends State<ReadingReportDateSheet> {
             onDateTimeChanged: _changeDate,
           ),
         ),
-        AppText(
+        Text(
           '${_date(_start)} — ${_date(_end)}',
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 13),
@@ -147,7 +147,7 @@ class _ReadingReportDateSheetState extends State<ReadingReportDateSheet> {
           key: const ValueKey('report-date-confirm'),
           onPressed: () =>
               Navigator.pop(context, DateTimeRange(start: _start, end: _end)),
-          child: const AppText('使用此区间'),
+          child: const Text('使用此区间'),
         ),
       ],
     ),

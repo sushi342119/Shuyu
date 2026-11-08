@@ -1,10 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
-import 'app_language.dart';
 import 'reader_rich_content.dart';
 import 'reader_coordinate_map.dart';
-import 'reader_languages.dart';
 
 ReaderRichBody _splitParagraphs(String source) => ReaderRichBody.decode(source);
 
@@ -53,29 +51,6 @@ class ReaderContent {
     for (final index in order) ?readerIllustrationUrl(paragraphs[index]),
   ]);
 
-  ReaderContent localized(Locale locale) {
-    if (chineseLocale(locale).countryCode == 'CN') return this;
-    return ReaderContent(
-      List.unmodifiable([
-        for (final (index, text) in paragraphs.indexed)
-          readerIllustrationUrl(text) != null ||
-                  text.trim() == '[插图]' ||
-                  formats[index]?.language.isNotEmpty == true &&
-                      formats[index]!.language != 'zh'
-              ? text
-              : ChineseText.convert(text, locale, reader: true),
-      ]),
-      readingOrder: readingOrder,
-      inlineOwners: inlineOwners,
-      placementIds: placementIds,
-      formats: formats,
-      notes: notes,
-      revision: revision,
-      coordinateMap: coordinateMap,
-      languageFilter: languageFilter,
-    );
-  }
-
   static Future<ReaderContent> parse(String source) async {
     if (source.trim().isEmpty) throw const FormatException('章节正文为空');
     final rich = source.length > 64 * 1024
@@ -87,35 +62,6 @@ class ReaderContent {
       notes: rich.notes,
       revision: rich.revision,
       coordinateMap: rich.coordinateMap,
-    );
-  }
-
-  Future<ReaderContent> localizedAsync(Locale locale) async {
-    if (chineseLocale(locale).countryCode == 'CN') return this;
-    // A Chinese UI preference must not rewrite Japanese kanji in bilingual books.
-    final eligible = [
-      for (var i = 0; i < paragraphs.length; i++)
-        if (formats[i]?.language.isNotEmpty != true ||
-            readerLanguageCode(formats[i]!.language) == 'zh')
-          i,
-    ];
-    final translated = await ChineseText.readerParagraphs([
-      for (final i in eligible) paragraphs[i],
-    ], locale);
-    final localized = List<String>.of(paragraphs);
-    for (var i = 0; i < eligible.length; i++) {
-      localized[eligible[i]] = translated[i];
-    }
-    return ReaderContent(
-      List.unmodifiable(localized),
-      readingOrder: readingOrder,
-      inlineOwners: inlineOwners,
-      placementIds: placementIds,
-      formats: formats,
-      notes: notes,
-      revision: revision,
-      coordinateMap: coordinateMap,
-      languageFilter: languageFilter,
     );
   }
 }

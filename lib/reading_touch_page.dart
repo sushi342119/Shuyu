@@ -333,7 +333,7 @@ class _ReadingTouchContentState extends State<ReadingTouchContent> {
                     ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: AppText(
+                      child: Text(
                         error,
                         style: TextStyle(color: scheme.error, height: 1.5),
                       ),
@@ -342,7 +342,7 @@ class _ReadingTouchContentState extends State<ReadingTouchContent> {
                       GlassTextButton(
                         compact: true,
                         onPressed: _busy ? null : _store.flush,
-                        child: const AppText('重试'),
+                        child: const Text('重试'),
                       ),
                   ],
                 ),
@@ -361,8 +361,8 @@ class _ReadingTouchContentState extends State<ReadingTouchContent> {
                   key: const ValueKey('touch-orientation'),
                   groupValue: _orientation,
                   children: const {
-                    ReadingTouchOrientation.portrait: AppText('竖屏'),
-                    ReadingTouchOrientation.landscape: AppText('横屏'),
+                    ReadingTouchOrientation.portrait: Text('竖屏'),
+                    ReadingTouchOrientation.landscape: Text('横屏'),
                   },
                   onValueChanged: (value) {
                     if (value != null) setState(() => _orientation = value);
@@ -383,7 +383,7 @@ class _ReadingTouchContentState extends State<ReadingTouchContent> {
                     children: [
                       const ArchiveIcon(CupertinoIcons.trash, size: 17),
                       const SizedBox(width: 8),
-                      AppText(_store.unreadable ? '清空损坏记录' : '清空触摸记录'),
+                      Text(_store.unreadable ? '清空损坏记录' : '清空触摸记录'),
                     ],
                   ),
                 ),
@@ -428,12 +428,12 @@ class _TouchRecordingSettings extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    AppText(
+                    Text(
                       status,
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 5),
-                    AppText(
+                    Text(
                       '正文触碰起点 · 本机累计',
                       style: TextStyle(color: muted, fontSize: 13),
                     ),
@@ -455,7 +455,7 @@ class _TouchRecordingSettings extends StatelessWidget {
             ],
           ),
           const Divider(height: 28),
-          AppText(
+          Text(
             '不受日期筛选，不保存轨迹、书名或正文，不随文库备份与同步。',
             style: TextStyle(color: muted, fontSize: 13, height: 1.6),
           ),
@@ -483,7 +483,7 @@ class _TouchTotals extends StatelessWidget {
             key: const ValueKey('touch-total-fit'),
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,
-            child: AppText(
+            child: Text(
               _number(snapshot.total),
               key: const ValueKey('touch-total'),
               maxLines: 1,
@@ -496,13 +496,13 @@ class _TouchTotals extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          AppText('累计触碰', style: TextStyle(color: muted)),
+          Text('累计触碰', style: TextStyle(color: muted)),
         ],
       );
       final started = snapshot.startedAt?.toLocal();
       final date = started == null
           ? null
-          : AppText(
+          : Text(
               '始于 ${started.year}.${started.month.toString().padLeft(2, '0')}.${started.day.toString().padLeft(2, '0')}',
               key: const ValueKey('touch-started-at'),
               style: TextStyle(color: muted, fontSize: 12),
@@ -596,7 +596,7 @@ class _TouchHeatmap extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            AppText(
+            Text(
               '少',
               style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
             ),
@@ -616,7 +616,7 @@ class _TouchHeatmap extends StatelessWidget {
                 ),
               ),
             const SizedBox(width: 8),
-            AppText(
+            Text(
               '多',
               style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
             ),
@@ -640,7 +640,7 @@ class _TouchFacts extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        AppText(
+        Text(
           '常驻${grid.busiestZone}',
           key: const ValueKey('touch-direction-facts'),
           style: Theme.of(
@@ -648,14 +648,14 @@ class _TouchFacts extends StatelessWidget {
           ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 8),
-        AppText(
+        Text(
           '$title ${_number(grid.total)} 次 · 覆盖 ${grid.occupied} / ${grid.cells.length} 格',
           style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
         ),
         const SizedBox(height: 22),
         _SideDistribution(grid: grid, ink: scheme.primary),
         const SizedBox(height: 18),
-        AppText(
+        Text(
           '点击、滑动、长按都只计一次起点。颜色表示当前方向的相对频次。',
           style: TextStyle(
             color: scheme.onSurfaceVariant,
@@ -686,8 +686,8 @@ class _SideDistribution extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            AppText('左半屏 ${left.round()}%'),
-            AppText('右半屏 ${(100 - left).round()}%'),
+            Text('左半屏 ${left.round()}%'),
+            Text('右半屏 ${(100 - left).round()}%'),
           ],
         ),
         const SizedBox(height: 9),

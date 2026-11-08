@@ -220,7 +220,7 @@ class _ReadingMomentDialogState extends State<ReadingMomentDialog>
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icons) ...[ArchiveIcon(icon, size: 17), const SizedBox(width: 8)],
-          AppText(value, style: const TextStyle(fontSize: 14)),
+          Text(value, style: const TextStyle(fontSize: 14)),
         ],
       );
       Widget saveLabel(VoidCallback? onPressed) => GlassTextButton(
@@ -324,7 +324,7 @@ class _ReadingMomentDialogState extends State<ReadingMomentDialog>
                             children: [
                               const ArchiveIcon(CupertinoIcons.eye, size: 18),
                               const SizedBox(width: 10),
-                              const Expanded(child: AppText('书籍信息')),
+                              const Expanded(child: Text('书籍信息')),
                               AppControls.toggle(
                                 context,
                                 key: const ValueKey(
@@ -348,7 +348,7 @@ class _ReadingMomentDialogState extends State<ReadingMomentDialog>
                             padding: const EdgeInsets.only(top: 8),
                             child: Semantics(
                               liveRegion: true,
-                              child: AppText(
+                              child: Text(
                                 _feedback!,
                                 style: TextStyle(
                                   fontSize: 13,
@@ -390,13 +390,13 @@ class _MomentSheetHeader extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            AppText(
+            Text(
               title,
               style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w600),
             ),
             if (subtitle != null) ...[
               const SizedBox(height: 5),
-              AppText(
+              Text(
                 subtitle!,
                 style: TextStyle(
                   fontSize: 12,
@@ -463,7 +463,7 @@ class ReadingMomentsHistorySheet extends StatelessWidget {
                   ? const Center(
                       child: Padding(
                         padding: EdgeInsets.symmetric(vertical: 24),
-                        child: AppText(
+                        child: Text(
                           '每天读满五分钟，留下一个阅读日。\n值得记住的时刻，会在这里相遇。',
                           textAlign: TextAlign.center,
                           style: TextStyle(fontSize: 14, height: 1.8),
@@ -510,7 +510,7 @@ class ReadingMomentsHistorySheet extends StatelessWidget {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      AppText(
+                                      Text(
                                         title != null && title.isNotEmpty
                                             ? title
                                             : moment.title,
@@ -523,7 +523,7 @@ class ReadingMomentsHistorySheet extends StatelessWidget {
                                         ),
                                       ),
                                       const SizedBox(height: 6),
-                                      AppText(
+                                      Text(
                                         '${readingMomentDate(moment.earnedAt)} · ${completion != null
                                             ? completion.finished
                                                   ? '读完留念'

@@ -195,7 +195,7 @@ class _ReaderStatusFooterState extends State<ReaderStatusFooter>
               ] else if (widget.timeAtEnd)
                 const Spacer(),
               IgnorePointer(
-                child: AppText(time, key: const ValueKey('reader-status-time')),
+                child: Text(time, key: const ValueKey('reader-status-time')),
               ),
               if (widget.leading == null && !widget.timeAtEnd) const Spacer(),
               if (widget.showBattery && _charging)
@@ -209,7 +209,7 @@ class _ReaderStatusFooterState extends State<ReaderStatusFooter>
                 ),
                 const SizedBox(width: 5),
                 IgnorePointer(
-                  child: AppText(
+                  child: Text(
                     '$_battery%',
                     key: const ValueKey('reader-status-battery'),
                   ),

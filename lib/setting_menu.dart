@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'app_ui.dart';
 import 'app_interactions.dart';
-import 'library_state.dart';
 
 /// The whole settings row is tappable; its actual glass selector is the menu's
 /// source. Labels and controls share the same responsive layout in the reader.
@@ -73,7 +72,7 @@ class _GlassSettingMenuState<T> extends State<GlassSettingMenu<T>> {
           ArchiveIcon(widget.icon, size: 21),
           const SizedBox(width: 12),
           Expanded(
-            child: AppText(
+            child: Text(
               widget.label,
               maxLines: 1,
               softWrap: false,
@@ -100,7 +99,7 @@ class _GlassSettingMenuState<T> extends State<GlassSettingMenu<T>> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Flexible(
-                  child: AppText(
+                  child: Text(
                     widget.options[widget.value] ?? '',
                     maxLines: 1,
                     softWrap: false,
@@ -148,29 +147,4 @@ class _GlassSettingMenuState<T> extends State<GlassSettingMenu<T>> {
       ),
     );
   }
-}
-
-class LanguageSettingMenu extends StatelessWidget {
-  const LanguageSettingMenu({super.key, required this.state});
-  final LibraryState state;
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: state.settingsChanges,
-    builder: (context, _) => GlassSettingMenu<AppLanguage>(
-      icon: CupertinoIcons.globe,
-      label: '语言',
-      value: state.language,
-      options: {
-        for (final language in AppLanguage.values) language: language.label,
-      },
-      reduceMotion: state.reduceMotion,
-      onChanged: (value) async {
-        try {
-          await state.setLanguage(value);
-        } catch (_) {
-          if (context.mounted) showNovelFeedback(context, '语言设置保存失败，请重试');
-        }
-      },
-    ),
-  );
 }

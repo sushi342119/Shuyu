@@ -314,7 +314,7 @@ class _PaletteSettingsPageState extends State<PaletteSettingsPage>
                                     system == null
                             ? null
                             : () => _save(prefs.copyWith(source: entry.key)),
-                        child: AppText(
+                        child: Text(
                           entry.value,
                           style: const TextStyle(fontSize: 13),
                         ),
@@ -337,7 +337,7 @@ class _PaletteSettingsPageState extends State<PaletteSettingsPage>
                             onPressed: _busy
                                 ? null
                                 : () => state.setPaletteVariant(variant),
-                            child: AppText(
+                            child: Text(
                               variant.label,
                               style: const TextStyle(fontSize: 13),
                             ),
@@ -349,12 +349,12 @@ class _PaletteSettingsPageState extends State<PaletteSettingsPage>
                 if (state.paletteError != null)
                   GlassTextButton(
                     onPressed: () => state.refreshSystemPalette(),
-                    child: AppText(state.paletteError!),
+                    child: Text(state.paletteError!),
                   ),
                 if (state.paletteLoaded && system == null)
                   Padding(
                     padding: const EdgeInsets.only(top: 10),
-                    child: AppText(
+                    child: Text(
                       '当前设备未提供系统配色，可使用自选颜色或图片取色。',
                       style: TextStyle(
                         fontSize: 12,
@@ -406,7 +406,7 @@ class _PaletteSettingsPageState extends State<PaletteSettingsPage>
                             child: GlassTextButton(
                               key: const ValueKey('palette-custom-color'),
                               onPressed: _busy ? null : _custom,
-                              child: const AppText('自选颜色'),
+                              child: const Text('自选颜色'),
                             ),
                           ),
                           const SizedBox(width: 10),
@@ -414,13 +414,13 @@ class _PaletteSettingsPageState extends State<PaletteSettingsPage>
                             child: GlassTextButton(
                               key: const ValueKey('palette-image-import'),
                               onPressed: _busy ? null : _image,
-                              child: AppText(_busy ? '正在取色' : '图片取色'),
+                              child: Text(_busy ? '正在取色' : '图片取色'),
                             ),
                           ),
                         ],
                       ),
                       const SizedBox(height: 8),
-                      AppText(
+                      Text(
                         '当前主色 ${paletteHex(prefs.color)}',
                         style: ArchiveDesign.codeStyle(context),
                       ),
@@ -433,7 +433,7 @@ class _PaletteSettingsPageState extends State<PaletteSettingsPage>
                 Row(
                   children: [
                     const Expanded(
-                      child: AppText(
+                      child: Text(
                         '图标莫奈取色',
                         style: TextStyle(
                           fontSize: 14,
@@ -451,7 +451,7 @@ class _PaletteSettingsPageState extends State<PaletteSettingsPage>
                     ),
                   ],
                 ),
-                AppText(
+                Text(
                   '使用系统壁纸的主题图标配色；关闭时提供原图标。需 Android 13 及以上，并在支持的桌面开启「主题图标」，实际着色由桌面决定。',
                   style: TextStyle(
                     fontSize: 12,
@@ -477,7 +477,7 @@ class _PalettePreview extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        AppText(
+        Text(
           '故事，自有它的颜色。',
           style: TextStyle(
             color: scheme.onSurface,
@@ -486,7 +486,7 @@ class _PalettePreview extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 8),
-        AppText(
+        Text(
           '页面、玻璃与控件，温和地保持一致。',
           style: TextStyle(
             color: scheme.onSurfaceVariant,
@@ -581,7 +581,7 @@ class _PaletteSwatch extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 6),
-              AppText(label, style: const TextStyle(fontSize: 12)),
+              Text(label, style: const TextStyle(fontSize: 12)),
             ],
           ),
         ),
@@ -658,7 +658,7 @@ class _SeedEditorState extends State<_SeedEditor> {
       ),
       const SizedBox(height: 12),
       for (final component in ['色相', '饱和度', '明度']) ...[
-        AppText(component, style: const TextStyle(fontSize: 13)),
+        Text(component, style: const TextStyle(fontSize: 13)),
         AppControls.slider(
           context,
           value: component == '色相'
@@ -680,7 +680,7 @@ class _SeedEditorState extends State<_SeedEditor> {
         onPressed: !_valid
             ? null
             : () => Navigator.pop(context, _hsv.toColor()),
-        child: const AppText('使用此颜色'),
+        child: const Text('使用此颜色'),
       ),
     ],
   );
@@ -737,7 +737,7 @@ class _PaletteImagePickerPageState extends State<PaletteImagePickerPage> {
     child: ListView(
       padding: featurePadding(context),
       children: [
-        const AppText(
+        const Text(
           '点选或拖动图片取色',
           style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
         ),
@@ -821,7 +821,7 @@ class _PaletteImagePickerPageState extends State<PaletteImagePickerPage> {
               decoration: BoxDecoration(color: _color, shape: BoxShape.circle),
             ),
             const SizedBox(width: 12),
-            AppText(
+            Text(
               paletteHex(_color),
               style: ArchiveDesign.codeStyle(context),
             ),
@@ -831,7 +831,7 @@ class _PaletteImagePickerPageState extends State<PaletteImagePickerPage> {
         GlassTextButton(
           key: const ValueKey('palette-image-apply'),
           onPressed: () => Navigator.pop(context, _color),
-          child: const AppText('使用此颜色'),
+          child: const Text('使用此颜色'),
         ),
       ],
     ),

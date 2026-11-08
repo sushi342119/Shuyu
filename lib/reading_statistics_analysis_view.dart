@@ -80,14 +80,14 @@ class _AnalysisContent {
 
   Widget title(String value) => Padding(
     padding: const EdgeInsets.only(top: 26, bottom: 14),
-    child: AppText(
+    child: Text(
       value,
       style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w600),
     ),
   );
   Widget note(String value) => Padding(
     padding: const EdgeInsets.only(top: 9),
-    child: AppText(value, style: muted),
+    child: Text(value, style: muted),
   );
   Widget fact(String label, String value) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 7),
@@ -97,9 +97,9 @@ class _AnalysisContent {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              AppText(label, style: muted),
+              Text(label, style: muted),
               const SizedBox(height: 4),
-              AppText(
+              Text(
                 value,
                 style: const TextStyle(
                   fontSize: 14,
@@ -113,10 +113,10 @@ class _AnalysisContent {
         return Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(child: AppText(label, style: muted)),
+            Expanded(child: Text(label, style: muted)),
             const SizedBox(width: 16),
             Flexible(
-              child: AppText(
+              child: Text(
                 value,
                 textAlign: TextAlign.end,
                 style: const TextStyle(
@@ -309,7 +309,7 @@ class _AnalysisContent {
                   children: [
                     SizedBox(
                       width: MediaQuery.textScalerOf(context).scale(30),
-                      child: AppText(
+                      child: Text(
                         '${i + 1}'.padLeft(2, '0'),
                         style: const TextStyle(fontSize: 19),
                       ),
@@ -322,7 +322,7 @@ class _AnalysisContent {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          AppText(
+                          Text(
                             titleFor(b.id)!,
                             style: const TextStyle(
                               fontSize: 16,
@@ -331,7 +331,7 @@ class _AnalysisContent {
                             ),
                           ),
                           const SizedBox(height: 7),
-                          AppText(
+                          Text(
                             '${b.seconds == 0 && b.measuredMilliseconds > 0 ? _measuredDuration(b.measuredMilliseconds) : statisticsDuration(b.seconds!)}${b.hasPartialTimeCoverage ? ' · 部分时长' : ''}',
                             style: muted,
                           ),
@@ -550,7 +550,7 @@ class _BookJourneySegment extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          AppText(
+          Text(
             '${_month(months.first.date)}—${_month(months.last.date)}',
             style: TextStyle(
               fontSize: 13,
@@ -634,7 +634,7 @@ class _MonthlyMilestones extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    AppText(
+                    Text(
                       _month(month.date),
                       style: TextStyle(
                         fontSize: 12,
@@ -656,7 +656,7 @@ class _MonthlyMilestones extends StatelessWidget {
                           children: [
                             SizedBox(
                               width: MediaQuery.textScalerOf(context).scale(32),
-                              child: AppText(
+                              child: Text(
                                 item.$1,
                                 style: const TextStyle(fontSize: 12),
                               ),
@@ -677,7 +677,7 @@ class _MonthlyMilestones extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(width: 12),
-                            AppText(
+                            Text(
                               '${item.$2}',
                               style: const TextStyle(fontSize: 13),
                             ),
