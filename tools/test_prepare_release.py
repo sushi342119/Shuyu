@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-from prepare_release import metadata, sync_dart_defaults
+from prepare_release import metadata, next_version, sync_dart_defaults
 
 
 class ReleaseMetadataTest(unittest.TestCase):
@@ -101,6 +101,16 @@ const currentAppBuild = int.fromEnvironment(
         self.assertIn("defaultValue: '0.2.0'", synced)
         self.assertIn("defaultValue: 2", synced)
         self.assertIn("const currentReleaseNotes = '''\n- 新功能\n''';", synced)
+
+    def test_version_segments_carry_over_at_ten(self):
+        self.assertEqual(next_version("1.8.9", 56), ("1.9.0", 57))
+        self.assertEqual(next_version("1.9.0", 74), ("1.9.1", 75))
+        self.assertEqual(next_version("1.9.9", 83), ("2.0.0", 84))
+        for bad_version in ("1.8.10", "1.10.0", "1.8.26"):
+            with self.subTest(version=bad_version):
+                (self.root / "pubspec.yaml").write_text(f"version: {bad_version}+10\n")
+                with self.assertRaisesRegex(ValueError, "carry over at 10"):
+                    metadata(self.root)
 
     def test_from_environment_default_values_are_supported(self):
         (self.root / "lib/updates/app_updates.dart").write_text(

@@ -8,7 +8,7 @@
 
 ## 正式发布
 
-1. 同步更新 pubspec.yaml、lib/updates/app_updates.dart 中的版本、构建号及说明，以及 CHANGELOG.md。构建号必须大于已发布版本。
+1. 同步更新 pubspec.yaml、lib/updates/app_updates.dart 中的版本、构建号及说明，以及 CHANGELOG.md。版本号采用满十进一规则（次版本号与修订号只取 0–9，到 10 自动向前进一位，例如 `1.9.9` 之后为 `2.0.0`），构建号必须严格大于已发布版本。
 2. 配置 ANDROID_KEYSTORE_BASE64、ANDROID_STORE_PASSWORD、ANDROID_KEY_ALIAS、ANDROID_KEY_PASSWORD 四项 Actions Secrets。使用现有长期密钥，保留安全备份。
 3. 执行 flutter pub get、flutter analyze、flutter test 和 Python 工具测试。
 4. 推送与版本一致的标签，例如 v1.6.1+43。Prepare Release 验证版本、构建固定签名的 ARM64 APK、导出匹配源码并创建草稿 Release。
