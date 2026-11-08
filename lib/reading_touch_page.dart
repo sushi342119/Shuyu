@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'app_interactions.dart';
 import 'app_ui.dart';
+import 'feature_pages.dart';
 import 'reading_touch_store.dart';
 
 /// The same controls and data view inside the statistics Dock or its own route.
