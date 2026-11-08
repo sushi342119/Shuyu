@@ -952,7 +952,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
   Widget _buildContent(BuildContext context, List<Novel> books) {
     final feed = widget.feed;
     final allBooks = books;
-    // 只过滤轮播；随机抽阅与“更多书籍”始终使用全量。标签与书架共用一份
+    // 只过滤轮播；随机抽阅与概览始终基于全量。标签与书架共用一份
     // 选择，按书架上的 AND / OR 规则匹配。
     final filter = LibraryFilter.shared;
     final List<Novel> carouselBooks = !filter.hasTags
@@ -967,7 +967,6 @@ class _DiscoverPageState extends State<DiscoverPage> {
               )
               .toList(growable: false);
 
-    final featuredCount = allBooks.length.clamp(0, 10);
     Widget body;
     if (allBooks.isEmpty && feed?.loading == true) {
       body = LibrarySkeleton(header: _categoryHeader(context));
@@ -1045,42 +1044,19 @@ class _DiscoverPageState extends State<DiscoverPage> {
                             widget.repository,
                           ),
                         ),
-                        if (allBooks.length > featuredCount ||
-                            feed?.loading == true) ...[
-                          const SizedBox(height: 32),
-                          LoadedContentItem(
-                            index: 2,
-                            child: sectionHeader(context, '更多书籍', ''),
+                        const SizedBox(height: 20),
+                        LoadedContentItem(
+                          index: 2,
+                          child: DiscoverLibraryOverview(
+                            books: allBooks,
+                            feed: feed,
+                            state: widget.state,
+                            repository: widget.repository,
                           ),
-                          const SizedBox(height: 8),
-                        ],
+                        ),
                       ],
                     ],
                   ),
-                ),
-              ),
-              SliverPadding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                sliver: SliverList.builder(
-                  itemCount: allBooks.length - featuredCount,
-                  itemBuilder: (context, index) {
-                    final book = allBooks[index + featuredCount];
-                    return LoadedContentItem(
-                      key: ValueKey(book.id),
-                      index: index + featuredCount + 2,
-                      child: NovelRow(
-                        novel: book,
-                        coverHeroTag: CoverHeroTag(context, book.id),
-                        onTap: () => openDetail(
-                          context,
-                          book,
-                          widget.state,
-                          widget.repository,
-                          coverHeroTag: CoverHeroTag(context, book.id),
-                        ),
-                      ),
-                    );
-                  },
                 ),
               ),
               SliverPadding(
@@ -1088,9 +1064,11 @@ class _DiscoverPageState extends State<DiscoverPage> {
                   bottom: MediaQuery.paddingOf(context).bottom + 120,
                 ),
                 sliver: SliverToBoxAdapter(
-                  child: feed == null
-                      ? const SizedBox.shrink()
-                      : FeedFooter(feed: feed),
+                  child:
+                      feed != null &&
+                          (feed.loading || feed.error != null || feed.hasMore)
+                      ? FeedFooter(feed: feed)
+                      : const SizedBox.shrink(),
                 ),
               ),
             ],
@@ -1200,6 +1178,655 @@ class _DiscoverPageState extends State<DiscoverPage> {
       return;
     }
     _selectedTagId = nextTagId;
+  }
+}
+
+/// 发现页下方的馆藏与阅读概览卡片：展示书库书籍数量、各标签书籍数量、
+/// 累计阅读小时数与已读书籍数量。
+class DiscoverLibraryOverview extends StatefulWidget {
+  const DiscoverLibraryOverview({
+    super.key,
+    required this.books,
+    required this.state,
+    required this.repository,
+    this.feed,
+  });
+
+  final List<Novel> books;
+  final LibraryState state;
+  final NovelRepository repository;
+  final NovelFeedController? feed;
+
+  @override
+  State<DiscoverLibraryOverview> createState() =>
+      _DiscoverLibraryOverviewState();
+}
+
+class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
+  late Listenable _changes;
+
+  @override
+  void initState() {
+    super.initState();
+    _bind();
+  }
+
+  @override
+  void didUpdateWidget(covariant DiscoverLibraryOverview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.state != widget.state ||
+        oldWidget.repository != widget.repository ||
+        oldWidget.feed != widget.feed) {
+      _bind();
+    }
+  }
+
+  void _bind() {
+    _changes = Listenable.merge([
+      widget.state,
+      widget.state.historyChanges,
+      widget.state.readingActivity,
+      TagStore.shared,
+      LibraryFilter.shared,
+      localLibraryOf(widget.repository),
+      widget.feed,
+    ]);
+  }
+
+  static String _formatReadingHours(int totalSeconds) {
+    if (totalSeconds <= 0) return '0';
+    final hours = totalSeconds / 3600.0;
+    if (hours < 0.1) return '0.1';
+    final tenths = (hours * 10).round();
+    if (tenths % 10 == 0) {
+      return '${tenths ~/ 10}';
+    }
+    return (tenths / 10).toStringAsFixed(1);
+  }
+
+  void _openStatistics() {
+    unawaited(
+      pushNovelPage<void>(
+        context,
+        ReadingStatisticsPage(
+          state: widget.state,
+          repository: widget.repository,
+        ),
+        reduceMotion: widget.state.reduceMotion,
+      ),
+    );
+  }
+
+  void _openTagManage() {
+    unawaited(
+      pushNovelPage<void>(
+        context,
+        TagManagePage(
+          state: widget.state,
+          local: localLibraryOf(widget.repository),
+        ),
+        reduceMotion: widget.state.reduceMotion,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final containerPaper = dark
+        ? Color.lerp(scheme.surface, scheme.surfaceContainerHigh, .45)!
+        : Color.lerp(scheme.surface, scheme.primaryContainer, .20)!;
+    final tilePaper = dark
+        ? Color.lerp(scheme.surfaceContainerHigh, scheme.primaryContainer, .22)!
+        : scheme.surface;
+    final ink = scheme.onSurface;
+    final muted = scheme.onSurfaceVariant;
+    final border = dark
+        ? scheme.outlineVariant
+        : Color.lerp(scheme.outlineVariant, scheme.primary, .16)!;
+    final accent = scheme.primary;
+
+    return ListenableBuilder(
+      listenable: _changes,
+      builder: (context, _) {
+        final local =
+            localLibraryOf(widget.repository) ?? widget.state.localLibrary;
+        final libraryIds = <int>{
+          for (final book in widget.books) book.id,
+          if (local != null)
+            for (final book in local.books) book.id,
+          ...widget.state.shelf,
+        };
+        final totalBooks = math.max(
+          libraryIds.length,
+          widget.feed?.totalItems ?? 0,
+        );
+
+        final byId = <int, Novel>{
+          for (final book in widget.books) book.id: book,
+        };
+        final offline = widget.repository is OfflineNovelRepository
+            ? widget.repository as OfflineNovelRepository
+            : null;
+        Novel? knownBook(int id) =>
+            byId[id] ??
+            local?.novelFor(id) ??
+            widget.state.cachedNovel(id) ??
+            offline?.cache.book(id)?.novel;
+
+        final readBookIds = <int>{
+          ...widget.state.recordedReadingIds,
+          for (final day in widget.state.readingActivity.days)
+            if (day.seconds > 0) ...day.bookIds,
+        };
+        var finishedBooks = 0;
+        for (final id in readBookIds) {
+          final book = knownBook(id);
+          if (book != null && widget.state.finishedReading(book)) {
+            finishedBooks++;
+          }
+        }
+        final readBooks = readBookIds.length;
+
+        final totalSeconds = widget.state.readingActivity.totalSeconds;
+        final hoursText = _formatReadingHours(totalSeconds);
+        final durationCaption = totalSeconds <= 0
+            ? '累计 0 分钟'
+            : '累计 ${statisticsDuration(totalSeconds)}';
+
+        final store = TagStore.shared;
+        final tags = store.tags;
+        var taggedBooks = 0;
+        for (final id in libraryIds) {
+          if (store.tagsForBook(id).isNotEmpty) {
+            taggedBooks++;
+          }
+        }
+        final untaggedBooks = math.max(0, totalBooks - taggedBooks);
+        final tagCounts = <({Tag tag, int count})>[
+          for (final tag in tags)
+            (tag: tag, count: store.bookCountFor(tag.id)),
+        ];
+        final maxTagCount = tagCounts.fold<int>(
+          0,
+          (prev, item) => math.max(prev, item.count),
+        );
+
+        return Container(
+          key: const ValueKey('discover-library-overview'),
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: containerPaper,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: border),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      '书库与阅读',
+                      style: TextStyle(
+                        fontFamily: 'serif',
+                        fontSize: 21,
+                        height: 1.3,
+                        fontWeight: FontWeight.w600,
+                        color: ink,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                    TextButton.icon(
+                      key: const ValueKey('discover-open-statistics'),
+                      onPressed: _openStatistics,
+                      style: TextButton.styleFrom(
+                        foregroundColor: accent,
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        minimumSize: const Size(0, 32),
+                      ),
+                      icon: const Icon(CupertinoIcons.chart_bar, size: 15),
+                      label: const Text(
+                        '阅读统计',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '当前书库规模、标签分布与累计阅读记录。',
+                  style: TextStyle(
+                    color: muted,
+                    fontSize: 13,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final largeText =
+                        MediaQuery.textScalerOf(context).scale(14) > 20;
+                    final columns =
+                        constraints.maxWidth < 250 || largeText
+                        ? 1
+                        : (constraints.maxWidth >= 560 ? 4 : 2);
+                    const spacing = 12.0;
+                    final tileWidth =
+                        (constraints.maxWidth - spacing * (columns - 1)) /
+                        columns;
+                    final tiles = <Widget>[
+                      _OverviewStatTile(
+                        key: const ValueKey('discover-stat-total-books'),
+                        label: '书库藏书',
+                        value: '$totalBooks',
+                        unit: '本',
+                        caption: taggedBooks > 0
+                            ? '已设标签 $taggedBooks 本'
+                            : '当前书库全部书籍',
+                        paper: tilePaper,
+                        border: border,
+                        ink: ink,
+                        muted: muted,
+                      ),
+                      _OverviewStatTile(
+                        key: const ValueKey('discover-stat-reading-hours'),
+                        label: '阅读时长',
+                        value: hoursText,
+                        unit: '小时',
+                        caption: durationCaption,
+                        paper: tilePaper,
+                        border: border,
+                        ink: ink,
+                        muted: muted,
+                        onTap: _openStatistics,
+                      ),
+                      _OverviewStatTile(
+                        key: const ValueKey('discover-stat-read-books'),
+                        label: '已读书籍',
+                        value: '$readBooks',
+                        unit: '本',
+                        caption: readBooks > 0
+                            ? '已读完 $finishedBooks 本'
+                            : '翻开书页自动记录',
+                        paper: tilePaper,
+                        border: border,
+                        ink: ink,
+                        muted: muted,
+                        onTap: _openStatistics,
+                      ),
+                      _OverviewStatTile(
+                        key: const ValueKey('discover-stat-total-tags'),
+                        label: '标签分类',
+                        value: '${tags.length}',
+                        unit: '个',
+                        caption: tags.isEmpty
+                            ? '暂未创建标签'
+                            : '未设标签 $untaggedBooks 本',
+                        paper: tilePaper,
+                        border: border,
+                        ink: ink,
+                        muted: muted,
+                        onTap: _openTagManage,
+                      ),
+                    ];
+                    return Wrap(
+                      spacing: spacing,
+                      runSpacing: spacing,
+                      children: [
+                        for (final tile in tiles)
+                          SizedBox(width: tileWidth, child: tile),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 20),
+                Divider(height: 1, color: border.withValues(alpha: .7)),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '各个标签',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: ink,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: accent.withValues(alpha: dark ? .16 : .08),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '${tags.length} 个',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: accent,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    TextButton(
+                      key: const ValueKey('discover-manage-tags'),
+                      onPressed: _openTagManage,
+                      style: TextButton.styleFrom(
+                        foregroundColor: muted,
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        minimumSize: const Size(0, 30),
+                      ),
+                      child: const Text(
+                        '管理标签',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                if (tagCounts.isEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 16,
+                    ),
+                    decoration: BoxDecoration(
+                      color: tilePaper,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: border.withValues(alpha: .7)),
+                    ),
+                    child: Text(
+                      '还没有创建标签，为书籍添加标签后可在此查看各标签的藏书数量。',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: muted,
+                        height: 1.5,
+                      ),
+                    ),
+                  )
+                else
+                  Column(
+                    children: [
+                      for (final item in tagCounts)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: _OverviewTagRow(
+                            key: ValueKey('discover-tag-stat-${item.tag.id}'),
+                            name: item.tag.name,
+                            count: item.count,
+                            maxCount: math.max(1, maxTagCount),
+                            color: tagPalette.isEmpty
+                                ? accent
+                                : tagPalette[item.tag.colorIndex %
+                                      tagPalette.length],
+                            selected: LibraryFilter.shared.tagIds.contains(
+                              item.tag.id,
+                            ),
+                            paper: tilePaper,
+                            border: border,
+                            ink: ink,
+                            muted: muted,
+                            accent: accent,
+                            dark: dark,
+                            onTap: () =>
+                                LibraryFilter.shared.toggleTag(item.tag.id),
+                          ),
+                        ),
+                      if (untaggedBooks > 0)
+                        _OverviewTagRow(
+                          key: const ValueKey('discover-tag-stat-untagged'),
+                          name: '未设标签',
+                          count: untaggedBooks,
+                          maxCount: math.max(1, totalBooks),
+                          color: muted,
+                          selected: false,
+                          paper: tilePaper,
+                          border: border,
+                          ink: ink,
+                          muted: muted,
+                          accent: accent,
+                          dark: dark,
+                        ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _OverviewStatTile extends StatelessWidget {
+  const _OverviewStatTile({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.unit,
+    required this.caption,
+    required this.paper,
+    required this.border,
+    required this.ink,
+    required this.muted,
+    this.onTap,
+  });
+
+  final String label;
+  final String value;
+  final String unit;
+  final String caption;
+  final Color paper;
+  final Color border;
+  final Color ink;
+  final Color muted;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final content = Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: paper,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: border.withValues(alpha: .75)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: muted,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 4,
+            runSpacing: 2,
+            crossAxisAlignment: WrapCrossAlignment.end,
+            children: [
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 24,
+                  height: 1.1,
+                  fontWeight: FontWeight.w600,
+                  color: ink,
+                  letterSpacing: -.5,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Text(
+                  unit,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: muted,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            caption,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 11,
+              color: muted.withValues(alpha: .85),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (onTap == null) return content;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: content,
+    );
+  }
+}
+
+class _OverviewTagRow extends StatelessWidget {
+  const _OverviewTagRow({
+    super.key,
+    required this.name,
+    required this.count,
+    required this.maxCount,
+    required this.color,
+    required this.selected,
+    required this.paper,
+    required this.border,
+    required this.ink,
+    required this.muted,
+    required this.accent,
+    required this.dark,
+    this.onTap,
+  });
+
+  final String name;
+  final int count;
+  final int maxCount;
+  final Color color;
+  final bool selected;
+  final Color paper;
+  final Color border;
+  final Color ink;
+  final Color muted;
+  final Color accent;
+  final bool dark;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final fraction = maxCount <= 0 ? 0.0 : (count / maxCount).clamp(0.0, 1.0);
+    final row = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: selected
+            ? Color.lerp(paper, accent, dark ? .18 : .10)!
+            : paper,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: selected
+              ? accent.withValues(alpha: dark ? .50 : .36)
+              : border.withValues(alpha: .7),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    color: selected ? accent : ink,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '$count 本',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: selected ? accent : muted,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(2),
+            child: LinearProgressIndicator(
+              value: fraction,
+              minHeight: 3,
+              color: color.withValues(alpha: .85),
+              backgroundColor: border.withValues(alpha: .45),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (onTap == null) return row;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: row,
+    );
   }
 }
 

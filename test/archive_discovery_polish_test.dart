@@ -241,14 +241,20 @@ void main({Capture? capture}) {
       await tester.pumpAndSettle();
       expect(feed.items.length, 60);
       expect(_clock(tester), same(clock));
-      // The random-pick section can fill the first viewport. Scroll the lazy
-      // list into view before looking for its sliver/delegate.
+      // The random-pick section can fill the first viewport. Scroll the
+      // library overview card into view and verify its total book count.
       await tester.drag(
         find.byKey(const PageStorageKey('discover')), const Offset(0, -900),
       );
       await tester.pumpAndSettle();
-      final list = tester.widget<SliverList>(find.byType(SliverList));
-      expect(list.delegate.estimatedChildCount, 50);
+      expect(find.byType(DiscoverLibraryOverview), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('discover-stat-total-books')),
+          matching: find.text('60'),
+        ),
+        findsOneWidget,
+      );
       expect(tester.binding.transientCallbackCount, 0);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
@@ -256,7 +262,7 @@ void main({Capture? capture}) {
   );
 
   testWidgets(
-    'the discovery list prefetches before its last viewport is visible',
+    'discovery library overview reflects book count, tags, reading hours, and books read',
     (tester) async {
       _view(tester);
       SharedPreferences.setMockInitialValues({});
@@ -272,13 +278,22 @@ void main({Capture? capture}) {
       );
       await load;
       await tester.pumpAndSettle();
+      await pumpStorage(tester, () => state.setChapter(971000, 0));
+      await pumpStorage(
+        tester,
+        () => state.readingActivity.recordInterval(
+          bookId: 971000,
+          startedAt: DateTime(2026, 11, 8, 9),
+          elapsed: const Duration(minutes: 90),
+        ),
+      );
+      await tester.pumpAndSettle();
       final scroll = tester
           .state<ScrollableState>(find.byType(Scrollable).first)
           .position;
-      scroll.jumpTo(scroll.maxScrollExtent - 1000);
+      scroll.jumpTo(scroll.maxScrollExtent);
       await tester.pump();
       await tester.pump();
-      expect(scroll.extentAfter, greaterThan(400));
       expect(repo.requests.containsKey((NovelSort.lastUpdate, 2)), isTrue);
       expect(feed.loading, isTrue);
       repo.requests[(NovelSort.lastUpdate, 2)]!.complete(
@@ -286,6 +301,27 @@ void main({Capture? capture}) {
       );
       await tester.pumpAndSettle();
       expect(feed.items.length, 60);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('discover-stat-total-books')),
+          matching: find.text('60'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('discover-stat-reading-hours')),
+          matching: find.text('1.5'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('discover-stat-read-books')),
+          matching: find.text('1'),
+        ),
+        findsOneWidget,
+      );
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     },
