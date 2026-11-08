@@ -164,7 +164,7 @@ _Art _foldDrawing(
             .l(6, bottom)
             .z(),
         fill: true,
-        opacity: .09 + v.clamp(0, 1) * .28 + active * .06,
+        opacity: .09 + v.clamp(0, 1) * .76 + active * .06,
       );
       a.path(
         (s) => s

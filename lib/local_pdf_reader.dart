@@ -371,11 +371,32 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
                               code: ArchiveDesign.fileCode(widget.novel.id),
                             ),
                           ),
-                          GlassIconButton(
-                            key: const ValueKey('reader-bookmarks-entry'),
-                            icon: CupertinoIcons.bookmark,
-                            label: '添加书签',
-                            onPressed: count == 0 ? null : _addBookmark,
+                          AnimatedBuilder(
+                            animation: widget.state.bookmarkChanges,
+                            builder: (context, _) {
+                              final bookmarked =
+                                  count > 0 &&
+                                  widget.state
+                                      .bookmarksFor(widget.novel.id)
+                                      .any(
+                                        (mark) =>
+                                            !mark.isUnderline &&
+                                            mark.quote.isEmpty &&
+                                            mark.position.chapterId == 0 &&
+                                            mark.position.chapter == _page,
+                                      );
+                              return GlassIconButton(
+                                key: const ValueKey('reader-bookmarks-entry'),
+                                icon: bookmarked
+                                    ? CupertinoIcons.bookmark_fill
+                                    : CupertinoIcons.bookmark,
+                                color: bookmarked
+                                    ? Theme.of(context).colorScheme.primary
+                                    : null,
+                                label: '添加书签',
+                                onPressed: count == 0 ? null : _addBookmark,
+                              );
+                            },
                           ),
                         ],
                       ),

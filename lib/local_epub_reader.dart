@@ -616,11 +616,32 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                           code: ArchiveDesign.fileCode(_novel.id),
                         ),
                       ),
-                      GlassIconButton(
-                        key: const ValueKey('reader-bookmarks-entry'),
-                        icon: CupertinoIcons.bookmark,
-                        label: '添加书签',
-                        onPressed: _total == 0 ? null : _quickAddBookmark,
+                      AnimatedBuilder(
+                        animation: widget.state.bookmarkChanges,
+                        builder: (context, _) {
+                          final bookmarked =
+                              _total > 0 &&
+                              widget.state.bookmarksFor(_novel.id).any(
+                                (mark) =>
+                                    !mark.isUnderline &&
+                                    widget.state.chapterForPosition(
+                                          _novel,
+                                          mark.position,
+                                        ) ==
+                                        _chapter,
+                              );
+                          return GlassIconButton(
+                            key: const ValueKey('reader-bookmarks-entry'),
+                            icon: bookmarked
+                                ? CupertinoIcons.bookmark_fill
+                                : CupertinoIcons.bookmark,
+                            color: bookmarked
+                                ? Theme.of(context).colorScheme.primary
+                                : null,
+                            label: '添加书签',
+                            onPressed: _total == 0 ? null : _quickAddBookmark,
+                          );
+                        },
                       ),
                     ],
                   ),

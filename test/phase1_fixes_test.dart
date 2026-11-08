@@ -455,6 +455,14 @@ void main() {
                   ),
           );
           preferences.rejectBookmarks = failSave;
+          expect(
+            tester
+                .widget<GlassIconButton>(
+                  find.byKey(const ValueKey('reader-bookmarks-entry')),
+                )
+                .icon,
+            CupertinoIcons.bookmark,
+          );
           await tester.tap(_control('添加书签'));
           await _settle(tester);
           expect(find.byType(ReaderTools), findsNothing);
@@ -462,9 +470,25 @@ void main() {
             expect(find.text('书签保存失败，请重试'), findsOneWidget);
             expect(state.bookmarksFor(book.id), isEmpty);
             expect(find.textContaining('已添加'), findsNothing);
+            expect(
+              tester
+                  .widget<GlassIconButton>(
+                    find.byKey(const ValueKey('reader-bookmarks-entry')),
+                  )
+                  .icon,
+              CupertinoIcons.bookmark,
+            );
           } else {
             expect(state.bookmarksFor(book.id), hasLength(1));
             expect(find.text(pdf ? '已添加第 1 页书签' : '已添加书签'), findsOneWidget);
+            expect(
+              tester
+                  .widget<GlassIconButton>(
+                    find.byKey(const ValueKey('reader-bookmarks-entry')),
+                  )
+                  .icon,
+              CupertinoIcons.bookmark_fill,
+            );
             await tester.tap(_control('添加书签'));
             await _settle(tester);
             expect(find.text(pdf ? '此页已有书签' : '此位置已有书签'), findsOneWidget);
@@ -492,6 +516,7 @@ void main() {
             } else {
               await tester.tap(_control('阅读设置'));
               await _settle(tester);
+              expect(find.text('竖排翻页'), findsNothing);
               await tester.tap(find.text('书签'));
               await _settle(tester);
               expect(find.textContaining('本书 1 个书签'), findsOneWidget);

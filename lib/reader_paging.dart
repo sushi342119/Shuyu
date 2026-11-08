@@ -273,9 +273,12 @@ class ReaderPagingSettings extends StatelessWidget {
           const SizedBox(height: 8),
           CupertinoSlidingSegmentedControl<ReaderMode>(
             key: const ValueKey('reader-mode-control'),
-            groupValue: prefs.mode,
-            children: {
-              for (final mode in ReaderMode.values) mode: Text(mode.label),
+            groupValue: prefs.mode == ReaderMode.vertical
+                ? ReaderMode.paged
+                : prefs.mode,
+            children: const {
+              ReaderMode.scroll: Text('上下滚动'),
+              ReaderMode.paged: Text('横排翻页'),
             },
             onValueChanged: (mode) {
               if (mode != null && mode != prefs.mode) {

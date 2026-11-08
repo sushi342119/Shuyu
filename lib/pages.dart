@@ -6266,7 +6266,37 @@ class _ReaderPageState extends State<ReaderPage>
     _restoreTicket++;
   }
 
+  String? _activeBookmarkId;
+
+  bool get _isCurrentPositionBookmarked {
+    final marks = widget.state.bookmarksFor(_novel.id);
+    if (marks.isEmpty) return false;
+    for (final mark in marks) {
+      if (mark.isUnderline ||
+          mark.quote.isNotEmpty ||
+          widget.state.chapterForPosition(_novel, mark.position) != _chapter) {
+        continue;
+      }
+      if (mark.id == _activeBookmarkId) return true;
+      if (_paginated) {
+        final anchor =
+            _paged.anchor?.paragraph ?? _restorePending?.paragraphIndex;
+        if (anchor != null && mark.position.paragraphIndex == anchor) {
+          return true;
+        }
+      } else if (_scroll.hasClients) {
+        if ((mark.position.offset - _scroll.offset).abs() < 24 &&
+            (mark.position.fontSize - widget.state.fontSize).abs() < .01 &&
+            (mark.position.lineHeight - widget.state.lineHeight).abs() < .01) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   void _clearBookmarkLanding() {
+    _activeBookmarkId = null;
     _bookmarkLandingTimer?.cancel();
     _bookmarkLandingPending = false;
     _bookmarkLanding.value = null;
@@ -6326,7 +6356,12 @@ class _ReaderPageState extends State<ReaderPage>
     final position = _currentPosition(bookmark: true);
     if (position == null) return null;
     _savePosition(notify: false);
-    return widget.state.addBookmark(novel: _novel, position: position);
+    final mark = await widget.state.addBookmark(
+      novel: _novel,
+      position: position,
+    );
+    if (mark != null) _activeBookmarkId = mark.id;
+    return mark;
   }
 
   Future<void> _quickAddBookmark() async {
@@ -6653,11 +6688,25 @@ class _ReaderPageState extends State<ReaderPage>
                           code: ArchiveDesign.fileCode(_novel.id),
                         ),
                       ),
-                      GlassIconButton(
-                        key: const ValueKey('reader-bookmarks-entry'),
-                        icon: CupertinoIcons.bookmark,
-                        label: '添加书签',
-                        onPressed: _quickAddBookmark,
+                      AnimatedBuilder(
+                        animation: Listenable.merge([
+                          widget.state.bookmarkChanges,
+                          _progressValue,
+                        ]),
+                        builder: (context, _) {
+                          final bookmarked = _isCurrentPositionBookmarked;
+                          return GlassIconButton(
+                            key: const ValueKey('reader-bookmarks-entry'),
+                            icon: bookmarked
+                                ? CupertinoIcons.bookmark_fill
+                                : CupertinoIcons.bookmark,
+                            color: bookmarked
+                                ? Theme.of(context).colorScheme.primary
+                                : null,
+                            label: '添加书签',
+                            onPressed: _quickAddBookmark,
+                          );
+                        },
                       ),
                     ],
                   ),
@@ -6793,7 +6842,7 @@ class _ReaderPageState extends State<ReaderPage>
     );
   }
 
-  /// 横排翻页 / 竖排翻页 body (design decision 6). Uses the paged engine that
+  /// 横排翻页 body (design decision 6). Uses the paged engine that
   /// shipped unused in v1.7.1; scroll-only features (find landing, listening
   /// follow, underline rendering) stay in 上下滚动.
   Widget _pagedArticle(
@@ -6801,7 +6850,10 @@ class _ReaderPageState extends State<ReaderPage>
     ReaderContent content,
     TextStyle style,
   ) {
-    final prefs = widget.state.readerPreferences;
+    final rawPrefs = widget.state.readerPreferences;
+    final prefs = rawPrefs.mode == ReaderMode.vertical
+        ? rawPrefs.copyWith(mode: ReaderMode.paged)
+        : rawPrefs;
     final media = MediaQuery.paddingOf(context);
     final pending = _restorePending;
     // Scroll mode stores textOffset chapter-wide; the paged engine reads it
@@ -7217,6 +7269,7 @@ class _ReaderPageState extends State<ReaderPage>
           );
           if (chapter != null) {
             _go(chapter, position: bookmark.position, highlightBookmark: true);
+            _activeBookmarkId = bookmark.id;
           }
         case ReaderOpenFind():
           // The settings surface has fully collapsed before opening the next.
