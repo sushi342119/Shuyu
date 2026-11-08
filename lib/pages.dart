@@ -3145,12 +3145,6 @@ class _ShelfPageState extends State<ShelfPage> {
           ),
           if (localBook != null)
             GlassMenuItem(
-              label: '编辑书籍信息',
-              onPressed: () =>
-                  Navigator.of(menuContext).pop(_ShelfBookAction.editInfo),
-            ),
-          if (localBook != null)
-            GlassMenuItem(
               label: '删除文件',
               onPressed: () =>
                   Navigator.of(menuContext).pop(_ShelfBookAction.deleteFile),
@@ -3162,8 +3156,6 @@ class _ShelfPageState extends State<ShelfPage> {
     switch (action) {
       case _ShelfBookAction.removeFromShelf:
         await _removeFromShelf(context, id, book: book);
-      case _ShelfBookAction.editInfo:
-        if (local != null) await _editShelfBookInfo(context, local, id);
       case _ShelfBookAction.deleteFile:
         if (local != null) await _deleteShelfBookFile(context, local, id);
     }
@@ -3199,20 +3191,6 @@ class _ShelfPageState extends State<ShelfPage> {
           );
         }
       },
-    );
-  }
-
-  /// 编辑本地书籍的书名、作者与标签；书名或标签变化时重命名源文件（保留原扩展名）。
-  Future<void> _editShelfBookInfo(
-    BuildContext context,
-    LocalLibraryStore local,
-    int id,
-  ) async {
-    await openLocalBookEditPage(
-      context,
-      state: state,
-      local: local,
-      bookId: id,
     );
   }
 
@@ -3617,7 +3595,7 @@ Future<_DeleteFileResult> _removeBookRecordOnly(
   }
 }
 
-enum _ShelfBookAction { removeFromShelf, editInfo, deleteFile }
+enum _ShelfBookAction { removeFromShelf, deleteFile }
 
 class _SettingsBentoItem {
   const _SettingsBentoItem({
@@ -4938,6 +4916,9 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   @override
   void didUpdateWidget(DetailPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (_novelOverride != null && widget.novel.chapters.isNotEmpty) {
+      _novelOverride = _novelOverride!.withChapters(widget.novel.chapters);
+    }
     if (isLoading && !oldWidget.isLoading) {
       _contentStarted = false;
       _contentIntro.value = 0;
@@ -4966,6 +4947,10 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     _resumeChapter = state.hasRead(novel.id) && novel.chapters.isNotEmpty
         ? state.chapterForNovel(novel)
         : null;
+    final local = localLibraryOf(repository);
+    final localBook = local?.bookFor(novel.id);
+    final scheme = Theme.of(context).colorScheme;
+    final authorEmpty = novel.author.trim().isEmpty;
     return Scaffold(
       body: Atmosphere(
         child: GlassHeaderLayout(
@@ -4994,7 +4979,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   NovelCover(
-                                    transitionNovel ?? novel,
+                                    _novelOverride ?? transitionNovel ?? novel,
                                     width: 118,
                                     height: 166,
                                     heroTag: coverHeroTag,
@@ -5020,16 +5005,48 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                                 ? _contentIntro
                                                 : _intro,
                                             end: .46,
-                                            child: Text(
-                                              novel.title,
-                                              maxLines: 4,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                fontWeight: FontWeight.w700,
-                                                fontSize: 23,
-                                                height: 1.3,
-                                              ),
-                                            ),
+                                            child: localBook == null
+                                                ? Text(
+                                                    novel.title,
+                                                    maxLines: 4,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                      fontSize: 23,
+                                                      height: 1.3,
+                                                    ),
+                                                  )
+                                                : Semantics(
+                                                    button: true,
+                                                    label: '修改书名',
+                                                    child: JellyTapSurface(
+                                                      key: const ValueKey(
+                                                        'detail-edit-title',
+                                                      ),
+                                                      haptic:
+                                                          HapticCue.selection,
+                                                      onTap: () =>
+                                                          _editDetailBookTitle(
+                                                            context,
+                                                            local!,
+                                                            novel.id,
+                                                          ),
+                                                      child: Text(
+                                                        novel.title,
+                                                        maxLines: 4,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: const TextStyle(
+                                                          fontWeight:
+                                                              FontWeight.w700,
+                                                          fontSize: 23,
+                                                          height: 1.3,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
                                           ),
                                           const SizedBox(height: 10),
                                           RevealFromTop(
@@ -5042,9 +5059,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                                 : _intro,
                                             start: .09,
                                             end: .56,
-                                            child:
-                                                isLoading &&
-                                                    novel.author.trim().isEmpty
+                                            child: isLoading && authorEmpty
                                                 ? const InlineSkeleton(
                                                     key: ValueKey(
                                                       'detail-author-skeleton',
@@ -5052,13 +5067,47 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                                     height: 20,
                                                     label: '正在加载作者信息',
                                                   )
-                                                : Text(
+                                                : localBook == null
+                                                ? Text(
                                                     novel.author,
                                                     style: TextStyle(
-                                                      color: Theme.of(context)
-                                                          .colorScheme
+                                                      color: scheme
                                                           .onSurfaceVariant,
                                                       fontSize: 14,
+                                                    ),
+                                                  )
+                                                : Semantics(
+                                                    button: true,
+                                                    label: '修改作者',
+                                                    child: JellyTapSurface(
+                                                      key: const ValueKey(
+                                                        'detail-edit-author',
+                                                      ),
+                                                      haptic:
+                                                          HapticCue.selection,
+                                                      onTap: () =>
+                                                          _editDetailBookAuthor(
+                                                            context,
+                                                            local!,
+                                                            novel.id,
+                                                          ),
+                                                      child: Text(
+                                                        authorEmpty
+                                                            ? '未署名作者'
+                                                            : novel.author,
+                                                        style: TextStyle(
+                                                          color: authorEmpty
+                                                              ? scheme
+                                                                    .onSurfaceVariant
+                                                                    .withValues(
+                                                                      alpha:
+                                                                          .65,
+                                                                    )
+                                                              : scheme
+                                                                    .onSurfaceVariant,
+                                                          fontSize: 14,
+                                                        ),
+                                                      ),
                                                     ),
                                                   ),
                                           ),
@@ -5195,49 +5244,35 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                         builder: (context, _) {
                                           final tags = TagStore.shared
                                               .tagsForBook(novel.id);
+                                          void openTags() => showTagEditor(
+                                            context,
+                                            widget.state,
+                                            novel.id,
+                                            local: localLibraryOf(repository),
+                                          );
                                           return Wrap(
                                             spacing: 8,
-                                            runSpacing: 8,
+                                            runSpacing: 10,
                                             children: [
                                               for (final tag in tags)
-                                                Chip(
-                                                  label: Text(tag.name),
-                                                  backgroundColor:
-                                                      tagPalette[tag
-                                                                  .colorIndex %
-                                                              tagPalette.length]
-                                                          .withValues(
-                                                            alpha: .18,
-                                                          ),
-                                                  side: BorderSide(
-                                                    color:
-                                                        tagPalette[tag
-                                                                    .colorIndex %
-                                                                tagPalette
-                                                                    .length]
-                                                            .withValues(
-                                                              alpha: .5,
-                                                            ),
+                                                BookTagPill(
+                                                  key: ValueKey(
+                                                    'detail-tag-${tag.name}',
                                                   ),
-                                                  visualDensity:
-                                                      VisualDensity.compact,
+                                                  tag: tag,
+                                                  onTap: openTags,
                                                 ),
-                                              ActionChip(
-                                                label: Text(
-                                                  tags.isEmpty ? '添加标签' : '编辑',
+                                              BookTagActionChip(
+                                                key: const ValueKey(
+                                                  'detail-edit-tags-button',
                                                 ),
-                                                avatar: const Icon(
-                                                  CupertinoIcons.tag,
-                                                  size: 16,
-                                                ),
-                                                onPressed: () => showTagEditor(
-                                                  context,
-                                                  widget.state,
-                                                  novel.id,
-                                                  local: localLibraryOf(
-                                                    repository,
-                                                  ),
-                                                ),
+                                                label: tags.isEmpty
+                                                    ? '添加标签'
+                                                    : '编辑',
+                                                icon: tags.isEmpty
+                                                    ? CupertinoIcons.plus
+                                                    : CupertinoIcons.tag,
+                                                onTap: openTags,
                                               ),
                                             ],
                                           );
@@ -5463,7 +5498,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
           },
         ),
       ),
-      // 本地书：更多操作（编辑信息、删除文件）。
+      // 本地书：更多操作（删除文件）。
       if (localLibraryOf(repository)?.bookFor(novel.id) != null)
         GlassIconButton(
           icon: CupertinoIcons.ellipsis,
@@ -5473,7 +5508,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     ],
   );
 
-  /// 详情页的本地书操作菜单：编辑书籍信息、删除文件。
+  /// 详情页的本地书操作菜单：删除文件。
   Future<void> _detailMenu(BuildContext context) async {
     final local = localLibraryOf(repository);
     if (local == null || local.bookFor(novel.id) == null) return;
@@ -5484,10 +5519,6 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
         mainAxisSize: MainAxisSize.min,
         children: [
           GlassMenuItem(
-            label: '编辑书籍信息',
-            onPressed: () => Navigator.of(menuContext).pop('edit'),
-          ),
-          GlassMenuItem(
             label: '删除文件',
             onPressed: () => Navigator.of(menuContext).pop('delete'),
           ),
@@ -5495,27 +5526,48 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       ),
     );
     if (!mounted || !context.mounted || action == null) return;
-    if (action == 'edit') {
-      await _editDetailBookInfo(context, local, novel.id);
-    } else if (action == 'delete') {
+    if (action == 'delete') {
       await _deleteDetailBookFile(context, local, novel.id);
     }
   }
 
-  /// 编辑书籍信息（详情页版）：打开独立编辑页，保存成功后刷新详情页显示。
-  Future<void> _editDetailBookInfo(
+  /// 点击详情页书名：弹出修改书名弹窗，保存成功后刷新详情页显示。
+  Future<void> _editDetailBookTitle(
     BuildContext context,
     LocalLibraryStore local,
     int id,
   ) async {
-    final updated = await openLocalBookEditPage(
+    final updated = await showLocalBookTitleEditor(
       context,
       state: state,
       local: local,
       bookId: id,
     );
     if (updated != null && mounted) {
-      setState(() => _novelOverride = local.toNovel(updated));
+      setState(
+        () => _novelOverride =
+            local.toNovel(updated).withChapters(novel.chapters),
+      );
+    }
+  }
+
+  /// 点击详情页作者名：弹出修改作者弹窗，保存成功后刷新详情页显示。
+  Future<void> _editDetailBookAuthor(
+    BuildContext context,
+    LocalLibraryStore local,
+    int id,
+  ) async {
+    final updated = await showLocalBookAuthorEditor(
+      context,
+      state: state,
+      local: local,
+      bookId: id,
+    );
+    if (updated != null && mounted) {
+      setState(
+        () => _novelOverride =
+            local.toNovel(updated).withChapters(novel.chapters),
+      );
     }
   }
 

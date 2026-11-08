@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'app_interactions.dart';
 import 'app_ui.dart';
+import 'book_edit_page.dart';
 import 'book_tags.dart';
 import 'feature_pages.dart';
 import 'library_state.dart';
@@ -42,12 +43,13 @@ class _TagEditorDialogState extends State<_TagEditorDialog> {
       .map((t) => t.id)
       .toSet();
   bool _busy = false;
+  bool _creatingTag = false;
   String? _error;
 
   Future<void> _add() async {
-    if (_busy || _controller.text.isEmpty) return;
+    if (_busy || _creatingTag || _controller.text.isEmpty) return;
     setState(() {
-      _busy = true;
+      _creatingTag = true;
       _error = null;
     });
     try {
@@ -61,12 +63,12 @@ class _TagEditorDialogState extends State<_TagEditorDialog> {
         setState(() => _error = describeSafeError(error, fallback: '新建失败'));
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) setState(() => _creatingTag = false);
     }
   }
 
   Future<void> _save() async {
-    if (_busy) return;
+    if (_busy || _creatingTag) return;
     setState(() {
       _busy = true;
       _error = null;
@@ -99,8 +101,8 @@ class _TagEditorDialogState extends State<_TagEditorDialog> {
     final book = widget.local?.bookFor(widget.bookId);
     if (book == null) return null;
     final names = [
-      for (final id in _selected)
-        if (_store.tagById(id) case final tag?) tag.name,
+      for (final tag in _store.tags)
+        if (_selected.contains(tag.id)) tag.name,
     ];
     final after = appendFilenameTags(stripFilenameTags(book.fileName), names);
     return after == book.fileName ? null : (before: book.fileName, after: after);
@@ -113,102 +115,159 @@ class _TagEditorDialogState extends State<_TagEditorDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => PopScope(
-    canPop: !_busy,
-    child: AlertDialog(
-      title: const Text('标签'),
-      content: SizedBox(
-        width: 320,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (isLocalNovelId(widget.bookId))
-                const Text('保存后会直接修改源文件名，书籍内容保持不变。'),
-              if (_store.tags.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  child: Text('还没有标签，在下方新建一个吧'),
-                ),
-              for (final tag in _store.tags)
-                CheckboxListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(tag.name),
-                  secondary: Container(
-                    width: 14, height: 14,
-                    decoration: BoxDecoration(
-                      color: tagPalette[tag.colorIndex % tagPalette.length],
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  value: _selected.contains(tag.id),
-                  onChanged: _busy
-                      ? null
-                      : (value) => setState(() {
-                          if (value == true) {
-                            _selected.add(tag.id);
-                          } else {
-                            _selected.remove(tag.id);
-                          }
-                        }),
-                ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      enabled: !_busy,
-                      decoration: const InputDecoration(
-                        hintText: '新建标签（不能含空格或 ✦）',
-                        isDense: true,
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PopScope(
+      canPop: !_busy && !_creatingTag,
+      child: ListenableBuilder(
+        listenable: _store,
+        builder: (context, _) {
+          final validIds = {for (final t in _store.tags) t.id};
+          _selected.retainAll(validIds);
+          return AlertDialog(
+            title: Row(
+              children: [
+                const Expanded(child: Text('书籍标签')),
+                if (_selected.isNotEmpty)
+                  GestureDetector(
+                    key: const ValueKey('book-edit-clear-tags'),
+                    onTap: _busy || _creatingTag
+                        ? null
+                        : () => setState(_selected.clear),
+                    child: Text(
+                      '清空已选 (${_selected.length})',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: scheme.primary,
                       ),
-                      onSubmitted: (_) => _add(),
                     ),
                   ),
-                  IconButton(
-                    icon: const Icon(CupertinoIcons.add_circled),
-                    onPressed: _busy ? null : _add,
-                  ),
-                ],
+              ],
+            ),
+            content: SizedBox(
+              width: 360,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (isLocalNovelId(widget.bookId))
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Text(
+                          '点选标签或直接新建，保存时一次性同步至源文件（书籍内容保持不变）。',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    if (_store.tags.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: Text(
+                          '还没有标签，在下方新建一个吧',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      )
+                    else
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 10,
+                        children: [
+                          for (final tag in _store.tags)
+                            SelectableTagChip(
+                              key: ValueKey('book-edit-tag-${tag.name}'),
+                              tag: tag,
+                              selected: _selected.contains(tag.id),
+                              enabled: !_busy && !_creatingTag,
+                              onTap: () => setState(() {
+                                if (_selected.contains(tag.id)) {
+                                  _selected.remove(tag.id);
+                                } else {
+                                  _selected.add(tag.id);
+                                }
+                              }),
+                            ),
+                        ],
+                      ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            key: const ValueKey('book-edit-new-tag-field'),
+                            controller: _controller,
+                            enabled: !_busy && !_creatingTag,
+                            textInputAction: TextInputAction.done,
+                            onChanged: (_) {
+                              if (_error != null) {
+                                setState(() => _error = null);
+                              }
+                            },
+                            onSubmitted: (_) => _add(),
+                            decoration: const InputDecoration(
+                              hintText: '新建标签（不能含空格或 ✦）',
+                              isDense: true,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        GlassTextButton(
+                          key: const ValueKey('book-edit-add-tag-button'),
+                          compact: true,
+                          onPressed: _busy || _creatingTag ? null : _add,
+                          child: Text(_creatingTag ? '添加中…' : '新建并勾选'),
+                        ),
+                      ],
+                    ),
+                    if (_renamePreview() case final preview?)
+                      _FilenameChangeNotice(
+                        key: const ValueKey('tag-filename-warning'),
+                        before: preview.before,
+                        after: preview.after,
+                      ),
+                    if (_error != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: Text(
+                          _error!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.error,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
-              if (_renamePreview() case final preview?)
-                _FilenameChangeNotice(
-                  key: const ValueKey('tag-filename-warning'),
-                  before: preview.before,
-                  after: preview.after,
-                ),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: Text(
-                    _error!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                  ),
-                ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: _busy || _creatingTag
+                    ? null
+                    : () => Navigator.pop(context),
+                child: const Text('取消'),
+              ),
+              TextButton(
+                key: const ValueKey('book-edit-save-button'),
+                onPressed: _busy || _creatingTag ? null : _save,
+                child: Text(_busy ? '正在保存…' : '保存'),
+              ),
             ],
-          ),
-        ),
+          );
+        },
       ),
-      actions: [
-        TextButton(
-          onPressed: _busy ? null : () => Navigator.pop(context),
-          child: const Text('取消'),
-        ),
-        TextButton(
-          onPressed: _busy ? null : _save,
-          child: Text(_busy ? '正在保存…' : '保存'),
-        ),
-      ],
-    ),
-  );
+    );
+  }
 }
 
-/// Persistent warning-colour notice shown above the save button whenever the
-/// save would rename the source file (design §5.5).
+/// Persistent notice shown above the save button whenever the save would
+/// rename the source file (design §5.5).
 class _FilenameChangeNotice extends StatelessWidget {
   const _FilenameChangeNotice({
     super.key,
@@ -219,25 +278,50 @@ class _FilenameChangeNotice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final error = Theme.of(context).colorScheme.error;
+    final scheme = Theme.of(context).colorScheme;
     return Container(
-      margin: const EdgeInsets.only(top: 12),
-      padding: const EdgeInsets.all(10),
+      margin: const EdgeInsets.only(top: 14),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: error.withValues(alpha: .08),
+        color: scheme.primary.withValues(alpha: .08),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: error.withValues(alpha: .4)),
+        border: Border.all(color: scheme.primary.withValues(alpha: .35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '保存将修改源文件名',
-            style: TextStyle(color: error, fontWeight: FontWeight.w600),
+          Row(
+            children: [
+              Icon(
+                CupertinoIcons.arrow_right_arrow_left_circle,
+                size: 16,
+                color: scheme.primary,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '保存将修改源文件名',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: scheme.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 4),
-          Text('改名前：$before', style: const TextStyle(fontSize: 12)),
-          Text('改名后：$after', style: const TextStyle(fontSize: 12)),
+          const SizedBox(height: 6),
+          Text(
+            '改名前：$before',
+            style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '改名后：$after',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: scheme.onSurface,
+            ),
+          ),
         ],
       ),
     );

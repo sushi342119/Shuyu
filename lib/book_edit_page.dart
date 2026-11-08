@@ -2,17 +2,14 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import 'app_interactions.dart';
-import 'app_ui.dart';
 import 'book_tags.dart';
-import 'catalog.dart';
-import 'feature_pages.dart';
 import 'library_state.dart';
 import 'local_library.dart';
 import 'wenku_errors.dart';
 
-/// 打开独立的本地书籍信息编辑页（书架页与详情页共用）。
+/// 在图书详情页弹出「修改书名」弹窗；书名变化时同步重命名源文件（保留扩展名与标签）。
 /// 保存成功时返回更新后的 [LocalBook]，取消返回 null。
-Future<LocalBook?> openLocalBookEditPage(
+Future<LocalBook?> showLocalBookTitleEditor(
   BuildContext context, {
   required LibraryState state,
   required LocalLibraryStore local,
@@ -21,15 +18,15 @@ Future<LocalBook?> openLocalBookEditPage(
   final book = local.bookFor(bookId);
   if (book == null || !context.mounted) return null;
   String? feedback;
-  final updated = await pushNovelPage<LocalBook>(
-    context,
-    LocalBookEditPage(
+  final updated = await showDialog<LocalBook>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => _BookTitleEditDialog(
       state: state,
       local: local,
       bookId: bookId,
       onFeedback: (message) => feedback = message,
     ),
-    reduceMotion: state.reduceMotion,
   );
   if (updated != null && context.mounted) {
     showNovelFeedback(context, feedback ?? '已保存');
@@ -37,9 +34,44 @@ Future<LocalBook?> openLocalBookEditPage(
   return updated;
 }
 
-class LocalBookEditPage extends StatefulWidget {
-  const LocalBookEditPage({
-    super.key,
+/// 在图书详情页弹出「修改作者」弹窗。
+/// 保存成功时返回更新后的 [LocalBook]，取消返回 null。
+Future<LocalBook?> showLocalBookAuthorEditor(
+  BuildContext context, {
+  required LibraryState state,
+  required LocalLibraryStore local,
+  required int bookId,
+}) async {
+  final book = local.bookFor(bookId);
+  if (book == null || !context.mounted) return null;
+  String? feedback;
+  final updated = await showDialog<LocalBook>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => _BookAuthorEditDialog(
+      state: state,
+      local: local,
+      bookId: bookId,
+      onFeedback: (message) => feedback = message,
+    ),
+  );
+  if (updated != null && context.mounted) {
+    showNovelFeedback(context, feedback ?? '已保存');
+  }
+  return updated;
+}
+
+String friendlyBookEditError(Object e) {
+  final message = e.toString();
+  if (message.contains('书名不能为空')) return '书名不能为空';
+  if (message.contains('无法用作文件名')) return '书名无法用作文件名';
+  if (message.contains('同名文件已存在')) return '同名文件已存在';
+  if (message.contains('书籍不存在')) return '书籍已不存在';
+  return describeSafeError(e, fallback: '保存失败，请重试');
+}
+
+class _BookTitleEditDialog extends StatefulWidget {
+  const _BookTitleEditDialog({
     required this.state,
     required this.local,
     required this.bookId,
@@ -52,37 +84,25 @@ class LocalBookEditPage extends StatefulWidget {
   final ValueChanged<String>? onFeedback;
 
   @override
-  State<LocalBookEditPage> createState() => _LocalBookEditPageState();
+  State<_BookTitleEditDialog> createState() => _BookTitleEditDialogState();
 }
 
-class _LocalBookEditPageState extends State<LocalBookEditPage> {
-  final _tagStore = TagStore.shared;
+class _BookTitleEditDialogState extends State<_BookTitleEditDialog> {
   late final TextEditingController _titleController;
-  late final TextEditingController _authorController;
-  final _newTagController = TextEditingController();
-  late final Set<String> _selectedTagIds;
   bool _saving = false;
-  bool _creatingTag = false;
   String? _error;
-  String? _tagError;
 
   LocalBook? get _book => widget.local.bookFor(widget.bookId);
 
   @override
   void initState() {
     super.initState();
-    final book = _book;
-    _titleController = TextEditingController(text: book?.displayTitle ?? '');
-    _authorController = TextEditingController(text: book?.displayAuthor ?? '');
-    _selectedTagIds = _tagStore
-        .tagsForBook(widget.bookId)
-        .map((t) => t.id)
-        .toSet();
-    _titleController.addListener(_onFieldChanged);
-    _authorController.addListener(_onFieldChanged);
+    _titleController = TextEditingController(
+      text: _book?.displayTitle ?? '',
+    )..addListener(_onChanged);
   }
 
-  void _onFieldChanged() {
+  void _onChanged() {
     if (!mounted) return;
     setState(() => _error = null);
   }
@@ -90,40 +110,7 @@ class _LocalBookEditPageState extends State<LocalBookEditPage> {
   @override
   void dispose() {
     _titleController.dispose();
-    _authorController.dispose();
-    _newTagController.dispose();
     super.dispose();
-  }
-
-  List<Tag> _selectedTags(LocalBook book) => [
-    for (final tag in _tagStore.tags)
-      if (_selectedTagIds.contains(tag.id)) tag,
-  ];
-
-  List<String> _selectedTagNames(LocalBook book) => [
-    for (final tag in _selectedTags(book)) tag.name,
-  ];
-
-  Future<void> _createTag() async {
-    final raw = _newTagController.text;
-    if (_saving || _creatingTag || raw.isEmpty) return;
-    setState(() {
-      _creatingTag = true;
-      _tagError = null;
-    });
-    try {
-      final id = await _tagStore.createTag(raw);
-      if (!mounted) return;
-      _newTagController.clear();
-      setState(() => _selectedTagIds.add(id));
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _tagError = describeSafeError(error, fallback: '新建标签失败');
-      });
-    } finally {
-      if (mounted) setState(() => _creatingTag = false);
-    }
   }
 
   Future<void> _save() async {
@@ -134,7 +121,6 @@ class _LocalBookEditPageState extends State<LocalBookEditPage> {
       return;
     }
     final cleanTitle = _titleController.text.trim();
-    final cleanAuthor = _authorController.text.trim();
     if (cleanTitle.isEmpty) {
       setState(() => _error = '书名不能为空');
       return;
@@ -142,7 +128,6 @@ class _LocalBookEditPageState extends State<LocalBookEditPage> {
     final preview = LocalLibraryStore.previewEditedFileName(
       book,
       title: cleanTitle,
-      tagNames: _selectedTagNames(book),
     );
     if (preview == null) {
       setState(() => _error = '书名无法用作文件名');
@@ -160,8 +145,7 @@ class _LocalBookEditPageState extends State<LocalBookEditPage> {
       updated = await widget.local.editBookFile(
         widget.bookId,
         title: cleanTitle,
-        author: cleanAuthor,
-        tagIds: _selectedTagIds,
+        author: book.displayAuthor,
       );
     } catch (error) {
       if (!mounted) return;
@@ -173,7 +157,8 @@ class _LocalBookEditPageState extends State<LocalBookEditPage> {
     }
 
     var feedback = '已保存';
-    if (widget.state.shelf.contains(widget.bookId)) {
+    if (widget.state.shelf.contains(widget.bookId) ||
+        widget.state.cachedNovel(widget.bookId) != null) {
       try {
         await widget.state.rememberNovel(widget.local.toNovel(updated));
       } catch (_) {
@@ -186,506 +171,330 @@ class _LocalBookEditPageState extends State<LocalBookEditPage> {
     Navigator.of(context).pop(updated);
   }
 
-  static String friendlyBookEditError(Object e) {
-    final message = e.toString();
-    if (message.contains('书名不能为空')) return '书名不能为空';
-    if (message.contains('无法用作文件名')) return '书名无法用作文件名';
-    if (message.contains('同名文件已存在')) return '同名文件已存在';
-    if (message.contains('书籍不存在')) return '书籍已不存在';
-    return describeSafeError(e, fallback: '保存失败，请重试');
-  }
-
   @override
   Widget build(BuildContext context) {
     final book = _book;
-    final code = ArchiveDesign.fileCode(widget.bookId);
+    final scheme = Theme.of(context).colorScheme;
     if (book == null) {
-      return ArchiveFeaturePage(
-        title: '编辑书籍信息',
-        code: code,
-        child: const ContentNotice(
-          icon: CupertinoIcons.exclamationmark_circle,
-          title: '书籍已不存在',
-          message: '该本地书籍记录已被移除，请返回上一页。',
-        ),
+      return AlertDialog(
+        title: const Text('修改书名'),
+        content: const Text('该本地书籍记录已被移除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
       );
     }
 
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
     final rawTitle = _titleController.text.trim();
-    final previewTitle = rawTitle.isEmpty ? book.title : rawTitle;
-    final previewAuthor = _authorController.text.trim();
-    final baseNovel = widget.local.toNovel(book);
-    final previewNovel = Novel(
-      id: baseNovel.id,
-      title: previewTitle,
-      author: previewAuthor,
-      genre: baseNovel.genre,
-      summary: baseNovel.summary,
-      colors: baseNovel.colors,
-      isComplete: baseNovel.isComplete,
-      chapterCount: baseNovel.chapterCount,
-      coverUrl: baseNovel.coverUrl,
+    final previewFileName = LocalLibraryStore.previewEditedFileName(
+      book,
+      title: rawTitle,
     );
 
     return PopScope<LocalBook>(
       canPop: !_saving,
-      child: ArchiveFeaturePage(
-        title: '编辑书籍信息',
-        code: code,
-        canPop: !_saving,
-        actions: [
-          GlassIconButton(
-            key: const ValueKey('book-edit-header-save'),
-            icon: CupertinoIcons.checkmark,
-            label: '保存',
-            onPressed: _saving ? null : _save,
-          ),
-        ],
-        child: ListenableBuilder(
-          listenable: _tagStore,
-          builder: (context, _) {
-            // Keep selected tag IDs pruned to existing definitions.
-            final validTagIds = {for (final t in _tagStore.tags) t.id};
-            _selectedTagIds.retainAll(validTagIds);
-            final selectedTags = _selectedTags(book);
-            final previewFileName = LocalLibraryStore.previewEditedFileName(
-              book,
-              title: rawTitle,
-              tagNames: [for (final t in selectedTags) t.name],
-            );
-
-            return Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 700),
-                child: SingleChildScrollView(
-                  key: const ValueKey('book-edit-scroll'),
-                  padding: featurePadding(context),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _BookPreviewCard(
-                      book: book,
-                      previewNovel: previewNovel,
-                      previewTitle: previewTitle,
-                      previewAuthor: previewAuthor,
-                      selectedTags: selectedTags,
-                    ),
-                    const SizedBox(height: 28),
-                    ArchiveSection(
-                      title: '基本信息',
-                      code: code,
-                      subtitle: '修改书名将同步重命名源文件（保留原扩展名与标签）',
-                    ),
-                    const SizedBox(height: 14),
-                    ContentPanel(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Row(
-                            children: [
-                              const Text(
-                                '书名',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const Spacer(),
-                              if (rawTitle != book.title)
-                                GestureDetector(
-                                  key: const ValueKey('book-edit-reset-title'),
-                                  onTap: _saving
-                                      ? null
-                                      : () => _titleController.text = book.title,
-                                  child: Text(
-                                    '恢复原解析书名',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                      color: scheme.primary,
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            key: const ValueKey('book-edit-title-field'),
-                            controller: _titleController,
-                            enabled: !_saving,
-                            textInputAction: TextInputAction.next,
-                            decoration: InputDecoration(
-                              labelText: '书名',
-                              floatingLabelBehavior:
-                                  FloatingLabelBehavior.never,
-                              hintText: '输入书名（必填）',
-                              isDense: true,
-                              suffixIcon: _titleController.text.isEmpty
-                                  ? null
-                                  : IconButton(
-                                      icon: const Icon(
-                                        CupertinoIcons.clear_circled_solid,
-                                        size: 18,
-                                      ),
-                                      tooltip: '清空书名',
-                                      onPressed: _saving
-                                          ? null
-                                          : _titleController.clear,
-                                    ),
-                            ),
-                          ),
-                          const SizedBox(height: 18),
-                          Row(
-                            children: [
-                              const Text(
-                                '作者',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const Spacer(),
-                              if (book.author.isNotEmpty &&
-                                  previewAuthor != book.author)
-                                GestureDetector(
-                                  key: const ValueKey('book-edit-reset-author'),
-                                  onTap: _saving
-                                      ? null
-                                      : () =>
-                                            _authorController.text = book.author,
-                                  child: Text(
-                                    '恢复原解析作者',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                      color: scheme.primary,
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          TextField(
-                            key: const ValueKey('book-edit-author-field'),
-                            controller: _authorController,
-                            enabled: !_saving,
-                            textInputAction: TextInputAction.done,
-                            decoration: InputDecoration(
-                              labelText: '作者',
-                              floatingLabelBehavior:
-                                  FloatingLabelBehavior.never,
-                              hintText: '输入作者（选填，留空则不显示）',
-                              isDense: true,
-                              suffixIcon: _authorController.text.isEmpty
-                                  ? null
-                                  : IconButton(
-                                      icon: const Icon(
-                                        CupertinoIcons.clear_circled_solid,
-                                        size: 18,
-                                      ),
-                                      tooltip: '清空作者',
-                                      onPressed: _saving
-                                          ? null
-                                          : _authorController.clear,
-                                    ),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          _FileRenamePreviewNotice(
-                            currentFileName: book.fileName,
-                            previewFileName: previewFileName,
-                            titleEmpty: rawTitle.isEmpty,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 28),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        const Expanded(
-                          child: ArchiveSection(
-                            title: '书籍标签',
-                            subtitle: '点选标签或直接新建，保存时一次性同步至文件名',
-                          ),
-                        ),
-                        if (_selectedTagIds.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(left: 12, bottom: 2),
-                            child: GestureDetector(
-                              key: const ValueKey('book-edit-clear-tags'),
-                              onTap: _saving
-                                  ? null
-                                  : () => setState(_selectedTagIds.clear),
-                              child: Text(
-                                '清空已选 (${_selectedTagIds.length})',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                  color: scheme.primary,
-                                ),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    ContentPanel(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (_tagStore.tags.isEmpty)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                              child: Text(
-                                '还没有标签，在下方新建一个吧',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                              ),
-                            )
-                          else
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 10,
-                              children: [
-                                for (final tag in _tagStore.tags)
-                                  _SelectableTagChip(
-                                    key: ValueKey('book-edit-tag-${tag.name}'),
-                                    tag: tag,
-                                    selected: _selectedTagIds.contains(tag.id),
-                                    enabled: !_saving,
-                                    onTap: () => setState(() {
-                                      if (_selectedTagIds.contains(tag.id)) {
-                                        _selectedTagIds.remove(tag.id);
-                                      } else {
-                                        _selectedTagIds.add(tag.id);
-                                      }
-                                    }),
-                                  ),
-                              ],
-                            ),
-                          const SizedBox(height: 16),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  key: const ValueKey(
-                                    'book-edit-new-tag-field',
-                                  ),
-                                  controller: _newTagController,
-                                  enabled: !_saving && !_creatingTag,
-                                  textInputAction: TextInputAction.done,
-                                  onChanged: (_) {
-                                    if (_tagError != null) {
-                                      setState(() => _tagError = null);
-                                    }
-                                  },
-                                  onSubmitted: (_) => _createTag(),
-                                  decoration: const InputDecoration(
-                                    hintText: '新建标签（不能含空格或 ✦）',
-                                    isDense: true,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              GlassTextButton(
-                                key: const ValueKey('book-edit-add-tag-button'),
-                                compact: true,
-                                onPressed: _saving || _creatingTag
-                                    ? null
-                                    : _createTag,
-                                child: Text(_creatingTag ? '添加中…' : '新建并勾选'),
-                              ),
-                            ],
-                          ),
-                          if (_tagError != null)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 10),
-                              child: Text(
-                                _tagError!,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: scheme.error,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    if (_error != null) ...[
-                      const SizedBox(height: 16),
-                      Container(
-                        key: const ValueKey('book-edit-error-banner'),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 12,
-                        ),
-                        decoration: BoxDecoration(
-                          color: scheme.error.withValues(alpha: .08),
-                          borderRadius: BorderRadius.circular(
-                            ArchiveDesign.panelRadius,
-                          ),
-                          border: Border.all(
-                            color: scheme.error.withValues(alpha: .4),
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              CupertinoIcons.exclamationmark_circle,
-                              size: 18,
-                              color: scheme.error,
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                _error!,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: scheme.error,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 24),
-                    Center(
-                      child: GlassPillButton(
-                        key: const ValueKey('book-edit-save-button'),
-                        icon: CupertinoIcons.checkmark,
-                        label: _saving ? '正在保存…' : '保存',
-                        onPressed: _saving ? null : _save,
-                      ),
-                    ),
-                    ],
+      child: AlertDialog(
+        title: Row(
+          children: [
+            const Expanded(child: Text('修改书名')),
+            if (rawTitle != book.title)
+              GestureDetector(
+                key: const ValueKey('book-edit-reset-title'),
+                onTap: _saving
+                    ? null
+                    : () => _titleController.text = book.title,
+                child: Text(
+                  '恢复原解析书名',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: scheme.primary,
                   ),
                 ),
               ),
-            );
-          },
+          ],
         ),
+        content: SizedBox(
+          width: 360,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextField(
+                  key: const ValueKey('book-edit-title-field'),
+                  controller: _titleController,
+                  enabled: !_saving,
+                  autofocus: true,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => _save(),
+                  decoration: InputDecoration(
+                    labelText: '书名',
+                    floatingLabelBehavior: FloatingLabelBehavior.never,
+                    hintText: '输入书名（必填）',
+                    isDense: true,
+                    suffixIcon: _titleController.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(
+                              CupertinoIcons.clear_circled_solid,
+                              size: 18,
+                            ),
+                            tooltip: '清空书名',
+                            onPressed: _saving ? null : _titleController.clear,
+                          ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                FileRenamePreviewNotice(
+                  currentFileName: book.fileName,
+                  previewFileName: previewFileName,
+                  titleEmpty: rawTitle.isEmpty,
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  _EditErrorBanner(message: _error!),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: _saving ? null : () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            key: const ValueKey('book-edit-save-button'),
+            onPressed: _saving ? null : _save,
+            child: Text(_saving ? '正在保存…' : '保存'),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _BookPreviewCard extends StatelessWidget {
-  const _BookPreviewCard({
-    required this.book,
-    required this.previewNovel,
-    required this.previewTitle,
-    required this.previewAuthor,
-    required this.selectedTags,
+class _BookAuthorEditDialog extends StatefulWidget {
+  const _BookAuthorEditDialog({
+    required this.state,
+    required this.local,
+    required this.bookId,
+    this.onFeedback,
   });
 
-  final LocalBook book;
-  final Novel previewNovel;
-  final String previewTitle;
-  final String previewAuthor;
-  final List<Tag> selectedTags;
+  final LibraryState state;
+  final LocalLibraryStore local;
+  final int bookId;
+  final ValueChanged<String>? onFeedback;
+
+  @override
+  State<_BookAuthorEditDialog> createState() => _BookAuthorEditDialogState();
+}
+
+class _BookAuthorEditDialogState extends State<_BookAuthorEditDialog> {
+  late final TextEditingController _authorController;
+  bool _saving = false;
+  String? _error;
+
+  LocalBook? get _book => widget.local.bookFor(widget.bookId);
+
+  @override
+  void initState() {
+    super.initState();
+    _authorController = TextEditingController(
+      text: _book?.displayAuthor ?? '',
+    )..addListener(_onChanged);
+  }
+
+  void _onChanged() {
+    if (!mounted) return;
+    setState(() => _error = null);
+  }
+
+  @override
+  void dispose() {
+    _authorController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    final book = _book;
+    if (book == null) {
+      setState(() => _error = '书籍已不存在');
+      return;
+    }
+    final cleanAuthor = _authorController.text.trim();
+
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+
+    LocalBook updated;
+    try {
+      updated = await widget.local.editBookFile(
+        widget.bookId,
+        title: book.displayTitle,
+        author: cleanAuthor,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = friendlyBookEditError(error);
+      });
+      return;
+    }
+
+    var feedback = '已保存';
+    if (widget.state.shelf.contains(widget.bookId) ||
+        widget.state.cachedNovel(widget.bookId) != null) {
+      try {
+        await widget.state.rememberNovel(widget.local.toNovel(updated));
+      } catch (_) {
+        feedback = '作者已更新，书架信息保存失败，请重试';
+      }
+    }
+    if (!mounted) return;
+    widget.onFeedback?.call(feedback);
+    setState(() => _saving = false);
+    Navigator.of(context).pop(updated);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final book = _book;
+    final scheme = Theme.of(context).colorScheme;
+    if (book == null) {
+      return AlertDialog(
+        title: const Text('修改作者'),
+        content: const Text('该本地书籍记录已被移除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+      );
+    }
+
+    final previewAuthor = _authorController.text.trim();
+
+    return PopScope<LocalBook>(
+      canPop: !_saving,
+      child: AlertDialog(
+        title: Row(
+          children: [
+            const Expanded(child: Text('修改作者')),
+            if (book.author.isNotEmpty && previewAuthor != book.author)
+              GestureDetector(
+                key: const ValueKey('book-edit-reset-author'),
+                onTap: _saving
+                    ? null
+                    : () => _authorController.text = book.author,
+                child: Text(
+                  '恢复原解析作者',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: scheme.primary,
+                  ),
+                ),
+              ),
+          ],
+        ),
+        content: SizedBox(
+          width: 360,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextField(
+                  key: const ValueKey('book-edit-author-field'),
+                  controller: _authorController,
+                  enabled: !_saving,
+                  autofocus: true,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => _save(),
+                  decoration: InputDecoration(
+                    labelText: '作者',
+                    floatingLabelBehavior: FloatingLabelBehavior.never,
+                    hintText: '输入作者（选填，留空则显示未署名作者）',
+                    isDense: true,
+                    suffixIcon: _authorController.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(
+                              CupertinoIcons.clear_circled_solid,
+                              size: 18,
+                            ),
+                            tooltip: '清空作者',
+                            onPressed: _saving ? null : _authorController.clear,
+                          ),
+                  ),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  _EditErrorBanner(message: _error!),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: _saving ? null : () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            key: const ValueKey('book-edit-save-button'),
+            onPressed: _saving ? null : _save,
+            child: Text(_saving ? '正在保存…' : '保存'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EditErrorBanner extends StatelessWidget {
+  const _EditErrorBanner({required this.message});
+  final String message;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final kindLabel = switch (book.kind) {
-      LocalBookKind.pdf => 'PDF',
-      LocalBookKind.epub => 'EPUB',
-      LocalBookKind.txt => 'TXT',
-    };
-    final countLabel = book.kind == LocalBookKind.pdf
-        ? '${book.pageCount} 页'
-        : '${book.chapters.length} 章';
-    final wordCountLabel =
-        book.kind == LocalBookKind.txt && book.wordCount != null
-        ? formatLocalWordCount(book.wordCount!)
-        : null;
-    final sizeLabel = formatLocalSize(book.size);
-
-    return ContentPanel(
-      key: const ValueKey('book-edit-preview-card'),
-      padding: const EdgeInsets.all(18),
+    return Container(
+      key: const ValueKey('book-edit-error-banner'),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: scheme.error.withValues(alpha: .08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: scheme.error.withValues(alpha: .4)),
+      ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          NovelCover(previewNovel, width: 92, height: 130),
-          const SizedBox(width: 18),
+          Icon(
+            CupertinoIcons.exclamationmark_circle,
+            size: 16,
+            color: scheme.error,
+          ),
+          const SizedBox(width: 8),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    ArchiveCode(
-                      ArchiveDesign.fileCode(book.id),
-                      inverse: true,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '实时封面预览',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  previewTitle,
-                  key: const ValueKey('book-edit-preview-title'),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    height: 1.3,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  previewAuthor.isEmpty ? '未署名作者' : previewAuthor,
-                  key: const ValueKey('book-edit-preview-author'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: previewAuthor.isEmpty
-                        ? scheme.onSurfaceVariant.withValues(alpha: .65)
-                        : scheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    _MetaBadge(label: kindLabel, highlight: true),
-                    _MetaBadge(label: countLabel),
-                    if (wordCountLabel != null)
-                      _MetaBadge(label: wordCountLabel),
-                    _MetaBadge(label: sizeLabel),
-                  ],
-                ),
-                if (selectedTags.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      for (final tag in selectedTags)
-                        _PreviewTagPill(tag: tag),
-                    ],
-                  ),
-                ],
-              ],
+            child: Text(
+              message,
+              style: TextStyle(
+                fontSize: 12,
+                color: scheme.error,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
         ],
@@ -694,69 +503,113 @@ class _BookPreviewCard extends StatelessWidget {
   }
 }
 
-class _MetaBadge extends StatelessWidget {
-  const _MetaBadge({required this.label, this.highlight = false});
-  final String label;
-  final bool highlight;
+/// 详情页展示单个已有标签的胶囊组件。
+class BookTagPill extends StatelessWidget {
+  const BookTagPill({
+    super.key,
+    required this.tag,
+    this.onTap,
+  });
+
+  final Tag tag;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    final color = tagPalette[tag.colorIndex % tagPalette.length];
+    final pill = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: BoxDecoration(
-        color: highlight
-            ? scheme.primary.withValues(alpha: .12)
-            : scheme.onSurface.withValues(alpha: .06),
-        borderRadius: BorderRadius.circular(6),
+        color: color.withValues(alpha: .16),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: .55), width: 1),
       ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: highlight ? FontWeight.w700 : FontWeight.w500,
-          color: highlight ? scheme.primary : scheme.onSurfaceVariant,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 7),
+          Text(
+            tag.name,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: scheme.onSurface,
+            ),
+          ),
+        ],
+      ),
+    );
+    if (onTap == null) return pill;
+    return JellyTapSurface(
+      onTap: onTap,
+      haptic: HapticCue.selection,
+      child: pill,
+    );
+  }
+}
+
+/// 详情页「添加标签 / 编辑」操作胶囊按钮。
+class BookTagActionChip extends StatelessWidget {
+  const BookTagActionChip({
+    super.key,
+    required this.label,
+    required this.onTap,
+    this.icon = CupertinoIcons.tag,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      label: label,
+      child: JellyTapSurface(
+        onTap: onTap,
+        haptic: HapticCue.selection,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: scheme.onSurface.withValues(alpha: .045),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: scheme.outlineVariant.withValues(alpha: .55),
+              width: .9,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 14, color: scheme.primary),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: scheme.onSurface,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _PreviewTagPill extends StatelessWidget {
-  const _PreviewTagPill({required this.tag});
-  final Tag tag;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = tagPalette[tag.colorIndex % tagPalette.length];
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: .16),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: .45), width: .8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 5),
-          Text(
-            tag.name,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SelectableTagChip extends StatelessWidget {
-  const _SelectableTagChip({
+/// 标签编辑面板中的可点选标签胶囊。
+class SelectableTagChip extends StatelessWidget {
+  const SelectableTagChip({
     super.key,
     required this.tag,
     required this.selected,
@@ -832,8 +685,9 @@ class _SelectableTagChip extends StatelessWidget {
   }
 }
 
-class _FileRenamePreviewNotice extends StatelessWidget {
-  const _FileRenamePreviewNotice({
+class FileRenamePreviewNotice extends StatelessWidget {
+  const FileRenamePreviewNotice({
+    super.key,
     required this.currentFileName,
     required this.previewFileName,
     required this.titleEmpty,
