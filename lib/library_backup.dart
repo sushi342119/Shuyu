@@ -4,13 +4,22 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'book_text_encoding.dart';
 import 'catalog.dart';
 import 'haptic_preferences.dart';
 import 'performance_preferences.dart';
 import 'reader_preferences.dart';
 import 'recovery_archive.dart';
 import 'ui_preferences.dart';
+
+const localTextEncodingOptions = {
+  'auto': '自动识别',
+  'UTF-8': 'UTF-8',
+  'GB18030': 'GB18030 / GBK',
+  'Big5': 'Big5',
+  'Big5-HKSCS': 'Big5-HKSCS',
+  'UTF-16LE': 'UTF-16 LE',
+  'UTF-16BE': 'UTF-16 BE',
+};
 
 final backupPreferenceKeys = <String>{
   'theme',

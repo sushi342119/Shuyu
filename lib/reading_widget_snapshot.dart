@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import 'reading_visual_theme.dart';
-import 'reading_widget_design.dart';
 import 'reading_widget_skin.dart';
 
 /// The one, versioned contract consumed by all three native widget hosts.

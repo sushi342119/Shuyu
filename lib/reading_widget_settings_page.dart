@@ -7,7 +7,6 @@ import 'feature_pages.dart';
 import 'library_state.dart';
 import 'local_platform.dart';
 import 'reading_widget_controller.dart';
-import 'reading_widget_design.dart';
 import 'reading_widget_reference.dart';
 import 'reading_widget_skin.dart';
 import 'reading_widget_skin_picker.dart';

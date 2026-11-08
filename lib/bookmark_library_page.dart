@@ -14,12 +14,23 @@ import 'local_platform.dart';
 import 'offline_repository.dart';
 import 'pages.dart' show readerPageFor;
 import 'quote_card.dart';
-import 'reading_report_fonts.dart';
 import 'bookmark_categories.dart';
 import 'reader_annotation_editor.dart';
 import 'reader_annotation_source.dart';
 import 'reader_bookmark_excerpt.dart';
 import 'setting_menu.dart';
+import 'user_fonts.dart';
+
+/// Reuse an installed face. Reports neither download fonts nor require one.
+Future<String?> registeredReadingReportSerif(UserFontStore store) async {
+  await store.load();
+  for (final id in const ['sourceHanSerif', 'sourceHanSerifTW']) {
+    if (!store.available(id)) continue;
+    await store.ensureLoaded(id);
+    if (store.isLoaded(id)) return store.family(id);
+  }
+  return null;
+}
 
 /// A merged volume keeps its original recovery records. Show the equivalent
 /// bookmark in the active series once, without deleting those recovery copies.

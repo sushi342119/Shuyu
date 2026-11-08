@@ -6668,49 +6668,16 @@ class _ReaderPageState extends State<ReaderPage>
               top: 0,
               left: 0,
               right: 0,
-              child: FrostedHeader(
-                blurBackground: false,
-                child: ReaderChromeLayer(
-                  key: const ValueKey('reader-chrome-header'),
-                  animation: _chrome,
-                  slide: const Offset(0, -8),
-                  fadeOffset: const Offset(0, -12),
-                  child: Row(
-                    children: [
-                      GlassIconButton(
-                        icon: CupertinoIcons.back,
-                        label: '返回详情',
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                      Expanded(
-                        child: ArchiveRouteTitle(
-                          title: _novel.title,
-                          code: ArchiveDesign.fileCode(_novel.id),
-                        ),
-                      ),
-                      AnimatedBuilder(
-                        animation: Listenable.merge([
-                          widget.state.bookmarkChanges,
-                          _progressValue,
-                        ]),
-                        builder: (context, _) {
-                          final bookmarked = _isCurrentPositionBookmarked;
-                          return GlassIconButton(
-                            key: const ValueKey('reader-bookmarks-entry'),
-                            icon: bookmarked
-                                ? CupertinoIcons.bookmark_fill
-                                : CupertinoIcons.bookmark,
-                            color: bookmarked
-                                ? Theme.of(context).colorScheme.primary
-                                : null,
-                            label: '添加书签',
-                            onPressed: _quickAddBookmark,
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ),
+              child: ReaderTopBar(
+                chrome: _chrome,
+                novelId: _novel.id,
+                title: _novel.title,
+                bookmarkListenable: Listenable.merge([
+                  widget.state.bookmarkChanges,
+                  _progressValue,
+                ]),
+                isBookmarked: () => _isCurrentPositionBookmarked,
+                onAddBookmark: _quickAddBookmark,
               ),
             ),
             Align(

@@ -6,7 +6,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'library_state.dart';
 import 'reading_widget_controller.dart';
-import 'reading_widget_design.dart';
 import 'reading_widget_reference.dart';
 import 'reading_widget_reference_capture.dart';
 import 'reading_widget_skin.dart';

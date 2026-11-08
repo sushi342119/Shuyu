@@ -1433,13 +1433,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
       if (showPlaceholder) {
         final leaf = pagination.pages[index];
         final vertical = widget.preferences.mode == ReaderMode.vertical;
-        final divisions = vertical
-            ? (leaf.glyphs
-                  .map((g) => pagination.size.width - g.rect.right)
-                  .toSet()
-                  .toList()
-                ..sort())
-            : leaf.fragments.map((f) => f.rect.top).toList();
+        final divisions = leaf.fragments.map((f) => f.rect.top).toList();
         skeleton.add(
           Positioned.fill(
             child: IgnorePointer(

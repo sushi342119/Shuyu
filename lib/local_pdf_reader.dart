@@ -351,56 +351,23 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
                   top: 0,
                   left: 0,
                   right: 0,
-                  child: FrostedHeader(
-                    blurBackground: false,
-                    child: ReaderChromeLayer(
-                      key: const ValueKey('reader-chrome-header'),
-                      animation: _chrome,
-                      slide: const Offset(0, -8),
-                      fadeOffset: const Offset(0, -12),
-                      child: Row(
-                        children: [
-                          GlassIconButton(
-                            icon: CupertinoIcons.back,
-                            label: '返回详情',
-                            onPressed: () => Navigator.pop(context),
-                          ),
-                          Expanded(
-                            child: ArchiveRouteTitle(
-                              title: widget.novel.title,
-                              code: ArchiveDesign.fileCode(widget.novel.id),
+                  child: ReaderTopBar(
+                    chrome: _chrome,
+                    novelId: widget.novel.id,
+                    title: widget.novel.title,
+                    bookmarkListenable: widget.state.bookmarkChanges,
+                    isBookmarked: () =>
+                        count > 0 &&
+                        widget.state
+                            .bookmarksFor(widget.novel.id)
+                            .any(
+                              (mark) =>
+                                  !mark.isUnderline &&
+                                  mark.quote.isEmpty &&
+                                  mark.position.chapterId == 0 &&
+                                  mark.position.chapter == _page,
                             ),
-                          ),
-                          AnimatedBuilder(
-                            animation: widget.state.bookmarkChanges,
-                            builder: (context, _) {
-                              final bookmarked =
-                                  count > 0 &&
-                                  widget.state
-                                      .bookmarksFor(widget.novel.id)
-                                      .any(
-                                        (mark) =>
-                                            !mark.isUnderline &&
-                                            mark.quote.isEmpty &&
-                                            mark.position.chapterId == 0 &&
-                                            mark.position.chapter == _page,
-                                      );
-                              return GlassIconButton(
-                                key: const ValueKey('reader-bookmarks-entry'),
-                                icon: bookmarked
-                                    ? CupertinoIcons.bookmark_fill
-                                    : CupertinoIcons.bookmark,
-                                color: bookmarked
-                                    ? Theme.of(context).colorScheme.primary
-                                    : null,
-                                label: '添加书签',
-                                onPressed: count == 0 ? null : _addBookmark,
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
+                    onAddBookmark: count == 0 ? null : _addBookmark,
                   ),
                 ),
                 Align(

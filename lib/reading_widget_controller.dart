@@ -14,7 +14,6 @@ import 'local_platform.dart';
 import 'reading_moment_cover.dart';
 import 'reading_moments.dart';
 import 'reading_visual_theme.dart';
-import 'reading_widget_design.dart';
 import 'reading_widget_snapshot.dart';
 import 'reading_widget_skin.dart';
 import 'reading_widget_reference_capture.dart';

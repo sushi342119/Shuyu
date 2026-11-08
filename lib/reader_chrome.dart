@@ -848,3 +848,66 @@ class _ReaderFollowPlacement extends FlowDelegate {
       oldDelegate.hiddenExtent != hiddenExtent ||
       oldDelegate.showPrompt != showPrompt;
 }
+
+/// Shared top header bar across TXT/online, EPUB, and PDF readers.
+class ReaderTopBar extends StatelessWidget {
+  const ReaderTopBar({
+    super.key,
+    required this.chrome,
+    required this.novelId,
+    required this.title,
+    required this.bookmarkListenable,
+    required this.isBookmarked,
+    required this.onAddBookmark,
+  });
+
+  final Animation<double> chrome;
+  final int novelId;
+  final String title;
+  final Listenable bookmarkListenable;
+  final bool Function() isBookmarked;
+  final VoidCallback? onAddBookmark;
+
+  @override
+  Widget build(BuildContext context) => FrostedHeader(
+    blurBackground: false,
+    child: ReaderChromeLayer(
+      key: const ValueKey('reader-chrome-header'),
+      animation: chrome,
+      slide: const Offset(0, -8),
+      fadeOffset: const Offset(0, -12),
+      child: Row(
+        children: [
+          GlassIconButton(
+            icon: CupertinoIcons.back,
+            label: '返回详情',
+            onPressed: () => Navigator.pop(context),
+          ),
+          Expanded(
+            child: ArchiveRouteTitle(
+              title: title,
+              code: ArchiveDesign.fileCode(novelId),
+            ),
+          ),
+          AnimatedBuilder(
+            animation: bookmarkListenable,
+            builder: (context, _) {
+              final bookmarked = isBookmarked();
+              return GlassIconButton(
+                key: const ValueKey('reader-bookmarks-entry'),
+                icon: bookmarked
+                    ? CupertinoIcons.bookmark_fill
+                    : CupertinoIcons.bookmark,
+                color: bookmarked
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
+                label: '添加书签',
+                onPressed: onAddBookmark,
+              );
+            },
+          ),
+        ],
+      ),
+    ),
+  );
+}

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'reading_widget_design.dart';
 import 'reading_widget_skin.dart';
 import 'reading_widget_snapshot.dart';
 

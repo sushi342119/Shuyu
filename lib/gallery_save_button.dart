@@ -1,8 +1,15 @@
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
-import 'harmony_gallery_save_button.dart';
 import 'local_platform.dart';
+
+// The isolated Flutter-OH build stages the real OhosView at this boundary.
+Widget? harmonyGallerySaveButtonView({
+  required bool enabled,
+  required Color foreground,
+  required Color background,
+  required ValueChanged<int> onCreated,
+}) => null;
 
 String gallerySaveFailureMessage(Object error) =>
     error is PlatformException && error.message?.trim().isNotEmpty == true

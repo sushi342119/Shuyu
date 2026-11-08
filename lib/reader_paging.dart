@@ -12,7 +12,6 @@ import 'reader_pagination.dart';
 import 'reader_preferences.dart';
 import 'reader_reflow.dart';
 import 'reader_text.dart';
-import 'reader_vertical_text.dart';
 
 /// P3 bridge (design 2026-11 §4 阅读手势, decision 6): tap zones, volume-key
 /// paging and the page body for the existing paged / vertical engine.
@@ -162,13 +161,12 @@ class _ReaderVolumePagingState extends State<ReaderVolumePaging> {
 
 /// One page of the paged engine. Horizontal fragments are re-laid at their
 /// measured width with the same span builder pagination used, so line breaks
-/// match; vertical pages draw with the existing [ReaderVerticalText].
+/// match.
 Widget readerPageBody(
   ReaderLeaf page,
   TextStyle style, {
   bool compressPunctuation = true,
 }) {
-  if (page.vertical) return ReaderVerticalText(page: page, style: style);
   final fragments = [
     for (final fragment in page.fragments)
       if (!fragment.image && !fragment.rule && fragment.text.isNotEmpty)

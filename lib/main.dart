@@ -8,7 +8,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_ui.dart';
 import 'app_palette.dart';
-import 'app_licenses.dart';
 import 'book_tags.dart';
 import 'catalog.dart';
 import 'haptic_preferences.dart';
@@ -33,6 +32,23 @@ import 'ui_preferences.dart';
 import 'updates/app_updates.dart';
 import 'updates/update_page.dart';
 import 'wenku_errors.dart';
+
+bool _licensesRegistered = false;
+void registerAppLicenses() {
+  if (_licensesRegistered) return;
+  _licensesRegistered = true;
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(const [
+      'Wenku8 Flutter',
+    ], await rootBundle.loadString('assets/licenses/GPL-3.0.txt'));
+    yield LicenseEntryWithLineBreaks(const [
+      'Source Han Serif CN · Adobe',
+    ], await rootBundle.loadString('assets/fonts/OFL-SourceHanSerif.txt'));
+    yield LicenseEntryWithLineBreaks(const [
+      'edge-tts protocol · rany',
+    ], await rootBundle.loadString('assets/licenses/edge-tts.txt'));
+  });
+}
 
 class _StartupFailure implements Exception {
   const _StartupFailure(this.item, this.error, this.stackTrace);

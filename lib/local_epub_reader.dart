@@ -596,56 +596,23 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
               top: 0,
               left: 0,
               right: 0,
-              child: FrostedHeader(
-                blurBackground: false,
-                child: ReaderChromeLayer(
-                  key: const ValueKey('reader-chrome-header'),
-                  animation: _chrome,
-                  slide: const Offset(0, -8),
-                  fadeOffset: const Offset(0, -12),
-                  child: Row(
-                    children: [
-                      GlassIconButton(
-                        icon: CupertinoIcons.back,
-                        label: '返回详情',
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                      Expanded(
-                        child: ArchiveRouteTitle(
-                          title: _novel.title,
-                          code: ArchiveDesign.fileCode(_novel.id),
-                        ),
-                      ),
-                      AnimatedBuilder(
-                        animation: widget.state.bookmarkChanges,
-                        builder: (context, _) {
-                          final bookmarked =
-                              _total > 0 &&
-                              widget.state.bookmarksFor(_novel.id).any(
-                                (mark) =>
-                                    !mark.isUnderline &&
-                                    widget.state.chapterForPosition(
-                                          _novel,
-                                          mark.position,
-                                        ) ==
-                                        _chapter,
-                              );
-                          return GlassIconButton(
-                            key: const ValueKey('reader-bookmarks-entry'),
-                            icon: bookmarked
-                                ? CupertinoIcons.bookmark_fill
-                                : CupertinoIcons.bookmark,
-                            color: bookmarked
-                                ? Theme.of(context).colorScheme.primary
-                                : null,
-                            label: '添加书签',
-                            onPressed: _total == 0 ? null : _quickAddBookmark,
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ),
+              child: ReaderTopBar(
+                chrome: _chrome,
+                novelId: _novel.id,
+                title: _novel.title,
+                bookmarkListenable: widget.state.bookmarkChanges,
+                isBookmarked: () =>
+                    _total > 0 &&
+                    widget.state.bookmarksFor(_novel.id).any(
+                      (mark) =>
+                          !mark.isUnderline &&
+                          widget.state.chapterForPosition(
+                                _novel,
+                                mark.position,
+                              ) ==
+                              _chapter,
+                    ),
+                onAddBookmark: _total == 0 ? null : _quickAddBookmark,
               ),
             ),
             Align(
