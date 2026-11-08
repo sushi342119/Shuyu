@@ -160,8 +160,14 @@ class ReadingStatisticsData {
     }
     currentStreak = current;
 
-    final offline = repository is OfflineNovelRepository ? repository : null;
-    final local = state.localLibrary;
+    final offline = switch (repository) {
+      final OfflineNovelRepository repo => repo,
+      final CompositeNovelRepository repo
+          when repo.remote is OfflineNovelRepository =>
+        repo.remote as OfflineNovelRepository,
+      _ => null,
+    };
+    final local = state.localLibrary ?? localLibraryOf(repository);
     Novel? known(int id) =>
         local?.novelFor(id) ??
         state.cachedNovel(id) ??
@@ -230,11 +236,16 @@ class ReadingStatisticsData {
             chapter: entry.bookmark.chapterTitle,
           ),
     ]);
-    onlineBooks = state.shelf.length;
-    localBooks = local?.books.length ?? 0;
+    final onlineShelfIds = state.shelf.where((id) => !isLocalNovelId(id));
+    onlineBooks = onlineShelfIds.length;
+    localBooks =
+        local?.books.length ?? state.shelf.where(isLocalNovelId).length;
     final collection = <int, Novel>{
-      for (final id in state.shelf) id: ?known(id),
-      for (final book in local?.novels ?? const <Novel>[]) book.id: book,
+      for (final id in onlineShelfIds) id: ?known(id),
+      if (local != null)
+        for (final book in local.novels) book.id: book
+      else
+        for (final id in state.shelf.where(isLocalNovelId)) id: ?known(id),
     };
     collectionBooks = List.unmodifiable(collection.values);
     final genreCounts = <String, int>{};

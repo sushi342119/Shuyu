@@ -892,7 +892,7 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
   List<({String quote, String? title, String chapter})> _savedExcerpts() {
     final entries = libraryBookmarks(
       widget.state,
-      books: widget.state.localLibrary,
+      books: widget.state.localLibrary ?? localLibraryOf(widget.repository),
     );
     return [
       for (final entry in entries)
@@ -907,8 +907,16 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
 
   Novel? _knownBook(int id) {
     final repository = widget.repository;
-    final offline = repository is OfflineNovelRepository ? repository : null;
-    return widget.state.localLibrary?.novelFor(id) ??
+    final offline = switch (repository) {
+      final OfflineNovelRepository repo => repo,
+      final CompositeNovelRepository repo
+          when repo.remote is OfflineNovelRepository =>
+        repo.remote as OfflineNovelRepository,
+      _ => null,
+    };
+    final local =
+        widget.state.localLibrary ?? localLibraryOf(widget.repository);
+    return local?.novelFor(id) ??
         widget.state.cachedNovel(id) ??
         offline?.cache.book(id)?.novel;
   }

@@ -10,6 +10,7 @@ import 'package:shuyu/library_backup.dart';
 import 'package:shuyu/local_library.dart';
 import 'package:shuyu/listening/models.dart';
 import 'package:shuyu/listening/store.dart';
+import 'package:shuyu/reading_statistics_data.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -26,6 +27,32 @@ void main() {
     expect(state.contains(book.id), isFalse);
     await state.addShelfIds([book.id], novels: {book.id: book});
     expect(state.contains(book.id), isTrue);
+  });
+
+  test('reading statistics do not double-count local shelf books in onlineBooks', () async {
+    final state = LibraryState(await SharedPreferences.getInstance());
+    addTearDown(state.dispose);
+    const localBook = Novel(
+      id: localNovelIdBase + 1,
+      title: '本地小说',
+      author: '作者甲',
+      genre: '奇幻',
+      summary: '',
+      colors: [Colors.black, Colors.white],
+      chapters: [],
+    );
+    await state.addShelfBooks([localBook]);
+    final stats = ReadingStatisticsData(
+      state: state,
+      repository: const DemoNovelRepository(),
+      now: DateTime(2026, 11, 8),
+      period: 30,
+    );
+    expect(stats.onlineBooks, 0);
+    expect(stats.localBooks, 1);
+    expect(stats.onlineBooks + stats.localBooks, 1);
+    expect(stats.authorCount, 1);
+    expect(stats.unknownAuthors, 0);
   });
 
   test('malformed reading anchor is isolated and complete clear removes all consumers', () async {

@@ -1293,9 +1293,12 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
             localLibraryOf(widget.repository) ?? widget.state.localLibrary;
         final libraryIds = <int>{
           for (final book in widget.books) book.id,
-          if (local != null)
+          if (local != null) ...[
             for (final book in local.books) book.id,
-          ...widget.state.shelf,
+            for (final id in widget.state.shelf)
+              if (!isLocalNovelId(id)) id,
+          ] else
+            ...widget.state.shelf,
         };
         final totalBooks = math.max(
           libraryIds.length,
