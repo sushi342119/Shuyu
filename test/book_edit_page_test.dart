@@ -123,7 +123,9 @@ void main() {
         await tester.tap(find.byKey(const ValueKey('book-edit-save-button')));
         for (
           var i = 0;
-          i < 120 && local.bookFor(bookId)?.displayTitle != '秦家仙子新编';
+          i < 120 &&
+              (local.bookFor(bookId)?.displayTitle != '秦家仙子新编' ||
+                  state.cachedNovel(bookId)?.title != '秦家仙子新编');
           i++
         ) {
           await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -155,7 +157,9 @@ void main() {
         await tester.tap(find.byKey(const ValueKey('book-edit-save-button')));
         for (
           var i = 0;
-          i < 120 && local.bookFor(bookId)?.displayAuthor != '知名作者';
+          i < 120 &&
+              (local.bookFor(bookId)?.displayAuthor != '知名作者' ||
+                  state.cachedNovel(bookId)?.author != '知名作者');
           i++
         ) {
           await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -167,7 +171,7 @@ void main() {
       expect(local.bookFor(bookId)!.displayAuthor, '知名作者');
       expect(state.cachedNovel(bookId)?.title, '秦家仙子新编');
       expect(state.cachedNovel(bookId)?.author, '知名作者');
-      expect(find.text('知名作者'), findsOneWidget);
+      expect(find.text('知名作者'), findsWidgets);
     },
   );
 

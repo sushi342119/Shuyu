@@ -393,7 +393,7 @@ class _BookAuthorEditDialogState extends State<_BookAuthorEditDialog> {
         title: Row(
           children: [
             const Expanded(child: Text('修改作者')),
-            if (book.author.isNotEmpty && previewAuthor != book.author)
+            if (previewAuthor != book.author)
               GestureDetector(
                 key: const ValueKey('book-edit-reset-author'),
                 onTap: _saving
