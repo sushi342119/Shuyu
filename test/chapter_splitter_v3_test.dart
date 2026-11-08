@@ -34,6 +34,17 @@ void main() {
         ['第一集05回：携云', '第一集06回：听雨'],
         ['第1-2章 合章', '第3-4章 续篇'],
         ['第廿一章 廿字回', '第卅二章 卅字回'],
+        ['【书名】（第一章）', '【书名】（第二章）'],
+        ['《妈妈，请再爱我一次》第一章', '《妈妈，请再爱我一次》第二章'],
+        ['第1——5章 开篇', '第6——10章 续篇'],
+        ['（1——5）开篇', '（6——10）续篇'],
+        ['丝袜警花妈妈（1）初识', '丝袜警花妈妈（2）重逢'],
+        ['美母攻略 01', '美母攻略 02'],
+        ['美母攻略 - 01 初遇', '美母攻略 - 02 夜谈'],
+        ['（1）第一节课', '（2）第一部作品'],
+        ['01. 她的第一部电影，也是最后一部', '02. 久违的晴天，微风轻拂'],
+        ['第一部分', '第二部分'],
+        ['第一章 完本感言', '第二章 后记与鸣谢'],
       ];
       for (final headings in families) {
         final text =
@@ -70,6 +81,22 @@ void main() {
       expect(chapters[1].volume, '第一卷');
       expect(chapters[2].volume, '第一卷');
       expect(chapters.every((c) => body(text, c).trim().isNotEmpty), isTrue);
+
+      final intro = '内容简介\n${'这是一段很长的内容简介，介绍了故事的背景与主要人物。' * 12}\n';
+      final multiVolText =
+          '$intro目录\n第一卷 初入江湖\n第一章 起点\n第二章 终点\n第二卷 风起云涌\n第三章 破晓\n\n'
+          '第一卷 初入江湖\n第一章 起点\n真实正文一。\n第二章 终点\n真实正文二。\n'
+          '第二卷 风起云涌\n第三章 破晓\n真实正文三。\n';
+      final multiVolChapters = splitLocalChapters(multiVolText);
+      expect(multiVolChapters.map((c) => c.title), [
+        '内容简介',
+        '第一章 起点',
+        '第二章 终点',
+        '第三章 破晓',
+      ]);
+      expect(multiVolChapters[1].volume, '第一卷 初入江湖');
+      expect(multiVolChapters[2].volume, '第一卷 初入江湖');
+      expect(multiVolChapters[3].volume, '第二卷 风起云涌');
     },
   );
   test('whole-word prose and inline lists never create chapters', () {
@@ -93,6 +120,38 @@ void main() {
       );
       final expected = splitLocalChapters(text).map((c) => c.toJson()).toList();
       for (final size in [1, 2, 3, 7, 1024, 65536]) {
+        final index = ChapterTextIndex();
+        for (var i = 0; i < text.length; i += size) {
+          index.add(text.substring(i, (i + size).clamp(0, text.length)));
+        }
+        expect(
+          index.finish().map((c) => c.toJson()),
+          expected,
+          reason: 'chunk $size',
+        );
+      }
+    },
+  );
+  test(
+    'inline chapter headings at end of paragraph split cleanly across chunks',
+    () {
+      const text =
+          '第一章 晨雾\n'
+          '清晨的雾气笼罩着山谷，两人相视一笑。第二章 暗流涌动\n'
+          '夜色渐渐深沉，远处的灯火闪烁不定！”第三章 破晓时分\n'
+          '天边终于泛起了鱼肚白。\n';
+      final chapters = splitLocalChapters(text);
+      expect(chapters.map((c) => c.title), [
+        '第一章 晨雾',
+        '第二章 暗流涌动',
+        '第三章 破晓时分',
+      ]);
+      expect(body(text, chapters[0]), '清晨的雾气笼罩着山谷，两人相视一笑。');
+      expect(body(text, chapters[1]), '夜色渐渐深沉，远处的灯火闪烁不定！”');
+      expect(body(text, chapters[2]), '天边终于泛起了鱼肚白。\n');
+      expect(validChapterRanges(chapters, text.length), isTrue);
+      final expected = chapters.map((c) => c.toJson()).toList();
+      for (final size in [1, 2, 3, 5, 11]) {
         final index = ChapterTextIndex();
         for (var i = 0; i < text.length; i += size) {
           index.add(text.substring(i, (i + size).clamp(0, text.length)));

@@ -2008,5 +2008,55 @@ void main() {
         ),
       );
     });
+
+    test('单 div 纯换行分隔的多章 EPUB 与失效 NCX 锚点自动回退切章', () async {
+      final base = baseEpubFiles();
+      final files = <String, List<int>>{
+        'mimetype': base['mimetype']!,
+        'META-INF/container.xml': base['META-INF/container.xml']!,
+        'OEBPS/content.opf': utf8.encode(
+          '<?xml version="1.0" encoding="utf-8"?>'
+          '<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">'
+          '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+          '<dc:identifier id="id">div-newline-split</dc:identifier><dc:title>合集</dc:title></metadata>'
+          '<manifest>'
+          '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>'
+          '<item id="all" href="book.xhtml" media-type="application/xhtml+xml"/>'
+          '</manifest>'
+          '<spine toc="ncx"><itemref idref="all"/></spine>'
+          '</package>',
+        ),
+        'OEBPS/toc.ncx': utf8.encode(
+          '<?xml version="1.0" encoding="utf-8"?>'
+          '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">'
+          '<head/><docTitle><text>合集</text></docTitle><navMap>'
+          '<navPoint id="p1" playOrder="1"><navLabel><text>第一卷</text></navLabel>'
+          '<content src="book.xhtml#missing1"/></navPoint>'
+          '<navPoint id="p2" playOrder="2"><navLabel><text>第二卷</text></navLabel>'
+          '<content src="book.xhtml#missing2"/></navPoint>'
+          '</navMap></ncx>',
+        ),
+        'OEBPS/book.xhtml': utf8.encode(
+          '<?xml version="1.0" encoding="utf-8"?>'
+          '<html xmlns="http://www.w3.org/1999/xhtml"><body><div>\n'
+          '第一章 起风\n'
+          '　　起风正文第一段。\n'
+          '　　起风正文第二段。\n'
+          '第二章 落雨\n'
+          '　　落雨正文第一段。\n'
+          '　　落雨正文第二段。\n'
+          '</div></body></html>',
+        ),
+      };
+      final pkg = await EpubPackage.open(
+        await buildEpub(await makeTempDir(), files),
+      );
+      addTearDown(pkg.close);
+      expect(pkg.chapters.map((c) => c.title).toList(), ['第一章 起风', '第二章 落雨']);
+      final ch1 = await pkg.chapterBlocks(0);
+      final ch2 = await pkg.chapterBlocks(1);
+      expect(ch1.map((b) => b.text).toList(), ['起风正文第一段。', '起风正文第二段。']);
+      expect(ch2.map((b) => b.text).toList(), ['落雨正文第一段。', '落雨正文第二段。']);
+    });
   });
 }

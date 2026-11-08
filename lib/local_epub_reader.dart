@@ -43,7 +43,7 @@ class LocalEpubReaderPage extends StatefulWidget {
 
 class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
-  late final Novel _novel;
+  late Novel _novel;
   late final AnimationController _chrome;
   late ReadingActivitySession _readingActivity;
   bool _activityAttached = false;
@@ -278,10 +278,40 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     }
   }
 
+  void _syncNovelFromStore() {
+    final book = widget.local.bookFor(widget.novel.id);
+    if (book == null || book.chapters.length == _novel.chapters.length) return;
+    final nextNovel = widget.novel.withChapters([
+      for (var index = 0; index < book.chapters.length; index++)
+        NovelChapter(
+          book.chapters[index].title,
+          '',
+          id: index,
+          revision: book.revision,
+          volume: book.chapters[index].volume,
+        ),
+    ]);
+    if (mounted) {
+      setState(() {
+        _novel = nextNovel;
+        if (_total > 0 && _chapter >= _total) {
+          _chapter = _total - 1;
+        }
+      });
+    } else {
+      _novel = nextNovel;
+    }
+  }
+
   Future<({List<EpubBlock> blocks, Map<String, Uint8List> images})> _load() {
     if (_future == null || _futureChapter != _chapter) {
       _futureChapter = _chapter;
-      _future = widget.local.epubChapter(widget.novel.id, _chapter);
+      _future = widget.local
+          .epubChapter(widget.novel.id, _chapter)
+          .then((result) {
+            _syncNovelFromStore();
+            return result;
+          });
     }
     return _future!;
   }

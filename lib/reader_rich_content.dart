@@ -455,9 +455,10 @@ class ReaderRichParagraph {
 /// Optional local EPUB metadata. Body coordinates are always plain UTF-16 text;
 /// annotations never become copied text, speech, or an extra paragraph.
 final _paragraphHeadingPattern = RegExp(
-  r'^(?:第\s*[\d０-９零一二三四五六七八九十百千万〇两]+\s*[章节節回话話幕折卷部集篇段]'
-  r'|(?:序章|楔子|尾声|番外|后记|前言|目录)(?:\s|$|[：:])'
-  r'|(?:chapter|part|section)\s+[\divxlcdm]+\b'
+  r'^(?:(?:【[^】\n]{1,32}】|《[^》\n]{1,32}》)?[ \t　]*[（(【\[]?第\s*[\d０-９零一二三四五六七八九十百千万千萬〇两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟廿卅卌\u2160-\u217F\u2460-\u2473\-~～—–─━、,，/至到]+\s*[章节節回囘话話幕折卷捲部集篇段季期更册冊编編輯辑讲講场場局夜曲弹彈]'
+  r'|(?:序章|序曲|序言|序幕|楔子|引子|尾声|番外|后记|前言|目录|终章|大结局|结局|[上中下][篇卷部集])(?:\s|$|[：:（(【\[])'
+  r'|(?:chapter|part|section|episode|ep\.?|act|vol(?:ume)?\.?)\s+[\divxlcdm]+\b'
+  r'|(?:[（(【\[［〖〔]\s*[\d０-９零一二三四五六七八九十百千万〇两\u2160-\u217F\u2460-\u2473\-~～—–、]+\s*[）)】\]］〗〕])'
   r'|(?:段落|性能段落|下一章段落|正文\s*[\d\-]+)\s*\d*)',
   caseSensitive: false,
 );

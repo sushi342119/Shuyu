@@ -563,7 +563,7 @@ ValueNotifier<LocalScanProgress> localScanProgressFor(LocalLibraryStore store) {
 }
 
 /// 章节切分规则版本；与应用版本独立。
-const _chapterSplitVersion = 4;
+const _chapterSplitVersion = 5;
 const _localOperationTimeout = Duration(seconds: 12);
 
 const _shelfPalette = [
@@ -1338,8 +1338,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   Future<LocalBook> _upgradeEpubChaptersIfNeeded(LocalBook book) async {
     if (book.kind != LocalBookKind.epub ||
         book.chapterSplitVersion == _chapterSplitVersion ||
-        book.sourceFingerprint.isEmpty ||
-        book.chapters.length > 1) {
+        book.sourceFingerprint.isEmpty) {
       return book;
     }
     final index = _indexForBook(book.id);
@@ -1391,15 +1390,25 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     final index = _indexForBook(id);
     if (index < 0) return null;
     final book = _books[index];
-    if (book.kind != LocalBookKind.txt) return toNovel(book);
+    Novel novelWithChapters(LocalBook b) => toNovel(b).withChapters([
+      for (var i = 0; i < b.chapters.length; i++)
+        NovelChapter(
+          b.chapters[i].title,
+          '',
+          id: i,
+          revision: b.revision,
+          volume: b.chapters[i].volume,
+        ),
+    ]);
+    if (book.kind != LocalBookKind.txt) return novelWithChapters(book);
     final text = await _readBookText(book);
-    if (text.isEmpty) return toNovel(book);
+    if (text.isEmpty) return novelWithChapters(book);
     final nextChapters = splitLocalChaptersCustom(
       text,
       customPattern: customPattern,
       maxChapterChars: maxChapterChars,
     );
-    if (nextChapters.isEmpty) return toNovel(book);
+    if (nextChapters.isEmpty) return novelWithChapters(book);
     final updated = book.copyWith(
       chapters: nextChapters,
       chapterSplitVersion: _chapterSplitVersion,
@@ -1408,7 +1417,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     );
     _replaceBook(index, updated);
     await _saveIndex();
-    return toNovel(updated);
+    return novelWithChapters(updated);
   });
 
   bool _isBookReadyWithoutLock(LocalBook book) {
@@ -1416,12 +1425,10 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     if (book.kind == LocalBookKind.epub) {
       return book.chapterSplitVersion == _chapterSplitVersion ||
           book.sourceFingerprint.isEmpty ||
-          book.chapters.length > 1 ||
           _activeScan != null;
     }
     return book.chapterSplitVersion == _chapterSplitVersion ||
-        (book.chapterSplitVersion >= 3 &&
-            (book.chapters.length > 1 || _activeScan != null));
+        (book.chapterSplitVersion >= 3 && _activeScan != null);
   }
 
   Future<void> ensureReady(int id) async {
@@ -1446,15 +1453,13 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     if (book == null) throw StateError('书库中没有这本书的记录，请重新扫描导入');
     if (book.kind == LocalBookKind.epub) {
       if (book.chapterSplitVersion != _chapterSplitVersion &&
-          book.sourceFingerprint.isNotEmpty &&
-          book.chapters.length <= 1) {
+          book.sourceFingerprint.isNotEmpty) {
         await _upgradeEpubChaptersIfNeeded(book);
       }
       return;
     }
     if (book.kind != LocalBookKind.txt) return;
-    if (book.chapterSplitVersion != _chapterSplitVersion &&
-        (book.chapterSplitVersion < 3 || book.chapters.length <= 1)) {
+    if (book.chapterSplitVersion != _chapterSplitVersion) {
       final remaps = <LocalChapterRemap>[];
       final updates = <int, LocalBook>{};
       final outcome = await _refreshBookIfNeeded(
@@ -2543,7 +2548,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                       (existing.kind == LocalBookKind.epub &&
                           (existing.chapterSplitVersion ==
                                   _chapterSplitVersion ||
-                              existing.chapters.length > 1))) &&
+                              (!verifyUnchangedFingerprints &&
+                                  existing.chapters.length > 1)))) &&
                   !force &&
                   existing.size == size &&
                   existing.modified == modified) {
@@ -2558,7 +2564,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                   existing.size == size &&
                   existing.modified == modified &&
                   (existing.chapterSplitVersion == _chapterSplitVersion ||
-                      (existing.chapterSplitVersion >= 3 &&
+                      (!verifyUnchangedFingerprints &&
+                          existing.chapterSplitVersion >= 3 &&
                           existing.chapters.length > 1)) &&
                   existing.wordCount != null &&
                   existing.sourceFingerprint.isNotEmpty) {
@@ -2937,8 +2944,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                 chapterUpdates[existing.id] = existing;
               }
               if (existing.kind == LocalBookKind.epub &&
-                  (existing.chapterSplitVersion == _chapterSplitVersion ||
-                      existing.chapters.length > 1) &&
+                  existing.chapterSplitVersion == _chapterSplitVersion &&
                   !force &&
                   existing.size == size &&
                   existing.modified == modified &&
@@ -2948,9 +2954,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
               if (!force &&
                   existing.size == size &&
                   existing.modified == modified &&
-                  (existing.chapterSplitVersion == _chapterSplitVersion ||
-                      (existing.chapterSplitVersion >= 3 &&
-                          existing.chapters.length > 1)) &&
+                  existing.chapterSplitVersion == _chapterSplitVersion &&
                   existing.wordCount != null &&
                   existing.sourceFingerprint.isNotEmpty) {
                 try {
@@ -4583,7 +4587,6 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
     if (book.chapterSplitVersion != _chapterSplitVersion &&
         book.sourceFingerprint.isNotEmpty &&
-        book.chapters.length <= 1 &&
         _activeScan == null) {
       final current = book;
       book = await _synchronized(() => _upgradeEpubChaptersIfNeeded(current));

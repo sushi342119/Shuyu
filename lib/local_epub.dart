@@ -764,9 +764,15 @@ class EpubPackage {
       }
     }
 
-    final textSpineCount = spineHrefs
-        .where((h) => !_rasterImageEntryPattern.hasMatch(h))
-        .length;
+    final textSpineSizes = <int>[
+      for (final h in spineHrefs)
+        if (!_rasterImageEntryPattern.hasMatch(h))
+          entries[_resolveEntryKey(entries, h) ?? h]?.size ?? 0,
+    ]..sort();
+    final textSpineCount = textSpineSizes.length;
+    final medianSpineSize = textSpineCount == 0
+        ? 0
+        : textSpineSizes[textSpineCount ~/ 2];
 
     // 章节标题回退与单文件多章节切分：
     // 1. 若某 spine 文件在 NCX/nav 中有 >=2 个解析到真实锚点的目录项，按锚点切分；
@@ -791,16 +797,20 @@ class EpubPackage {
       final navList = navByHref[href] ?? const <_TocEntry>[];
       final tocCandidates = ncxList.length >= 2
           ? ncxList
-          : (ncxList.isEmpty && navList.length >= 2 ? navList : ncxList);
+          : (navList.length >= 2 ? navList : ncxList);
       final hasMultiToc =
           tocCandidates.length >= 2 &&
           tocCandidates.any((e) => e.fragment != null);
-      final entrySize = entries[_resolveEntryKey(entries, href) ?? href]?.size ?? 0;
+      final entrySize =
+          entries[_resolveEntryKey(entries, href) ?? href]?.size ?? 0;
       final checkInlineSplit =
-          !hasMultiToc &&
-          (textSpineCount <= 3 ||
-              (textSpineCount <= 16 && entrySize >= 6 * 1024) ||
-              entrySize >= 64 * 1024);
+          textSpineCount <= 3 ||
+          (textSpineCount <= 12 && entrySize >= 512) ||
+          (textSpineCount <= 40 && entrySize >= 4 * 1024) ||
+          entrySize >= 24 * 1024 ||
+          (medianSpineSize > 0 &&
+              entrySize >= medianSpineSize * 3 &&
+              entrySize >= 6 * 1024);
 
       String? cachedSource;
       Future<String> loadSource() async =>
@@ -811,7 +821,31 @@ class EpubPackage {
         try {
           final parsed = _extractDocument(href, await loadSource(), entries);
           if (hasMultiToc) {
-            splitChapters = _splitBlocksByToc(href, parsed, tocCandidates);
+            final tocSplit = _splitBlocksByToc(href, parsed, tocCandidates);
+            if (tocSplit != null) {
+              final expanded = <_SplitEpubChapter>[];
+              for (final slice in tocSplit) {
+                final subSplit = slice.size >= 3 * 1024
+                    ? _splitBlocksByHeadings(slice.href, slice.blocks)
+                    : null;
+                if (subSplit != null && subSplit.length >= 2) {
+                  for (var s = 0; s < subSplit.length; s++) {
+                    final sub = subSplit[s];
+                    expanded.add((
+                      title: s == 0 && sub.title == '前言'
+                          ? slice.title
+                          : sub.title,
+                      href: sub.href,
+                      blocks: sub.blocks,
+                      size: sub.size,
+                    ));
+                  }
+                } else {
+                  expanded.add(slice);
+                }
+              }
+              splitChapters = expanded;
+            }
           }
           if (splitChapters == null && checkInlineSplit) {
             splitChapters = _splitBlocksByHeadings(href, parsed.blocks);
@@ -1539,38 +1573,74 @@ class _BlockCollector {
 
   void addText(String text) => _buf.write(text);
 
-  void flush() {
-    final raw = _buf.toString();
-    _buf.clear();
-    if (raw.trim().isEmpty) return;
-    final rawLines = raw
-        .split(RegExp(r'\r?\n'))
-        .map((l) => l.replaceAll(_whitespace, ' ').trim())
-        .where((l) => l.isNotEmpty)
-        .toList();
-    if (rawLines.length >= 3 && raw.length >= 200) {
-      for (final line in rawLines) {
-        blocks.add(EpubBlock.text(line));
-      }
-      _anchorBoundary = false;
-      return;
-    }
-    final text = raw
-        .replaceAll(_cjkLineBreak, '')
-        .replaceAll(_whitespace, ' ')
-        .trim();
-    if (text.isEmpty) return;
+  void _appendParagraph(String rawLine, String trimmed) {
+    if (trimmed.isEmpty) return;
     if (!_anchorBoundary &&
         blocks.isNotEmpty &&
         blocks.last.text != null &&
-        shouldMergeBrokenParagraph(blocks.last.text!, text)) {
+        shouldMergeBrokenParagraph(blocks.last.text!, rawLine)) {
       blocks[blocks.length - 1] = EpubBlock.text(
-        joinBrokenParagraph(blocks.last.text!, text),
+        joinBrokenParagraph(blocks.last.text!, trimmed),
       );
     } else {
-      blocks.add(EpubBlock.text(text));
+      blocks.add(EpubBlock.text(trimmed));
     }
     _anchorBoundary = false;
+  }
+
+  void flush() {
+    if (_buf.isEmpty) return;
+    final raw = _buf.toString();
+    _buf.clear();
+    if (!raw.contains('\n') && !raw.contains('\r')) {
+      final text = raw.replaceAll(_whitespace, ' ').trim();
+      _appendParagraph(raw, text);
+      return;
+    }
+    final lines = raw
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n')
+        .split('\n');
+    String? currentRaw;
+    String? currentTrimmed;
+    var hadBlankLine = false;
+    for (final rawLine in lines) {
+      final collapsed = rawLine.replaceAll(_horizontalSpace, ' ').trimRight();
+      final trimmed = collapsed.trimLeft();
+      if (trimmed.isEmpty) {
+        hadBlankLine = true;
+        continue;
+      }
+      if (currentTrimmed == null) {
+        currentRaw = collapsed;
+        currentTrimmed = trimmed;
+        hadBlankLine = false;
+        continue;
+      }
+      final splitHere =
+          hadBlankLine ||
+          collapsed.startsWith('　') ||
+          _epubTerminalEnd.hasMatch(currentTrimmed) ||
+          _epubInlineHeadingLine.hasMatch(currentTrimmed) ||
+          _epubInlineHeadingLine.hasMatch(trimmed);
+      if (splitHere) {
+        _appendParagraph(currentRaw!, currentTrimmed);
+        currentRaw = collapsed;
+        currentTrimmed = trimmed;
+      } else {
+        currentTrimmed =
+            _cjkBoundaryChar.hasMatch(
+                  currentTrimmed[currentTrimmed.length - 1],
+                ) &&
+                _cjkBoundaryChar.hasMatch(trimmed[0])
+            ? '$currentTrimmed$trimmed'
+            : '$currentTrimmed $trimmed';
+      }
+      hadBlankLine = false;
+    }
+    if (currentTrimmed != null) {
+      _appendParagraph(currentRaw!, currentTrimmed);
+    }
   }
 
   void addImage(String? entryPath) {
@@ -1581,8 +1651,12 @@ class _BlockCollector {
   }
 }
 
-final _cjkLineBreak = RegExp(
-  r'(?<=[\u3000-\u303f\u3400-\u9fff\uff00-\uffef])[ \t]*[\r\n]+[ \t]*(?=[\u3000-\u303f\u3400-\u9fff\uff00-\uffef])',
+final _cjkBoundaryChar = RegExp(r'[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]');
+final _horizontalSpace = RegExp(r'[ \t]+');
+final _epubTerminalEnd = RegExp(r'[。！？!?…⋯～~；;：:.”’」』）)】\]》〉〕]$');
+final _epubInlineHeadingLine = RegExp(
+  r'^(?:(?:【[^】\n]{1,32}】|《[^》\n]{1,32}》)?[ \t　]*[（(【\[]?第[ \t　]*[0-9０-９一二三四五六七八九十百千万千萬零〇两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟廿卅卌\u2160-\u217F\u2460-\u2473\-~～—–─━、,，/至到]+[ \t　]*[章节節回囘话話幕折卷捲部集篇段季期更册冊编編輯辑讲講场場局夜曲弹彈]|[（(【\[［〖〔][ \t　]*[0-9０-９一二三四五六七八九十百千万零〇两\u2160-\u217F\u2460-\u2473\-~～—–、]+[ \t　]*[）)】\]］〗〕]|(?:序章|序曲|序言|序幕|楔子|引子|尾声|番外|后记|前言|终章|大结局|结局|[上中下][篇卷部集])(?:\s|$|[：:])|(?:chapter|part|section|episode|ep\.?|act|vol(?:ume)?\.?)\s+[0-9０-９ivxlcdm]+)',
+  caseSensitive: false,
 );
 final _whitespace = RegExp(r'\s+');
 const _blockTags = {
@@ -1590,6 +1664,8 @@ const _blockTags = {
   'div',
   'section',
   'article',
+  'pre',
+  'blockquote',
   'h1',
   'h2',
   'h3',

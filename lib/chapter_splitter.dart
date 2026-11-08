@@ -55,65 +55,124 @@ bool validChapterRanges(List<LocalChapterIndex> chapters, int textLength) {
 }
 
 const _number =
-    r'[0-9０-９一二三四五六七八九十百千萬万零〇两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟廿卅卌]+';
-const _numberSpan = '$_number(?:[ \\t　]*[-~～—–、][ \\t　]*$_number)?';
+    r'[0-9０-９一二三四五六七八九十百千萬万零〇两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟廿卅卌\u2160-\u217F\u2460-\u2473]+';
+const _numberRange =
+    '$_number(?:[ \\t　]*[-~～—–─━―/／至到]+[ \\t　]*$_number)*';
+const _numberSpan =
+    '$_number(?:[ \\t　]*[-~～—–─━―、,，/／至到]+[ \\t　]*$_number)*';
 final _numbered = RegExp(
-  '(?:第[ \\t　]*$_numberSpan[ \\t　]*[章节節回囘话話幕折卷捲部集篇季期更]|$_number[章节節回囘话話幕折卷捲部集篇])',
+  '(?:第[ \\t　]*(?:$_numberSpan|[（(【\\[［〖〔][ \\t　]*$_numberSpan[ \\t　]*[）)】\\]］〗〕])[ \\t　]*(?:[分大小]?[卷捲章节節部集篇]|[章节節回囘话話幕折季期更段册冊编編輯辑讲講场場局夜曲弹彈])|$_numberRange[章节節回囘话話幕折卷捲部集篇段册冊编編輯辑])',
 );
-final _volumeNumber = RegExp('卷[ \\t　]*$_numberSpan');
+final _weakNumberedUnit = RegExp(r'[段册冊编編輯辑讲講场場局夜曲弹彈]$');
+final _volumeNumber = RegExp(
+  '(?:卷[ \\t　]*$_numberSpan|[章节節回囘话話幕折部集篇][ \\t　]*之?[ \\t　]*$_numberRange(?=\$|[ \\t　:：、.．—\\-–）)】\\]]))',
+);
 final _english = RegExp(
-  r'chapter\s*(?:[0-9０-９]+|[ivxlcdm]+)(?![a-z0-9０-９])',
+  r'(?:chapter|part|section|episode|ep\.?|act|vol(?:ume)?\.?)\s*(?:[0-9０-９]+(?:\s*[-~～—–/]\s*[0-9０-９]+)?|[ivxlcdm]+)(?![a-z0-9０-９])',
   caseSensitive: false,
 );
+final _englishVolumePrefix = RegExp(r'^vol(?:ume)?\b', caseSensitive: false);
 final _bare = RegExp(
-  '^(?:[（(]($_numberSpan)[）)]|[【\\[［〖〔]($_numberSpan)[】\\]］〗〕]|($_number)[.．、:：]|($_number)[ \\t　]+|($_number)\$)',
+  '^(?:[（(][ \\t　]*($_numberSpan)[ \\t　]*[）)]|[【\\[［〖〔《「『〈<][ \\t　]*($_numberSpan)[ \\t　]*[】\\]］〗〕》」』〉>]|第[ \\t　]*($_numberRange)(?:[.．、:：]|[ \\t　]+|\$)|($_numberRange)(?:[.．、:：]|[ \\t　]*[—–─━―]+|[ \\t　]+-[ \\t　]+)|($_numberRange)[ \\t　]+|($_numberRange)\$)',
 );
 final _special = RegExp(
-  r'^(?:序章|序曲|序言|序幕|楔子|终章|終章|终曲|番外(?:篇)?(?:[ \t]*[0-9０-９一二三四五六七八九十]+)?|后记|後記|后日谈|前言|引子|尾声|外篇|外传|外傳|[上中下]篇)',
+  r'^(?:序章|序曲|序言|序幕|自序|代序|总序|序(?=$|[ \t　:：、—\-–）)】\]])|楔子|引子|引言|前言|前传|前傳|前篇|后篇|後篇|续篇|續篇|中篇|终章|終章|终曲|终幕|終幕|终篇|終篇|终卷|終卷|大结局|大結局|结局|結局|完本感言|完结感言|番外(?:篇|章|卷)?(?:[ \t　]*[0-9０-９一二三四五六七八九十百千万零〇两\u2460-\u2473]+)?|后记|後記|后日谈|後日談|跋|尾声|尾聲|外篇|外传|外傳|别传|別傳|正传|正傳|间章|間章|幕间|幕間|[上中下][篇卷部集册冊]|人物(?:介绍|简介)|设定集|背景设定|作品相关|内容简介)',
 );
 final _decoration = RegExp(
-  r'^[\s\uFEFF\u200B\u2060#＊*☆★◆◇●○◎※=—\-🍎📖📚]+',
+  r'^[\s\uFEFF\u200B\u200C\u200D\u2060#＃＊*☆★✦✧✩✪✫✬✭✮✯◆◇◈●○◎◯※¤§■□▪▫▲△▼▽◀◁▶▷♥♡♦♢♠♣•·・‣⁃=＝—\-–─━═┄┅┈┉~～∼_＿+＋|｜丨🍎📖📚🔖🌸🌺🌻🌼🌷🌹✨🔥💧🌙⭐🌟💫]+',
   unicode: true,
+);
+final _trailingDecoration = RegExp(
+  r'[ \t　]*(?:[#＃＊*☆★✦✧◆◇●○◎※=＝─━═┄┅┈┉~～_＿+＋■□▪▫▲△▼▽]+|[-—–]{2,})[ \t　]*$',
 );
 final _endMarker = RegExp(
   r'^[\s【\[（(]*第?[^\n]{0,16}[卷捲部集篇][\s】\]）)]*(?:完|结束|終|终|END)',
   caseSensitive: false,
 );
 final _proseSuffix = RegExp(
-  r'^(?:回[来去到头答想忆合事家顾]|节[课约省日]|部[分队门署]|集[合中体]|篇[文章幅]|季[节能度]|期[间待限望刊末]|更[加新换改多好快是])',
+  r'^(?:回[来去到头答想忆合事家顾]|节[课约省日]|部(?:[队门署]|分(?![ \t　:：、.．—\-–）)】\]\n]|$))|集[合中体]|篇[文章幅]|季[节能度]|期[间待限望刊末]|更[加新换改多好快是]|段[落时间话路情]|场[面景合雨雪戏病所]|局[面势部限长]|夜[里间晚半色]|曲[折线子调]|弹[药指琴出])',
 );
 final _punctuation = RegExp(r'[。！？!?；;]');
-final _weakPunctuation = RegExp(r'[。；;，,]');
+final _weakSentencePunctuation = RegExp(r'[。；;]');
+final _commaPunctuation = RegExp(r'[，,]');
 final _wordIgnoredChars = RegExp(r'[\s\uFEFF\u200B]');
 final _directoryMarkerLine = RegExp(
   r'^[【\[\s]*(?:目\s*录|contents)[】\]\s:：]*$',
   caseSensitive: false,
 );
-final _openingBracket = RegExp(r'^[【\[［〖〔《「『（(]');
+final _openingBracket = RegExp(r'^[【\[［〖〔《「『〈<（(]');
 final _volumeSuffix = RegExp(r'[卷捲部集篇]$');
 final _sentencePunctuation = RegExp(r'[。！？!?，,；;“”]');
+final _bracketedGroup = RegExp(
+  r'【[^】\n]*】|《[^》\n]*》|\[[^\]\n]*\]|［[^］\n]*］|（[^）\n]*）|\([^)\n]*\)|「[^」\n]*」|『[^』\n]*』|〖[^〗\n]*〗|〔[^〕\n]*〕|〈[^〉\n]*〉',
+);
+final _validHeadingPrefixEnd = RegExp(
+  r'[\s　】\]］》」』〗〕）)〉>（(【\[［〖〔《「『〈<\-—–─━~～·・•_＿:：/／|｜丨.．、0-9０-９]$',
+);
+final _proseBeforeDi = RegExp(
+  r'[的了着过是在有把被给让向往到于与和或但而却又也都就才还只要想看见说听知觉得成做作当从自由按照据那这哪谁我你他她它们]$',
+);
+final _measureWordSuffix = RegExp(
+  r'^[ \t　]*[个位名次倍年岁天日秒分点层楼室班队组号条款式项碗杯件本张把座家只条斤元块里米步遍趟声口眼下番种样类代届级等品]',
+);
 final _bracketPrefix = RegExp(
-  r'^(?:【[^】\n]{1,48}】|《[^》\n]{1,48}》|\[[^\]\n]{1,48}\]|［[^］\n]{1,48}］|「[^」\n]{1,48}」|『[^』\n]{1,48}』|〖[^〗\n]{1,48}〗|〔[^〕\n]{1,48}〕)\s*',
+  r'^(?:(?:【[^】\n]{1,48}】|《[^》\n]{1,48}》|\[[^\]\n]{1,48}\]|［[^］\n]{1,48}］|「[^」\n]{1,48}」|『[^』\n]{1,48}』|〖[^〗\n]{1,48}〗|〔[^〕\n]{1,48}〕|〈[^〉\n]{1,48}〉)[ \t　\-—–─━:：·・/／]*)+',
 );
 final _titledBarePrefix = RegExp(
-  '^([^\\n。！？!?，,；;：:“”‘’""\'\'「」『』【】\\[\\]［］〖〗〔〕《》（）()]{1,40}?)[ \\t　]*(?=[（(](?:$_numberSpan)[）)]|[【\\[［〖〔](?:$_numberSpan)[】\\]］〗〕])',
+  '^([^\\n。！？!?，,；;：:“”‘’""\'\'「」『』【】\\[\\]［］〖〗〔〕《》（）()]{1,40}?)'
+  '(?:'
+  '([ \\t　]*[-—–─━:：·・]?[ \\t　]*)(?=[（(][ \\t　]*(?:$_numberSpan)[ \\t　]*[）)]|[【\\[［〖〔《「『〈<][ \\t　]*(?:$_numberSpan)[ \\t　]*[】\\]］〗〕》」』〉>])'
+  '|'
+  '([ \\t　]*[-—–─━:：·・][ \\t　]*|[ \\t　]+)(?=(?:第[ \\t　]*)?(?:$_numberRange)(?:[ \\t　:：、.．\\-—]|\$))'
+  ')',
 );
-final _bareTrailingSeparator = RegExp(r'^[\s:：、.．\-—]');
-final _parenthesizedCandidate = RegExp(r'^[（(【\[［〖〔]');
+final _bareTrailingSeparator = RegExp(r'^[\s:：、.．\-—–─━]');
+final _parenthesizedCandidate = RegExp(r'^[（(【\[［〖〔《「『〈<]');
 final _specialTailAllowed = RegExp(
-  r'^[\s\d０-９:：、.．【\[［〖〔《「『（(】\]］〗〕》」』）)\-—]',
+  r'^[\s\d０-９一二三四五六七八九十百千万零〇两:：、.．【\[［〖〔《「『（(】\]］〗〕》」』）)\-—–~～]',
 );
 final _bracketVolumeEnd = RegExp(
   r'^[【\[].*[卷捲部集篇].*(?:完|结束|END)[）)】\]]*$',
   caseSensitive: false,
 );
-final _triPartVolume = RegExp(r'^[上中下]篇');
+final _triPartVolume = RegExp(r'^[上中下][篇卷部集册冊]');
 final _forumMarker = RegExp(
   r'\[bbs\]|https?://|viewthread\.php',
   caseSensitive: false,
 );
 final _anyWhitespace = RegExp(r'\s');
 final _headingKeyIgnored = RegExp(r'[\s【】\[\]（）()]');
+final _inlineHeadingBoundary = RegExp(
+  r'[。！？!?…~～”’」』）)】\]>》][ \t　\uFEFF\u200B#＊*☆★◆◇●○◎※=—\-─━]*'
+  r'((?:(?:【[^】\n]{1,24}】|《[^》\n]{1,24}》|\[[^\]\n]{1,24}\])[ \t　]*)?'
+  r'(?:[【\[（(《「『])?'
+  '(?:第[ \\t　]*$_numberSpan[ \\t　]*[章节節回囘话話幕折卷捲部集篇季期更]'
+  r'|chapter[ \t]+[0-9０-９ivxlcdm]+(?![a-z0-9０-９]))'
+  r'[^。！？!?，,；;“”’\n]{0,40})$',
+  caseSensitive: false,
+);
+final _inlineSuffixProseStart = RegExp(
+  r'^[的了着过是在有把被给让和与或但而却又也都就才还只要想看见说听知觉得成做作当从自那这哪谁我你他她它们里上中下内前后来去]',
+);
+
+bool _isAcceptableWeakSuffix(String suffix, {required bool allowGlued}) {
+  if (suffix.length > 120) return allowGlued;
+  if (_weakSentencePunctuation.hasMatch(suffix)) {
+    return allowGlued && suffix.length > 36;
+  }
+  if (_punctuation.hasMatch(suffix) && suffix.length > 24) {
+    return allowGlued && suffix.length > 36;
+  }
+  if (_commaPunctuation.hasMatch(suffix)) {
+    if (allowGlued && suffix.length > 60) return true;
+    final trimmed = suffix.trim();
+    final commas = _commaPunctuation.allMatches(trimmed).length;
+    if (commas > 1 || trimmed.length > 28 || _punctuation.hasMatch(trimmed)) {
+      return false;
+    }
+  }
+  return true;
+}
 
 class _Heading {
   _Heading(
@@ -127,12 +186,13 @@ class _Heading {
     this.volume,
     this.key,
     this.startBytes,
-    this.contentBytes,
-  );
+    this.contentBytes, {
+    this.glued = false,
+  });
   final String title, family, key;
   final int start, content, wordsBefore, wordsAfter;
   final int startBytes, contentBytes;
-  final bool weak, volume;
+  final bool weak, volume, glued;
 }
 
 /// Keeps only candidate headings and a bounded line prefix, never a whole book.
@@ -144,6 +204,7 @@ class ChapterTextIndex {
   int _lineStart = 0, _lineByteStart = 0;
   int _indent = 0, _words = 0, _lineWords = 0;
   String _line = '';
+  String _tail = '';
   bool _leading = true;
   final _headings = <_Heading>[];
   final _directoryMarkers = <int>[];
@@ -193,13 +254,24 @@ class ChapterTextIndex {
         final room = 2048 - _line.length;
         _line += part.length > room ? part.substring(0, room) : part;
       }
+      if (part.isNotEmpty) {
+        if (part.length >= 256) {
+          _tail = part.substring(part.length - 256);
+        } else {
+          final combined = _tail + part;
+          _tail = combined.length > 256
+              ? combined.substring(combined.length - 256)
+              : combined;
+        }
+      }
       if (newline < 0) break;
       final segEnd = newline + 1 + shift;
       runningBytes += utf8.encode(countChunk.substring(segStart, segEnd)).length;
       segStart = segEnd;
       final nextBytes = runningBytes;
-      _finishLine(length + newline + 1, nextBytes);
-      _lineStart = length + newline + 1;
+      final lineEnd = length + newline;
+      _finishLine(lineEnd, nextBytes - 1, lineEnd + 1, nextBytes);
+      _lineStart = lineEnd + 1;
       _lineByteStart = nextBytes;
       i = newline + 1;
     }
@@ -208,28 +280,109 @@ class ChapterTextIndex {
         runningBytes + utf8.encode(countChunk.substring(segStart)).length;
   }
 
-  void _finishLine(int next, int nextBytes) {
+  void _finishLine(int lineEnd, int lineEndBytes, int next, int nextBytes) {
     final line = _line.trimRight();
     if (_directoryMarkerLine.hasMatch(line)) {
       _directoryMarkers.add(_lineStart);
     }
     final h = _parse(line, next, nextBytes);
     if (h != null) _headings.add(h);
+    if (h == null || h.content < next) {
+      final inlineH = _parseInlineEnd(_tail, lineEnd, lineEndBytes, next, nextBytes);
+      if (inlineH != null && (h == null || inlineH.start > h.content)) {
+        _headings.add(inlineH);
+      }
+    }
     if (_headings.length + _directoryMarkers.length > 100000) {
       throw const FormatException('TXT 章节索引过大：候选标题与目录标记超过 100000 条');
     }
     _words += _lineWords;
     _lineWords = 0;
     _line = '';
+    _tail = '';
     _indent = 0;
     _leading = true;
   }
 
+  _Heading? _parseInlineEnd(
+    String tail,
+    int lineEnd,
+    int lineEndBytes,
+    int next,
+    int nextBytes,
+  ) {
+    if (tail.isEmpty) return null;
+    final trimmedTail = tail.trimRight();
+    if (trimmedTail.isEmpty) return null;
+    final match = _inlineHeadingBoundary.firstMatch(trimmedTail);
+    if (match == null) return null;
+    final candidate = match.group(1)!.trim();
+    if (candidate.isEmpty ||
+        _endMarker.hasMatch(candidate) ||
+        _bracketVolumeEnd.hasMatch(candidate)) {
+      return null;
+    }
+    var inner = candidate;
+    final open = _openingBracket.firstMatch(inner);
+    if (open != null) {
+      final afterOpen = inner.substring(1);
+      if (_numbered.matchAsPrefix(afterOpen) != null ||
+          _english.matchAsPrefix(afterOpen) != null) {
+        inner = afterOpen;
+      }
+    }
+    final m = _numbered.firstMatch(inner) ?? _english.firstMatch(inner);
+    if (m == null) return null;
+    final token = m.group(0)!;
+    final suffix = inner.substring(m.end);
+    if (_proseSuffix.hasMatch('${token[token.length - 1]}$suffix')) {
+      return null;
+    }
+    if (suffix.isNotEmpty) {
+      final startsWithSep = RegExp(
+        r'^[\s　:：、.．—\-–）)】\]》」』]',
+      ).hasMatch(suffix);
+      if (!startsWithSep &&
+          (suffix.length > 16 || _inlineSuffixProseStart.hasMatch(suffix))) {
+        return null;
+      }
+    }
+    final rawSuffix = tail.substring(match.start(1));
+    final start = lineEnd - rawSuffix.length;
+    if (start <= _lineStart + _indent) return null;
+    final startBytes = lineEndBytes - utf8.encode(rawSuffix).length;
+    final inlineWords = rawSuffix.replaceAll(_wordIgnoredChars, '').length;
+    final wordsBefore = _words + (_lineWords - inlineWords).clamp(0, _lineWords);
+    final wordsAfter = _words + _lineWords;
+    final isVolume = _volumeSuffix.hasMatch(token);
+    final family = token.toLowerCase().startsWith('chapter')
+        ? 'english'
+        : token[token.length - 1];
+    final key = candidate.replaceAll(_headingKeyIgnored, '');
+    return _Heading(
+      candidate,
+      start,
+      next,
+      wordsBefore,
+      wordsAfter,
+      family,
+      false,
+      isVolume,
+      key,
+      startBytes,
+      nextBytes,
+    );
+  }
+
   _Heading? _parse(String raw, int next, int nextBytes) {
     if (raw.isEmpty) return null;
-    var line = raw.replaceFirst(_decoration, '');
-    var skipped = raw.length - line.length;
-    if (_endMarker.hasMatch(line)) return null;
+    final baseLine = raw.replaceFirst(_decoration, '');
+    final baseSkipped = raw.length - baseLine.length;
+    if (_endMarker.hasMatch(baseLine) || _bracketVolumeEnd.hasMatch(raw)) {
+      return null;
+    }
+    var line = baseLine;
+    var skipped = baseSkipped;
     // Enclosing book names are meaningful display prefixes. Only syntactic
     // opening brackets around a heading are removed for matching.
     var opening = _openingBracket.firstMatch(line);
@@ -273,64 +426,139 @@ class ChapterTextIndex {
     var weak = false;
     String family = '';
     var strippedPrefix = '';
-    if (m != null && m.start > 0) {
-      final prefix = line.substring(0, m.start);
-      // Prefixes are titles/正文, never a sentence or a reference in prose.
-      if (prefix.length > 48 ||
-          _sentencePunctuation.hasMatch(prefix) ||
-          !(prefix.endsWith(' ') ||
-              prefix.endsWith('\t') ||
-              prefix.endsWith('　') ||
-              prefix.endsWith('】') ||
-              prefix.endsWith(']') ||
-              prefix.endsWith('］') ||
-              prefix.endsWith('》') ||
-              prefix.endsWith('」') ||
-              prefix.endsWith('』') ||
-              prefix.endsWith('〗') ||
-              prefix.endsWith('〕') ||
-              prefix.endsWith('）') ||
-              prefix.endsWith(')') ||
-              prefix.endsWith('-') ||
-              prefix.endsWith('—') ||
-              prefix.endsWith('–') ||
-              prefix.endsWith('·') ||
-              prefix.endsWith('・') ||
-              prefix.endsWith('_') ||
-              prefix.endsWith(':') ||
-              prefix.endsWith('：') ||
-              prefix.endsWith('/') ||
-              _volumeSuffix.hasMatch(prefix) ||
-              prefix == '正文')) {
-        return null;
+    if (m != null) {
+      var mValid = true;
+      var mWeak = false;
+      final token = m.group(0)!;
+      final suffix = line.substring(m.end);
+      if (m.start > 0) {
+        final prefix = line.substring(0, m.start);
+        final unbracketedPrefix = prefix.replaceAll(_bracketedGroup, '');
+        if (prefix.length > 48 ||
+            _sentencePunctuation.hasMatch(unbracketedPrefix)) {
+          mValid = false;
+        } else if (_validHeadingPrefixEnd.hasMatch(prefix) ||
+            _volumeSuffix.hasMatch(prefix) ||
+            prefix == '正文') {
+          mValid = true;
+        } else if (token.startsWith('第') &&
+            prefix.length <= 20 &&
+            !_sentencePunctuation.hasMatch(line) &&
+            !_proseBeforeDi.hasMatch(prefix)) {
+          mValid = true;
+          mWeak = true;
+        } else {
+          mValid = false;
+        }
+      }
+      if (mValid) {
+        final lowerToken = token.toLowerCase();
+        final isEnglish =
+            lowerToken.startsWith('chapter') ||
+            lowerToken.startsWith('part') ||
+            lowerToken.startsWith('section') ||
+            lowerToken.startsWith('ep') ||
+            lowerToken.startsWith('act') ||
+            lowerToken.startsWith('vol');
+        if (!token.startsWith('第') &&
+            !token.startsWith('卷') &&
+            !lowerToken.startsWith('chapter')) {
+          mWeak = true;
+        }
+        if (_weakNumberedUnit.hasMatch(token)) {
+          mWeak = true;
+        }
+        if (_proseSuffix.hasMatch('${token[token.length - 1]}$suffix')) {
+          mValid = false;
+        }
+        final mIsVolume =
+            _volumeSuffix.hasMatch(token) ||
+            _triPartVolume.hasMatch(token) ||
+            _englishVolumePrefix.hasMatch(token);
+        if (mValid && mIsVolume) {
+          final volumeGlued =
+              !mWeak &&
+              RegExp(r'^[\s　:：、.．—\-–）)】\]]').hasMatch(suffix) &&
+              (suffix.length > 60 ||
+                  (suffix.length > 28 && _punctuation.hasMatch(suffix)));
+          if (!volumeGlued &&
+              (_weakSentencePunctuation.hasMatch(suffix) ||
+                  suffix.length > 120 ||
+                  (_punctuation.hasMatch(suffix) && suffix.length > 24))) {
+            mValid = false;
+          }
+        }
+        if (mValid && mWeak && !_isAcceptableWeakSuffix(suffix, allowGlued: false)) {
+          mValid = false;
+        }
+        if (mValid) {
+          weak = mWeak;
+          family = isEnglish ? 'english' : token[token.length - 1];
+        }
+      }
+      if (!mValid) {
+        m = null;
+        if (opening != null &&
+            _special.matchAsPrefix(line) == null) {
+          opening = null;
+          line = baseLine;
+          skipped = baseSkipped;
+        }
       }
     }
     if (m == null) {
-      // 【01】、[01]、【书名】（13）、《书名》（01）、书名（1）等。
+      // 【01】、[01]、【书名】（13）、《书名》（01）、书名（1）、===01=== 等。
       var base = 0;
-      var candidate = line;
+      final cleanLine = line.replaceFirst(_trailingDecoration, '');
+      var candidate = cleanLine.isNotEmpty ? cleanLine : line;
       m = _bare.firstMatch(candidate);
       if (m == null) {
-        final bracket = _bracketPrefix.firstMatch(line);
+        final bracket = _bracketPrefix.firstMatch(candidate);
         if (bracket != null) {
           base = bracket.end;
-          candidate = line.substring(base);
+          candidate = candidate.substring(base);
           m = _bare.firstMatch(candidate);
         }
       }
       if (m == null) {
-        final titled = _titledBarePrefix.firstMatch(line);
+        final titled = _titledBarePrefix.firstMatch(candidate);
         if (titled != null) {
-          final afterPrefix = line.substring(titled.end);
+          final afterPrefix = candidate.substring(titled.end);
           final bareMatch = _bare.firstMatch(afterPrefix);
           if (bareMatch != null) {
             final trailing = afterPrefix.substring(bareMatch.end);
-            if (trailing.isEmpty ||
-                (_bareTrailingSeparator.hasMatch(trailing) &&
-                    trailing.length <= 24 &&
-                    !_punctuation.hasMatch(trailing) &&
-                    !_weakPunctuation.hasMatch(trailing))) {
-              base = titled.end;
+            final isParenthesized =
+                _parenthesizedCandidate.hasMatch(afterPrefix);
+            final sep = titled.group(2) ?? titled.group(3) ?? '';
+            final numToken = bareMatch.group(0)!.trim();
+            final isZeroPaddedOrDi =
+                numToken.startsWith('第') ||
+                RegExp(r'^[0０][0-9０-９]').hasMatch(numToken);
+            final hasExplicitSep = RegExp(r'[-—–─━:：·・]').hasMatch(sep);
+            final validTitled = isParenthesized
+                ? (trailing.isEmpty ||
+                    (trailing.length <= 24 &&
+                        !_punctuation.hasMatch(trailing) &&
+                        !_weakSentencePunctuation.hasMatch(trailing) &&
+                        !_measureWordSuffix.hasMatch(trailing)))
+                : ((trailing.isEmpty &&
+                        !_proseBeforeDi.hasMatch(titled.group(1)!)) ||
+                    ((hasExplicitSep || isZeroPaddedOrDi) &&
+                        (trailing.isEmpty ||
+                            ((_bareTrailingSeparator.hasMatch(trailing) ||
+                                    _bareTrailingSeparator.hasMatch(
+                                      bareMatch.group(
+                                        0,
+                                      )![bareMatch.group(0)!.length - 1],
+                                    )) &&
+                                trailing.length <= 24 &&
+                                !_punctuation.hasMatch(trailing) &&
+                                !_weakSentencePunctuation.hasMatch(trailing) &&
+                                !_measureWordSuffix.hasMatch(
+                                  trailing.trimLeft(),
+                                )))));
+            if (validTitled) {
+              base += titled.end;
               candidate = afterPrefix;
               m = bareMatch;
             }
@@ -346,6 +574,8 @@ class ChapterTextIndex {
           strippedPrefix = line.substring(0, base);
           skipped += base;
           line = candidate;
+        } else {
+          line = candidate;
         }
       } else {
         m = _special.firstMatch(line);
@@ -359,33 +589,15 @@ class ChapterTextIndex {
       }
     }
     final token = m.group(0)!;
-    if (_bracketVolumeEnd.hasMatch(raw)) {
-      return null;
-    }
     final isVolume =
-        _volumeSuffix.hasMatch(token) && family != 'special' ||
-        _triPartVolume.hasMatch(token);
+        (_volumeSuffix.hasMatch(token) && family != 'special') ||
+        _triPartVolume.hasMatch(token) ||
+        _englishVolumePrefix.hasMatch(token);
     final suffix = line.substring(m.end);
-    if (family.isEmpty &&
-        !token.startsWith('第') &&
-        !token.startsWith('卷') &&
-        !token.toLowerCase().startsWith('chapter')) {
-      weak = true;
-    }
-    if (isVolume && (_punctuation.hasMatch(suffix) || suffix.length > 120)) {
-      return null;
-    }
     if (_proseSuffix.hasMatch('${token[token.length - 1]}$suffix')) return null;
-    if (family.isEmpty) {
-      family = token.toLowerCase().startsWith('chapter')
-          ? 'english'
-          : token[token.length - 1];
-    }
     // In-body numbered lists need repeated evidence and never accept sentences.
-    if (weak &&
-        (_weakPunctuation.hasMatch(suffix) ||
-            suffix.length > 120 ||
-            (_punctuation.hasMatch(suffix) && suffix.length > 24))) {
+    final allowWeakGlued = family == 'parenthesized' && strippedPrefix.isEmpty;
+    if (weak && !_isAcceptableWeakSuffix(suffix, allowGlued: allowWeakGlued)) {
       return null;
     }
     final forum = _forumMarker.firstMatch(line);
@@ -393,10 +605,14 @@ class ChapterTextIndex {
     var content = next;
     final glued =
         forum == null &&
-        !weak &&
-        !isVolume &&
-        (suffix.length > 96 ||
-            suffix.length > 28 && _punctuation.hasMatch(suffix));
+        ((!weak &&
+                (suffix.length > 96 ||
+                    (suffix.length > 28 && _punctuation.hasMatch(suffix)))) ||
+            (allowWeakGlued &&
+                (suffix.length > 96 ||
+                    (suffix.length > 36 &&
+                        (_punctuation.hasMatch(suffix) ||
+                            _weakSentencePunctuation.hasMatch(suffix))))));
     if (glued) {
       // The title/body boundary is unknowable without semantics. Keep the
       // entire ambiguous suffix in the body, rather than discarding a guess.
@@ -438,6 +654,7 @@ class ChapterTextIndex {
       key,
       _lineByteStart,
       contentBytes,
+      glued: glued,
     );
   }
 
@@ -448,7 +665,7 @@ class ChapterTextIndex {
       byteLength += 3;
       _pendingHigh = -1;
     }
-    _finishLine(length, byteLength);
+    _finishLine(length, byteLength, length, byteLength);
     final families = <String, int>{};
     for (final h in _headings) {
       families.update(h.family, (n) => n + 1, ifAbsent: () => 1);
@@ -458,7 +675,8 @@ class ChapterTextIndex {
       final h = _headings[i];
       if (!h.weak) continue;
       final next = i + 1 < _headings.length ? _headings[i + 1] : null;
-      if ((next?.wordsBefore ?? _words) - h.wordsAfter > 8) {
+      final minWords = h.glued ? 45 : 8;
+      if ((next?.wordsBefore ?? _words) - h.wordsAfter > minWords) {
         weakEvidence.update(h.family, (n) => n + 1, ifAbsent: () => 1);
       }
     }
@@ -496,12 +714,41 @@ class ChapterTextIndex {
       lastHeadingByKey[headings[i].key] = i;
     }
     final directory = <_Heading>{};
+    var markerCursor = 0;
+    var inMarkedToc = false;
     for (var i = 0; i + 1 < headings.length; i++) {
       final h = headings[i], after = headings[i + 1];
-      if (after.wordsBefore - h.wordsAfter > 0) break;
+      while (markerCursor < _directoryMarkers.length &&
+          _directoryMarkers[markerCursor] <= h.start) {
+        inMarkedToc = true;
+        markerCursor++;
+      }
+      final gapWords = after.wordsBefore - h.wordsAfter;
       final repeated = (lastHeadingByKey[h.key] ?? i) > i;
-      final marked = _directoryMarkers.any((offset) => offset <= h.start);
-      if (repeated || marked) directory.add(h);
+      final afterRepeated = (lastHeadingByKey[after.key] ?? (i + 1)) > (i + 1);
+      final afterBodyWords =
+          (i + 2 < headings.length ? headings[i + 2].wordsBefore : _words) -
+          after.wordsAfter;
+      final isVolumeBeforeRealChapter =
+          h.volume && !repeated && !afterRepeated && afterBodyWords > 0;
+      if (gapWords == 0 &&
+          (repeated || (inMarkedToc && !isVolumeBeforeRealChapter))) {
+        directory.add(h);
+        continue;
+      }
+      if (i > 0 &&
+          directory.contains(headings[i - 1]) &&
+          repeated &&
+          gapWords <= 40) {
+        directory.add(h);
+        continue;
+      }
+      if (gapWords > 0 && !repeated) {
+        inMarkedToc = false;
+      }
+      if (!repeated && gapWords > 200 && markerCursor >= _directoryMarkers.length) {
+        break;
+      }
     }
     headings = headings.where((h) => !directory.contains(h)).toList();
     if (headings.isEmpty) {
@@ -517,7 +764,7 @@ class ChapterTextIndex {
     }
     final chapters = <LocalChapterIndex>[];
     var volume = '';
-    final volumes = _headings.where((h) => h.volume).toList();
+    final volumes = headings.where((h) => h.volume).toList();
     var volumeCursor = 0;
     // Preserve ALL nonempty front matter, including TOC text as front matter;
     // it has no independent chapter entries and never hides opening prose.
@@ -579,17 +826,17 @@ enum TxtTocRulePreset {
   auto('智能识别（默认）', '', '多族启发式自动识别章节与卷名'),
   standard(
     '标准章节（第X章/回/话/节）',
-    r'^[ \t　]*第[ \t　]*[0-9０-９一二三四五六七八九十百千萬万零〇两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟廿卅卌]+[ \t　]*[章节節回囘话話幕折卷捲部集篇季期更].*$',
+    r'^[ \t　]*(?:【[^】\n]{1,32}】|《[^》\n]{1,32}》)?[ \t　]*[（(【\[]?第[ \t　]*[0-9０-９一二三四五六七八九十百千萬万零〇两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟廿卅卌\u2160-\u217F\u2460-\u2473\-~～—–─━、,，/至到]+[ \t　]*[章节節回囘话話幕折卷捲部集篇季期更段册冊编編輯辑讲講场場局夜曲弹彈].*$',
     '第1章 标题 / 第一百零二回 标题',
   ),
   numbered(
     '序号与括号标题（1. / (1) / 【01】）',
-    r'^[ \t　]*(?:[（(【\[［〖〔][0-9０-９一二三四五六七八九十百千万零〇两]+[）)】\]］〗〕]|[0-9０-９一二三四五六七八九十百千万零〇两]{1,6}[、.．:： \t　]).{0,40}$',
+    r'^[ \t　]*(?:(?:【[^】\n]{1,32}】|《[^》\n]{1,32}》|[^\n。！？!?，,；;：:“”‘’【】《》（）()]{1,24})[ \t　]*)?(?:[（(【\[［〖〔《「『][ \t　]*[0-9０-９一二三四五六七八九十百千万零〇两\u2160-\u217F\u2460-\u2473\-~～—–─━、,，/至到]+[ \t　]*[）)】\]］〗〕》」』]|[0-9０-９一二三四五六七八九十百千万零〇两\u2160-\u217F\u2460-\u2473]{1,6}[、.．:： \t　]).{0,40}$',
     '1. 标题 / （12）标题 / 【01】标题',
   ),
   symbol(
     '特殊符号标题（===标题=== / ***标题）',
-    r'^[ \t　]*(?:={2,6}|[*＊☆◆●—\-]{2,6})[ \t　]*[^=\n*＊]{1,40}?[ \t　]*={0,6}$',
+    r'^[ \t　]*(?:={2,6}|[*＊☆◆●—\-─━]{2,6})[ \t　]*[^=\n*＊]{1,40}?[ \t　]*={0,6}$',
     '=== 第一章 === / *** 楔子 ***',
   ),
   fixedLength(
