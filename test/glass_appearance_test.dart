@@ -314,9 +314,13 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(toggle);
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('强'));
+      final glassStrong = find.descendant(
+        of: find.byKey(const ValueKey('glass-tier-picker')),
+        matching: find.text('强'),
+      );
+      await tester.ensureVisible(glassStrong);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('强'));
+      await tester.tap(glassStrong);
       await tester.pumpAndSettle();
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 20)),

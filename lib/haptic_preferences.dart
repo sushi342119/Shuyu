@@ -4,17 +4,13 @@ import 'package:flutter/widgets.dart';
 
 /// User-facing interaction groups, independent of the platform vibration API.
 enum HapticCategory {
-  controls('按钮与选择', '点按按钮与切换选项'),
-  shelf('书架滑动', '滑动书架时经过每一本书'),
-  reading('阅读翻页', '翻页与切换章节'),
-  adjustment('拖动刻度', '调整滑杆、进度与数值'),
-  longPress('长按', '长按打开菜单或开始编辑'),
-  boundary('边界提示', '滑动到尽头或达到调整上限'),
-  result('结果提示', '操作完成、警告与失败');
-
-  const HapticCategory(this.label, this.description);
-  final String label;
-  final String description;
+  controls,
+  shelf,
+  reading,
+  adjustment,
+  longPress,
+  boundary,
+  result,
 }
 
 /// Strength changes the pulse, not how often accepted interactions respond.
@@ -25,6 +21,18 @@ enum HapticStrength {
 
   const HapticStrength(this.label);
   final String label;
+}
+
+/// Four-level global tactile selector shown in the appearance & performance panel.
+enum HapticLevel {
+  off('关'),
+  light('轻', HapticStrength.light),
+  standard('标准', HapticStrength.standard),
+  strong('强', HapticStrength.strong);
+
+  const HapticLevel(this.label, [this.strength]);
+  final String label;
+  final HapticStrength? strength;
 }
 
 /// A category retains its strength while switched off.
@@ -132,45 +140,31 @@ class HapticPreferences {
         : null;
   }
 
+  /// Current four-level choice for the unified appearance & performance panel.
+  HapticLevel get level {
+    if (!enabled) return HapticLevel.off;
+    final strength =
+        uniformStrength ?? forCategory(HapticCategory.controls).strength;
+    return switch (strength) {
+      HapticStrength.light => HapticLevel.light,
+      HapticStrength.standard => HapticLevel.standard,
+      HapticStrength.strong => HapticLevel.strong,
+    };
+  }
+
   HapticPreferences withEnabled(bool value) =>
       HapticPreferences._(enabled: value, categories: _categories);
 
-  HapticPreferences withCategoryEnabled(HapticCategory category, bool value) =>
-      HapticPreferences._(
-        enabled: enabled,
-        categories: {
-          ..._categories,
-          category: HapticCategoryPreference(
-            enabled: value,
-            strength: forCategory(category).strength,
-          ),
-        },
-      );
-
-  HapticPreferences withCategoryStrength(
-    HapticCategory category,
-    HapticStrength value,
-  ) => HapticPreferences._(
-    enabled: enabled,
-    categories: {
-      ..._categories,
-      category: HapticCategoryPreference(
-        enabled: forCategory(category).enabled,
-        strength: value,
-      ),
-    },
-  );
-
-  HapticPreferences withStrength(HapticStrength value) => HapticPreferences._(
-    enabled: enabled,
-    categories: {
-      for (final category in HapticCategory.values)
-        category: HapticCategoryPreference(
-          enabled: forCategory(category).enabled,
-          strength: value,
-        ),
-    },
-  );
+  HapticPreferences withLevel(HapticLevel value) => switch (value.strength) {
+    null => withEnabled(false),
+    final strength => HapticPreferences._(
+      enabled: true,
+      categories: {
+        for (final category in HapticCategory.values)
+          category: HapticCategoryPreference(strength: strength),
+      },
+    ),
+  };
 
   Map<String, String> toRecords() => {
     preferenceKey: jsonEncode({

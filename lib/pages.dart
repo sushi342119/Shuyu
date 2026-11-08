@@ -16,7 +16,7 @@ import 'book_edit_page.dart';
 import 'book_tags.dart';
 import 'catalog.dart';
 import 'glass_dock.dart';
-import 'haptic_settings_page.dart';
+import 'haptic_preferences.dart';
 import 'library_state.dart';
 import 'setting_menu.dart';
 import 'listening/controller.dart';
@@ -3909,40 +3909,21 @@ class SettingsPage extends StatelessWidget {
             AppearancePerformancePanel(state: state),
             const SizedBox(height: 24),
 
-            // 系统与关于：触感反馈与版本更新。
-            sectionHeader(context, '系统与关于', '触感 · 版本'),
+            // 系统与关于：版本信息与在线更新。
+            sectionHeader(context, '系统与关于', '版本 · 更新'),
             const SizedBox(height: 14),
             ContentPanel(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _settingsNavRow(
-                    context,
-                    rowKey: const ValueKey('settings-haptics'),
-                    icon: CupertinoIcons.waveform,
-                    title: '振动反馈',
-                    subtitle: '触控与翻页触觉反馈',
-                    trailingText: state.haptics.enabled ? '已开启' : '已关闭',
-                    onTap: () => pushNovelPage<void>(
-                      context,
-                      HapticSettingsPage(state: state),
-                      reduceMotion: state.reduceMotion,
-                    ),
-                  ),
-                  _settingsDivider(context),
-                  _settingsNavRow(
-                    context,
-                    rowKey: const ValueKey('settings-app-update'),
-                    icon: CupertinoIcons.arrow_down_circle,
-                    title: '关于书屿',
-                    subtitle: versionText,
-                    onTap: () => pushNovelPage<void>(
-                      context,
-                      AppUpdatePage(updates: updateScope),
-                      reduceMotion: state.reduceMotion,
-                    ),
-                  ),
-                ],
+              child: _settingsNavRow(
+                context,
+                rowKey: const ValueKey('settings-app-update'),
+                icon: CupertinoIcons.arrow_down_circle,
+                title: '关于书屿',
+                subtitle: versionText,
+                onTap: () => pushNovelPage<void>(
+                  context,
+                  AppUpdatePage(updates: updateScope),
+                  reduceMotion: state.reduceMotion,
+                ),
               ),
             ),
           ],
@@ -8512,8 +8493,8 @@ class _LandingPlane extends CustomPainter {
       clock != oldDelegate.clock || dark != oldDelegate.dark;
 }
 
-/// The three visible controls own appearance; retired overrides are migrated
-/// by LibraryState before settings are loaded or restored from a backup.
+/// The four visible controls own appearance and tactile feedback; retired
+/// overrides are migrated by LibraryState before settings are loaded or restored.
 class AppearancePerformancePanel extends StatefulWidget {
   const AppearancePerformancePanel({super.key, required this.state});
   final LibraryState state;
@@ -8574,7 +8555,8 @@ class _AppearancePerformancePanelState
                           Text(
                             '玻璃：${glass.automatic ? '自动·' : ''}${glass.tier.label}'
                             ' · 动效：${state.motionLevel.label}'
-                            ' · 选书：${state.randomPickPace.label}',
+                            ' · 选书：${state.randomPickPace.label}'
+                            ' · 振动：${state.haptics.level.label}',
                             key: const ValueKey(
                               'appearance-performance-summary',
                             ),
@@ -8649,6 +8631,33 @@ class _AppearancePerformancePanelState
               },
               onValueChanged: (pace) {
                 if (pace != null) _save(() => state.setRandomPickPace(pace));
+              },
+            ),
+            const SizedBox(height: 12),
+            const Text('振动反馈', style: TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            AppControls.segments<HapticLevel>(
+              context,
+              key: const ValueKey('haptic-level-picker'),
+              haptics: false,
+              groupValue: state.haptics.level,
+              children: {
+                for (final level in HapticLevel.values)
+                  level: Text(level.label),
+              },
+              onValueChanged: (level) {
+                if (level == null) return;
+                final next = state.haptics.withLevel(level);
+                _save(() async {
+                  await state.setHaptics(next);
+                  if (mounted && level != HapticLevel.off) {
+                    AppHaptics.preview(
+                      context,
+                      HapticCue.selection,
+                      preferences: next,
+                    );
+                  }
+                });
               },
             ),
           ],

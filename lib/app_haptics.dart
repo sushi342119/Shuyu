@@ -88,24 +88,6 @@ abstract final class AppHaptics {
     required HapticPreferences preferences,
   }) => _play(context, cue, preferences: preferences);
 
-  /// Host diagnostics only; this never claims that a physical motor fired.
-  static Future<Map<Object?, Object?>?> capabilities() async {
-    if (kIsWeb ||
-        (defaultTargetPlatform != TargetPlatform.android &&
-            defaultTargetPlatform != TargetPlatform.iOS &&
-            !_isHarmony)) {
-      return null;
-    }
-    try {
-      final value = await channel.invokeMethod<Object?>('capabilities');
-      return value is Map ? Map<Object?, Object?>.from(value) : null;
-    } on MissingPluginException {
-      return null;
-    } on PlatformException {
-      return null;
-    }
-  }
-
   static void _play(
     BuildContext context,
     HapticCue? cue, {

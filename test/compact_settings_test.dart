@@ -92,8 +92,10 @@ void main() {
         expect(tester.takeException(), isNull);
       }
       expect(find.byKey(const ValueKey('settings-dictionaries')), findsNothing);
+      expect(find.byKey(const ValueKey('settings-haptics')), findsNothing);
       expect(find.text('减少动态效果'), findsNothing);
       expect(find.byKey(const ValueKey('glass-tier-picker')), findsNothing);
+      expect(find.byKey(const ValueKey('haptic-level-picker')), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
     });
 
@@ -124,12 +126,17 @@ void main() {
         ),
       );
       expect(find.byKey(const ValueKey('glass-tier-picker')), findsNothing);
+      expect(find.textContaining('振动：标准'), findsOneWidget);
       final toggle = find.byKey(
         const ValueKey('appearance-performance-toggle'),
       );
       await tester.tap(toggle);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('强'));
+      final glassStrong = find.descendant(
+        of: find.byKey(const ValueKey('glass-tier-picker')),
+        matching: find.text('强'),
+      );
+      await tester.tap(glassStrong);
       await pumpUntil(tester, () => state.glassTierChoice == GlassTier.strong);
       await tester.pumpAndSettle();
       expect(find.textContaining('玻璃：强'), findsOneWidget);
@@ -139,10 +146,20 @@ void main() {
       await pumpUntil(tester, () => state.glassTierChoice == null);
       await tester.pumpAndSettle();
       expect(find.textContaining('玻璃：自动·标准'), findsOneWidget);
+      final hapticOff = find.descendant(
+        of: find.byKey(const ValueKey('haptic-level-picker')),
+        matching: find.text('关'),
+      );
+      await tester.ensureVisible(hapticOff);
+      await tester.tap(hapticOff);
+      await pumpUntil(tester, () => !state.haptics.enabled);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('振动：关'), findsOneWidget);
       await tester.ensureVisible(toggle);
       await tester.tap(toggle);
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('glass-tier-picker')), findsNothing);
+      expect(find.byKey(const ValueKey('haptic-level-picker')), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     });
