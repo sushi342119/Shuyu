@@ -41,8 +41,8 @@ class UserFont {
     'id': id,
     'name': name,
     'extension': extension,
-    if (filePath != null) 'filePath': filePath!,
-    if (customFamily != null) 'family': customFamily!,
+    'filePath': ?filePath,
+    'family': ?customFamily,
   };
 }
 

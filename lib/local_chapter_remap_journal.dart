@@ -327,7 +327,7 @@ extension LocalChapterRemapJournal on LocalLibraryStore {
         _remapKey(task.bookId, task.migrationId): task,
     }.values.toList();
     try {
-      await _checkedSet(
+      await LocalLibraryStore._checkedSet(
         () => next.isEmpty
             ? _prefs.remove(_pendingChapterRemapsKey)
             : _prefs.setString(

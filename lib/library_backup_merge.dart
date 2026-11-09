@@ -189,7 +189,7 @@ extension LibraryBackupMerge on LibraryState {
           ..._recentSearches,
           ...(records['recentSearches'] as List<String>? ?? const []),
         ].map((term) => term.trim())
-            .where(validSearchHistory)
+            .where(LibraryState.validSearchHistory)
             .where((term) => seen.add(term.toLowerCase()))
             .take(12)
             .toList();

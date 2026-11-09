@@ -466,8 +466,8 @@ class LibraryState extends ChangeNotifier {
         }
       }
     }
-    fonts.migrateLegacyPreferences(_prefs);
-    _readerStore.load(fonts: fonts);
+    this.fonts.migrateLegacyPreferences(_prefs);
+    _readerStore.load(fonts: this.fonts);
     _appearanceStore.load();
     _performanceStore.load();
     final recent = _prefs.get('recentSearches');

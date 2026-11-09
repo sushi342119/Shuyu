@@ -669,7 +669,8 @@ void main() {
         ),
       ]);
 
-      final tag = await TagStore.shared.createTag('经典');
+      final tagId = await TagStore.shared.createTag('经典');
+      final tagDef = TagStore.shared.tagById(tagId)!;
       final backup = await LibraryBackup.fromRecords({
         'shelf': ['$oldId', '$unrelatedOldId'],
         'novel_meta_$oldId': jsonEncode(
@@ -714,10 +715,10 @@ void main() {
             updatedAt: 600,
           ).toJson(),
         ),
-        'tag_defs': jsonEncode([tag.toJson()]),
+        'tag_defs': jsonEncode([tagDef.toJson()]),
         'tag_map': jsonEncode({
-          '$oldId': [tag.id],
-          '$unrelatedOldId': [tag.id],
+          '$oldId': [tagId],
+          '$unrelatedOldId': [tagId],
         }),
       });
 
@@ -727,7 +728,7 @@ void main() {
       expect(state.positionFor(newId)?.chapter, 1);
       expect(state.positionFor(newId)?.fraction, .5);
       expect(TagStore.shared.tagsForBook(newId).map((item) => item.id), [
-        tag.id,
+        tagId,
       ]);
 
       // '罗生门' at oldId and '人间失格' at unrelatedOldId are not polluted.

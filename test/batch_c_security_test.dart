@@ -277,7 +277,7 @@ void main() {
   test('LAN bookshelf server enforces session token and blocks wildcard CORS', () async {
     final root = await Directory.systemTemp.createTemp('batch-c-lan-');
     final previous = PathProviderPlatform.instance;
-    final previousOverrides = HttpOverrides.global;
+    final previousOverrides = HttpOverrides.current;
     HttpOverrides.global = null;
     PathProviderPlatform.instance = _Paths(root.path);
     SharedPreferences.setMockInitialValues({});
