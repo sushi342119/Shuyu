@@ -14,14 +14,13 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.9.4',
+  defaultValue: '1.9.5',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 78);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 79);
 const currentReleaseNotes = '''
-1. 正文净化新增链接导入：在「设置 → 正文替换 → 链接导入」粘贴 HTTP / HTTPS JSON 地址即可下载、保存并使用规则，剪贴板导入也支持规则链接。
-2. 新增净化总开关，保留逐条开关与删除，并支持按链接来源整组删除；规则保存在本机，离线阅读可继续使用，仅处理阅读显示，保留原始小说文件。
-3. 完善阅读 Legado 规则兼容：保留执行顺序、书名限制、排除范围和正文作用标记，修复捕获组替换与 Unicode 正则；重复规则自动跳过，暂不兼容的 JavaScript 替换脚本和正则会标明原因并停用。
-4. 为规则下载增加超时、重定向次数、文件大小及数量限制，并补充导入、持久化、开关、删除和界面交互测试。
+1. 分章升级到 v4：扉页、简介、文案、作品相关、卷首语等明确标题现在能识别为章节。
+2. 旧书打开时自动重建章节表，并迁移阅读进度、书签与划线。
+3. 修复旧版章节表在源文本不可读时重建失败、导致阅读进度无法迁移的回归。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
