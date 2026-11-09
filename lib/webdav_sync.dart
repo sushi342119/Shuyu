@@ -1,14 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:flutter/foundation.dart' show kDebugMode, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_ui.dart';
+import 'cloud_sources.dart';
 
 const String _webDavConfigStorageKey = 'webdav.backup.config.v1';
 const String _webDavPasswordKeystoreKey = 'webdav.backup.password.v1';
@@ -124,9 +123,7 @@ class WebDavBackupConfig {
         _hasInvalidSegments(base.pathSegments)) {
       return null;
     }
-    final cleanFolder = remoteFolder
-        .trim()
-        .replaceAll(RegExp(r'^/+|/+$'), '');
+    final cleanFolder = remoteFolder.trim().replaceAll(RegExp(r'^/+|/+$'), '');
     if (cleanFolder.isEmpty) return base;
     final folderSegments = cleanFolder
         .split('/')
@@ -176,8 +173,6 @@ class WebDavBackupConfig {
     autoBackup: autoBackup ?? this.autoBackup,
   );
 
-  /// Serializes only non-sensitive metadata for SharedPreferences.
-  /// The password is stored exclusively in Android Keystore via [WebDavSecretStorage].
   Map<String, dynamic> toJson() => {
     'serverUrl': serverUrl,
     'username': username,
@@ -189,8 +184,8 @@ class WebDavBackupConfig {
     Map<String, dynamic> json, {
     String? passwordOverride,
   }) => WebDavBackupConfig(
-    serverUrl: (json['serverUrl'] as String?) ??
-        'https://dav.jianguoyun.com/dav/',
+    serverUrl:
+        (json['serverUrl'] as String?) ?? 'https://dav.jianguoyun.com/dav/',
     username: (json['username'] as String?) ?? '',
     password: passwordOverride ?? (json['password'] as String?) ?? '',
     remoteFolder: (json['remoteFolder'] as String?) ?? 'shuyu_backup',
@@ -227,16 +222,14 @@ class WebDavBackupConfig {
     try {
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
       final legacyPlaintextPassword = decoded['password'] as String?;
-      final effectivePassword =
-          secretPassword.isNotEmpty
-              ? secretPassword
-              : (legacyPlaintextPassword ?? '');
+      final effectivePassword = secretPassword.isNotEmpty
+          ? secretPassword
+          : (legacyPlaintextPassword ?? '');
       final config = WebDavBackupConfig.fromJson(
         decoded,
         passwordOverride: effectivePassword,
       );
       if (decoded.containsKey('password')) {
-        // Migrate legacy plaintext password to Keystore and scrub SharedPreferences.
         if (legacyPlaintextPassword != null &&
             legacyPlaintextPassword.isNotEmpty &&
             secretPassword.isEmpty) {
@@ -260,221 +253,133 @@ class WebDavBackupConfig {
   }
 }
 
+/// WebDAV backup client reusing [CloudHttp] and [WebDavBookClient] XML/Auth helpers.
 class WebDavBackupClient {
   const WebDavBackupClient(this.config);
 
   final WebDavBackupConfig config;
   static const int maxResponseBytes = 32 * 1024 * 1024;
-  static const int _maxRedirects = 3;
 
-  String get _basicAuthHeader {
-    final token = base64Encode(
-      utf8.encode('${config.username.trim()}:${config.password}'),
+  Uri _requireFolder() {
+    if (!config.isConfigured) {
+      throw const FormatException('请先填写完整的 WebDAV 地址、账号与密码');
+    }
+    config.validateServerUrl();
+    final folder = config.folderUri();
+    if (folder == null) throw const FormatException('WebDAV 服务器地址或远程目录格式无效');
+    return folder;
+  }
+
+  Map<String, String> _headers(Uri uri, Uri base, [Map<String, String>? extra]) => {
+    ...WebDavBookClient.basicAuthHeaders(
+      uri,
+      base,
+      config.username.trim(),
+      config.password,
+    ),
+    ...?extra,
+  };
+
+  Future<T> _withCloudHttp<T>(Future<T> Function(CloudHttp http, Uri folder) action) async {
+    final folder = _requireFolder();
+    final http = CloudHttp();
+    try {
+      return await action(http, folder);
+    } on CloudSourceFailure catch (e) {
+      throw FormatException(e.message);
+    } finally {
+      http.close();
+    }
+  }
+
+  Future<void> _ensureFolder(CloudHttp http, Uri folder) async {
+    final res = await http.request(
+      'MKCOL',
+      folder,
+      headers: (u) => _headers(u, folder),
+      redirects: true,
+      allowedStatuses: const {200, 201, 301, 405},
+      authenticationMessage: 'WebDAV 账号或应用密码认证失败（401/403）',
     );
-    return 'Basic $token';
+    await res.drain<void>();
   }
 
-  static bool _sameOrigin(Uri a, Uri b) =>
-      a.scheme.toLowerCase() == b.scheme.toLowerCase() &&
-      a.host.toLowerCase() == b.host.toLowerCase() &&
-      a.port == b.port;
-
-  static Future<String> _readUtf8Bounded(
-    HttpClientResponse response, {
-    int maxBytes = maxResponseBytes,
-  }) async {
-    if (response.contentLength > maxBytes) {
-      await response.drain<void>();
-      throw const FormatException('WebDAV 响应超过大小限制');
-    }
-    final bytes = <int>[];
-    await for (final chunk in response) {
-      if (bytes.length + chunk.length > maxBytes) {
-        throw const FormatException('WebDAV 响应超过大小限制');
-      }
-      bytes.addAll(chunk);
-    }
-    return utf8.decode(bytes, allowMalformed: true);
-  }
-
-  Future<HttpClientResponse> _send(
-    HttpClient client,
-    String method,
-    Uri uri, {
-    Map<String, String>? headers,
-    List<int>? body,
-  }) async {
-    var current = uri;
-    for (var redirect = 0; redirect <= _maxRedirects; redirect++) {
-      if (!current.isScheme('https')) {
-        throw const FormatException('WebDAV 备份仅支持 HTTPS 加密连接，已拒绝明文 HTTP');
-      }
-      final request = await client
-          .openUrl(method, current)
-          .timeout(const Duration(seconds: 20));
-      request.followRedirects = false;
-      request.maxRedirects = 0;
-      request.headers.set(HttpHeaders.authorizationHeader, _basicAuthHeader);
-      request.headers.set(HttpHeaders.userAgentHeader, 'Shuyu-WebDAV/1.0');
-      headers?.forEach(request.headers.set);
-      if (body != null) {
-        request.contentLength = body.length;
-        request.add(body);
-      }
-      final response = await request.close().timeout(
-        const Duration(seconds: 25),
-      );
-      if (!const {301, 302, 307, 308}.contains(response.statusCode)) {
-        return response;
-      }
-      final location = response.headers.value(HttpHeaders.locationHeader);
-      await response.drain<void>();
-      if (location == null || redirect == _maxRedirects) {
-        throw const FormatException('WebDAV 重定向过多或缺少目标地址');
-      }
-      final next = current.resolve(location);
-      if (!next.isScheme('https') ||
-          !next.hasAuthority ||
-          next.userInfo.isNotEmpty ||
-          !_sameOrigin(current, next)) {
-        throw const FormatException('已拒绝跨源或非 HTTPS 的 WebDAV 重定向');
-      }
-      current = next;
-    }
-    throw const FormatException('WebDAV 重定向过多');
-  }
-
-  Future<void> ensureFolder(HttpClient client) async {
-    config.validateServerUrl();
-    final uri = config.folderUri();
-    if (uri == null) throw const FormatException('WebDAV 服务器地址或远程目录格式无效');
-    final response = await _send(client, 'MKCOL', uri);
-    await response.drain<void>();
-    // 201 Created, 405 Method Not Allowed (already exists), 301/200 OK
-    if (response.statusCode == 401 || response.statusCode == 403) {
-      throw const FormatException('WebDAV 账号或应用密码认证失败（401/403）');
-    }
-  }
-
-  Future<String> uploadBackup(String jsonText) async {
-    if (!config.isConfigured) {
-      throw const FormatException('请先填写完整的 WebDAV 地址、账号与密码');
-    }
-    config.validateServerUrl();
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 15);
-    try {
-      await ensureFolder(client);
-      final date = DateTime.now().toIso8601String().substring(0, 10);
-      final datedFile = 'shuyu-backup-$date.json';
-      final bytes = utf8.encode(jsonText);
-
-      for (final name in [datedFile, 'shuyu-backup-latest.json']) {
-        final uri = config.fileUri(name);
-        if (uri == null) throw const FormatException('WebDAV 目标路径无效');
-        final response = await _send(
-          client,
-          'PUT',
-          uri,
-          headers: {'Content-Type': 'application/json; charset=utf-8'},
-          body: bytes,
-        );
-        await response.drain<void>();
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          throw FormatException('WebDAV 上传失败（HTTP ${response.statusCode}）');
-        }
-      }
-      return datedFile;
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  Future<List<String>> listBackups() async {
-    if (!config.isConfigured) {
-      throw const FormatException('请先填写完整的 WebDAV 地址、账号与密码');
-    }
-    config.validateServerUrl();
-    final uri = config.folderUri();
-    if (uri == null) throw const FormatException('WebDAV 服务器地址格式无效');
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 15);
-    try {
-      await ensureFolder(client);
-      final response = await _send(
-        client,
-        'PROPFIND',
+  Future<String> uploadBackup(String jsonText) => _withCloudHttp((http, folder) async {
+    await _ensureFolder(http, folder);
+    final date = DateTime.now().toIso8601String().substring(0, 10);
+    final datedFile = 'shuyu-backup-$date.json';
+    final payload = utf8.encode(jsonText);
+    for (final name in [datedFile, 'shuyu-backup-latest.json']) {
+      final uri = config.fileUri(name);
+      if (uri == null) throw const FormatException('WebDAV 目标路径无效');
+      final res = await http.request(
+        'PUT',
         uri,
-        headers: {
-          'Depth': '1',
-          'Content-Type': 'application/xml; charset=utf-8',
-        },
+        headers: (u) => _headers(
+          u,
+          folder,
+          const {'Content-Type': 'application/json; charset=utf-8'},
+        ),
+        body: payload,
+        redirects: true,
       );
-      if (response.statusCode == 401 || response.statusCode == 403) {
-        await response.drain<void>();
-        throw const FormatException('WebDAV 账号或密码认证失败（401/403）');
-      }
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        await response.drain<void>();
-        throw FormatException('WebDAV 目录读取失败（HTTP ${response.statusCode}）');
-      }
-      final xml = await _readUtf8Bounded(response);
-      final matches = RegExp(
-        r'<(?:\w+:)?href[^>]*>([^<]+)</(?:\w+:)?href>',
-        caseSensitive: false,
-      ).allMatches(xml);
-      final files = <String>{};
-      for (final match in matches) {
-        String rawHref;
-        try {
-          rawHref = Uri.decodeFull((match.group(1) ?? '').trim());
-        } on ArgumentError {
-          continue;
-        }
-        final segments = rawHref
-            .split('/')
-            .where((segment) => segment.isNotEmpty)
-            .toList(growable: false);
-        if (segments.isEmpty) continue;
-        final last = segments.last;
-        if (last.toLowerCase().endsWith('.json') &&
-            !WebDavBackupConfig._hasInvalidSegments([last])) {
-          files.add(last);
-        }
-      }
-      final sorted = files.toList()..sort((a, b) => b.compareTo(a));
-      return sorted;
-    } finally {
-      client.close(force: true);
+      await res.drain<void>();
     }
-  }
+    return datedFile;
+  });
+
+  Future<List<String>> listBackups() => _withCloudHttp((http, folder) async {
+    await _ensureFolder(http, folder);
+    final res = await http.request(
+      'PROPFIND',
+      folder,
+      headers: (u) => _headers(
+        u,
+        folder,
+        const {'Depth': '1', 'Content-Type': 'application/xml; charset=utf-8'},
+      ),
+      body: utf8.encode(WebDavBookClient.propfindBody),
+      redirects: true,
+    );
+    final xml = utf8.decode(
+      await http.bytes(res, limit: maxResponseBytes),
+      allowMalformed: true,
+    );
+    final files = <String>{};
+    for (final (_, href) in WebDavBookClient.parseMultistatusHrefs(xml)) {
+      String decoded;
+      try {
+        decoded = Uri.decodeFull(href.trim());
+      } on ArgumentError {
+        continue;
+      }
+      final parts = decoded.split('/').where((s) => s.isNotEmpty).toList();
+      if (parts.isEmpty) continue;
+      final last = parts.last;
+      if (last.toLowerCase().endsWith('.json') &&
+          !WebDavBackupConfig._hasInvalidSegments([last])) {
+        files.add(last);
+      }
+    }
+    return files.toList()..sort((a, b) => b.compareTo(a));
+  });
 
   Future<String> downloadBackup([
     String fileName = 'shuyu-backup-latest.json',
-  ]) async {
-    if (!config.isConfigured) {
-      throw const FormatException('请先填写完整的 WebDAV 地址、账号与密码');
-    }
-    config.validateServerUrl();
+  ]) => _withCloudHttp((http, folder) async {
     final uri = config.fileUri(fileName);
     if (uri == null) throw const FormatException('WebDAV 目标路径无效');
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 15);
-    try {
-      final response = await _send(client, 'GET', uri);
-      if (response.statusCode == 404) {
-        await response.drain<void>();
-        throw FormatException('云端未找到备份文件 $fileName');
-      }
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        await response.drain<void>();
-        throw FormatException('WebDAV 下载失败（HTTP ${response.statusCode}）');
-      }
-      return await _readUtf8Bounded(response);
-    } finally {
-      client.close(force: true);
-    }
-  }
+    final res = await http.request(
+      'GET',
+      uri,
+      headers: (u) => _headers(u, folder),
+      redirects: true,
+    );
+    return utf8.decode(
+      await http.bytes(res, limit: maxResponseBytes),
+      allowMalformed: true,
+    );
+  });
 }
 
 Future<void> showWebDavBackupSheet({
@@ -486,7 +391,7 @@ Future<void> showWebDavBackupSheet({
 }) => showJellySheet<void>(
   context: context,
   reduceMotion: reduceMotion,
-  builder: (sheetContext) => _WebDavBackupSheet(
+  builder: (_) => _WebDavBackupSheet(
     preferences: preferences,
     createBackupJson: createBackupJson,
     onRestoreBackupJson: onRestoreBackupJson,
@@ -509,11 +414,11 @@ class _WebDavBackupSheet extends StatefulWidget {
 }
 
 class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
-  late WebDavBackupConfig _config;
-  late final TextEditingController _urlController;
-  late final TextEditingController _userController;
-  late final TextEditingController _passController;
-  late final TextEditingController _folderController;
+  late WebDavBackupConfig _config = WebDavBackupConfig.load(widget.preferences);
+  late final _urlController = TextEditingController(text: _config.serverUrl);
+  late final _userController = TextEditingController(text: _config.username);
+  late final _passController = TextEditingController(text: _config.password);
+  late final _folderController = TextEditingController(text: _config.remoteFolder);
   String? _busy;
   String? _status;
   bool _isError = false;
@@ -522,11 +427,6 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
   @override
   void initState() {
     super.initState();
-    _config = WebDavBackupConfig.load(widget.preferences);
-    _urlController = TextEditingController(text: _config.serverUrl);
-    _userController = TextEditingController(text: _config.username);
-    _passController = TextEditingController(text: _config.password);
-    _folderController = TextEditingController(text: _config.remoteFolder);
     unawaited(_loadSecureConfig());
   }
 
@@ -580,7 +480,7 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
           _isError = true;
         });
       }
-    } catch (e) {
+    } catch (_) {
       if (mounted) {
         setState(() {
           _status = '连接 WebDAV 失败，请检查网络、服务器地址或应用密码';
@@ -611,9 +511,8 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
                   ),
                 ),
                 GlassTextButton(
-                  onPressed: () {
-                    _urlController.text = 'https://dav.jianguoyun.com/dav/';
-                  },
+                  onPressed: () =>
+                      _urlController.text = 'https://dav.jianguoyun.com/dav/',
                   child: const Text('填入坚果云地址', style: TextStyle(fontSize: 12)),
                 ),
               ],
@@ -683,14 +582,11 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
                   key: const ValueKey('webdav-backup-upload'),
                   onPressed: _busy == null
                       ? () => _runTask('正在上传备份到 WebDAV…', () async {
-                          final cfg = await _saveCurrentConfig();
-                          final jsonText = await widget.createBackupJson();
-                          final fileName =
-                              await WebDavBackupClient(cfg).uploadBackup(
-                                jsonText,
-                              );
-                          final files =
-                              await WebDavBackupClient(cfg).listBackups();
+                          final client = WebDavBackupClient(await _saveCurrentConfig());
+                          final fileName = await client.uploadBackup(
+                            await widget.createBackupJson(),
+                          );
+                          final files = await client.listBackups();
                           if (mounted) {
                             setState(() {
                               _remoteFiles = files;
@@ -705,15 +601,12 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
                   key: const ValueKey('webdav-backup-restore'),
                   onPressed: _busy == null
                       ? () => _runTask('正在从 WebDAV 读取最新备份…', () async {
-                          final cfg = await _saveCurrentConfig();
-                          final client = WebDavBackupClient(cfg);
+                          final client = WebDavBackupClient(await _saveCurrentConfig());
                           final files = await client.listBackups();
                           if (files.isEmpty) {
                             throw const FormatException('云端目录中暂无备份文件');
                           }
-                          final target = files.contains(
-                            'shuyu-backup-latest.json',
-                          )
+                          final target = files.contains('shuyu-backup-latest.json')
                               ? 'shuyu-backup-latest.json'
                               : files.first;
                           final jsonText = await client.downloadBackup(target);
@@ -728,9 +621,9 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
                   key: const ValueKey('webdav-list-files'),
                   onPressed: _busy == null
                       ? () => _runTask('正在获取云端备份列表…', () async {
-                          final cfg = await _saveCurrentConfig();
-                          final files =
-                              await WebDavBackupClient(cfg).listBackups();
+                          final files = await WebDavBackupClient(
+                            await _saveCurrentConfig(),
+                          ).listBackups();
                           if (mounted) {
                             setState(() {
                               _remoteFiles = files;
@@ -780,11 +673,9 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
                 GlassTextButton(
                   onPressed: _busy == null
                       ? () => _runTask('正在下载 $file…', () async {
-                          final cfg = await _saveCurrentConfig();
-                          final jsonText =
-                              await WebDavBackupClient(cfg).downloadBackup(
-                                file,
-                              );
+                          final jsonText = await WebDavBackupClient(
+                            await _saveCurrentConfig(),
+                          ).downloadBackup(file);
                           if (!context.mounted) return;
                           Navigator.pop(context);
                           await widget.onRestoreBackupJson(jsonText);
@@ -792,7 +683,7 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
                       : null,
                   child: Row(
                     children: [
-                      const Icon(CupertinoIcons.cloud_download, size: 15),
+                      const ArchiveIcon(Icons.cloud_download_outlined, size: 15),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(file, style: const TextStyle(fontSize: 13)),

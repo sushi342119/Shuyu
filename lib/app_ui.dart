@@ -2430,7 +2430,7 @@ class GlassMenuItem extends StatelessWidget {
                 ),
                 if (selected)
                   ArchiveIcon(
-                    CupertinoIcons.check_mark,
+                    Icons.check,
                     size: 17,
                     color: Theme.of(context).colorScheme.surface,
                   ),

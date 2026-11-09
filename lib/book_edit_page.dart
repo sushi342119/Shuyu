@@ -240,8 +240,7 @@ class _BookTitleEditDialogState extends State<_BookTitleEditDialog> {
                     suffixIcon: _titleController.text.isEmpty
                         ? null
                         : IconButton(
-                            icon: const Icon(
-                              CupertinoIcons.clear_circled_solid,
+                            icon: const ArchiveIcon(CupertinoIcons.clear_circled_solid,
                               size: 18,
                             ),
                             tooltip: '清空书名',
@@ -432,8 +431,7 @@ class _BookAuthorEditDialogState extends State<_BookAuthorEditDialog> {
                     suffixIcon: _authorController.text.isEmpty
                         ? null
                         : IconButton(
-                            icon: const Icon(
-                              CupertinoIcons.clear_circled_solid,
+                            icon: const ArchiveIcon(CupertinoIcons.clear_circled_solid,
                               size: 18,
                             ),
                             tooltip: '清空作者',
@@ -482,8 +480,7 @@ class _EditErrorBanner extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(
-            CupertinoIcons.exclamationmark_circle,
+          ArchiveIcon(CupertinoIcons.exclamationmark_circle,
             size: 16,
             color: scheme.error,
           ),
@@ -672,8 +669,7 @@ class SelectableTagChip extends StatelessWidget {
               ),
               if (selected) ...[
                 const SizedBox(width: 6),
-                Icon(
-                  CupertinoIcons.checkmark_alt,
+                ArchiveIcon(CupertinoIcons.checkmark_alt,
                   size: 14,
                   color: scheme.onSurface,
                 ),
@@ -712,8 +708,7 @@ class FileRenamePreviewNotice extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(
-              CupertinoIcons.exclamationmark_triangle,
+            ArchiveIcon(CupertinoIcons.exclamationmark_triangle,
               size: 16,
               color: scheme.error,
             ),
@@ -741,8 +736,7 @@ class FileRenamePreviewNotice extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(
-              CupertinoIcons.doc_text,
+            ArchiveIcon(CupertinoIcons.doc_text,
               size: 16,
               color: scheme.onSurfaceVariant,
             ),
@@ -788,8 +782,7 @@ class FileRenamePreviewNotice extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(
-                CupertinoIcons.arrow_right_arrow_left_circle,
+              ArchiveIcon(CupertinoIcons.arrow_right_arrow_left_circle,
                 size: 16,
                 color: scheme.primary,
               ),

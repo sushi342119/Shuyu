@@ -164,7 +164,7 @@ class FeatureEntry extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        const Icon(CupertinoIcons.chevron_right, size: 14),
+        const ArchiveIcon(CupertinoIcons.chevron_right, size: 14),
       ],
     ),
   );

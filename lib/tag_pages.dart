@@ -292,8 +292,7 @@ class _FilenameChangeNotice extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(
-                CupertinoIcons.arrow_right_arrow_left_circle,
+              ArchiveIcon(CupertinoIcons.arrow_right_arrow_left_circle,
                 size: 16,
                 color: scheme.primary,
               ),
@@ -564,11 +563,11 @@ class _TagManagePageState extends State<TagManagePage> {
                         ),
                       ),
                       IconButton(
-                        icon: const Icon(CupertinoIcons.pencil, size: 18),
+                        icon: const ArchiveIcon(CupertinoIcons.pencil, size: 18),
                         onPressed: _busy ? null : () => _rename(tag),
                       ),
                       IconButton(
-                        icon: const Icon(CupertinoIcons.delete, size: 18),
+                        icon: const ArchiveIcon(CupertinoIcons.delete, size: 18),
                         onPressed: _busy ? null : () => _delete(tag),
                       ),
                     ],

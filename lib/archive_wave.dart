@@ -390,7 +390,7 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
                               ),
                             ),
                             const SizedBox(width: 8),
-                            const Icon(CupertinoIcons.arrow_up_right, size: 20),
+                            const ArchiveIcon(CupertinoIcons.arrow_up_right, size: 20),
                           ],
                         ),
                       ),
@@ -416,8 +416,7 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
                             IconButton(
                               tooltip: '上一份档案',
                               onPressed: () => _step(-1),
-                              icon: const Icon(
-                                CupertinoIcons.chevron_left,
+                              icon: const ArchiveIcon(CupertinoIcons.chevron_left,
                                 size: 13,
                               ),
                               visualDensity: VisualDensity.compact,
@@ -432,8 +431,7 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
                             IconButton(
                               tooltip: '下一份档案',
                               onPressed: () => _step(1),
-                              icon: const Icon(
-                                CupertinoIcons.chevron_right,
+                              icon: const ArchiveIcon(CupertinoIcons.chevron_right,
                                 size: 13,
                               ),
                               visualDensity: VisualDensity.compact,
@@ -542,8 +540,7 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
                       ),
                     ),
                     const SizedBox(height: 6),
-                    Icon(
-                      CupertinoIcons.circle,
+                    ArchiveIcon(CupertinoIcons.circle,
                       size: 6,
                       color: scheme.onSurfaceVariant,
                     ),

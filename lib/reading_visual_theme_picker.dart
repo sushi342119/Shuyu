@@ -169,8 +169,7 @@ class ReadingVisualThemePicker extends StatelessWidget {
                         ),
                       ),
                       if (value == theme)
-                        Icon(
-                          CupertinoIcons.check_mark_circled_solid,
+                        ArchiveIcon(CupertinoIcons.check_mark_circled_solid,
                           size: 16,
                           color: presentation.foreground,
                         ),
@@ -363,7 +362,7 @@ class _ThemePreview extends StatelessWidget {
         excludeFromSemantics: true,
         errorBuilder: (context, error, stackTrace) => ColoredBox(
           color: presentation.secondary,
-          child: Icon(CupertinoIcons.photo, color: presentation.foreground),
+          child: ArchiveIcon(CupertinoIcons.photo, color: presentation.foreground),
         ),
       ),
     ),

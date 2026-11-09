@@ -826,7 +826,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
             ),
             const SizedBox(width: 8),
           ],
-          const Icon(CupertinoIcons.chevron_right, size: 14),
+          const ArchiveIcon(CupertinoIcons.chevron_right, size: 14),
         ],
       ),
     ),

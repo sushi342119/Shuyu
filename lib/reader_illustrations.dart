@@ -128,7 +128,7 @@ class _ReaderIllustrationState extends State<ReaderIllustration> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(CupertinoIcons.photo, size: 28),
+                const ArchiveIcon(CupertinoIcons.photo, size: 28),
                 const SizedBox(height: 12),
                 const Text('插图加载失败'),
                 GlassTextButton(

@@ -1321,7 +1321,7 @@ class _ReaderPageState extends State<ReaderPage>
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(CupertinoIcons.photo),
+                      const ArchiveIcon(CupertinoIcons.photo),
                       const SizedBox(height: 10),
                       const Text('暂未取得本章插图地址'),
                       GlassTextButton(

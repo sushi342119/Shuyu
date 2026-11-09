@@ -10,10 +10,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'catalog.dart';
 import 'library_backup.dart';
+import 'library_preference_stores.dart';
 import 'book_tags.dart';
 import 'haptic_preferences.dart';
 import 'performance_preferences.dart';
@@ -66,7 +66,6 @@ class PalettePlatform {
 }
 
 const _libraryWriteTimeout = Duration(seconds: 8);
-const _maxImportedFontBytes = 100 * 1024 * 1024;
 
 const _compactAppearanceMigrationKey = 'compactAppearanceMigrationV1';
 
@@ -465,67 +464,9 @@ class LibraryState extends ChangeNotifier {
         }
       }
     }
-    _theme = switch (_prefs.get('theme')) {
-      'dark' => ThemeMode.dark,
-      'light' => ThemeMode.light,
-      _ => ThemeMode.system,
-    };
-    double preference(String key, double fallback, double min, double max) {
-      final value = _prefs.get(key);
-      return value is num && value.isFinite
-          ? value.toDouble().clamp(min, max)
-          : fallback;
-    }
-
-    // Range widened to 14–30; older records (15–27) load unchanged.
-    _fontSize = preference(
-      'readerFontSize',
-      19,
-      readerFontSizeMin,
-      readerFontSizeMax,
-    );
-    _lineHeight = preference('readerLineHeight', 1.72, 1.3, 2.2);
-    _reduceMotion = _prefs.get('reduceMotion') == true;
-    _haptics = HapticPreferences.fromRecords({
-      HapticPreferences.preferenceKey: _prefs.get(
-        HapticPreferences.preferenceKey,
-      ),
-    });
-    _loadFontState();
-    try {
-      _appPalette = AppPalettePreferences.decode(
-        _prefs.get(AppPalettePreferences.key),
-      );
-    } on FormatException {
-      /* Preserve an unreadable record; use the original theme until edited. */
-    }
-    _readerTypeface = switch (_prefs.get('readerTypeface')) {
-      final String value when value.isNotEmpty => value,
-      _ => followAppFont,
-    };
-    _performance = PerformancePreferences.fromRecords({
-      for (final key in [
-        PerformancePreferences.modeKey,
-        ...PerformanceEffect.values.map((effect) => effect.preferenceKey),
-      ])
-        key: _prefs.get(key),
-    });
-    _glassBlur = preference('glassBlur', 8, 0, 24);
-    _glassOpacity = preference('glassOpacity', .87, 0, 1);
-    _loadUiPreferences();
-    _keepScreenOn = _prefs.get('readerKeepScreenOn') == true;
-    _shelfSort = switch (_prefs.get('shelfSort')) {
-      'recentAdded' => 'recentAdded',
-      'title' => 'title',
-      _ => 'recentRead',
-    };
-    _shelfFilter = switch (_prefs.get('shelfFilter')) {
-      'unread' => 'unread',
-      'reading' => 'reading',
-      'finished' => 'finished',
-      'untagged' => 'untagged',
-      _ => 'all',
-    };
+    _readerStore.load();
+    _appearanceStore.load();
+    _performanceStore.load();
     final recent = _prefs.get('recentSearches');
     if (recent is List<String>) {
       final seen = <String>{};
@@ -542,10 +483,15 @@ class LibraryState extends ChangeNotifier {
 
   final Duration writeWaitTimeout;
   final SharedPreferences _prefs;
+  late final ReaderSettingsPreferenceStore _readerStore =
+      ReaderSettingsPreferenceStore(_prefs);
+  late final AppearancePreferenceStore _appearanceStore =
+      AppearancePreferenceStore(_prefs);
+  late final PerformancePreferenceStore _performanceStore =
+      PerformancePreferenceStore(_prefs);
   final UserFontStore fonts;
   final PalettePlatform palettePlatform;
-  AppPalettePreferences _appPalette = const AppPalettePreferences();
-  AppPalettePreferences get appPalette => _appPalette;
+  AppPalettePreferences get appPalette => _appearanceStore.appPalette;
   SystemTonalColors? systemTonalColors;
   bool paletteLoaded = false, themedIconSupported = false;
   String? paletteError;
@@ -562,14 +508,16 @@ class LibraryState extends ChangeNotifier {
       paletteError = null;
       if (info.iconSupported) {
         await _queuePositionWrite(() async {
-          if (_appPalette.themedIcon != info.themedIcon) {
-            await palettePlatform.setThemedIcon(_appPalette.themedIcon);
+          if (_appearanceStore.appPalette.themedIcon != info.themedIcon) {
+            await palettePlatform.setThemedIcon(
+              _appearanceStore.appPalette.themedIcon,
+            );
           }
         });
       }
       if (changed &&
           !_disposed &&
-          _appPalette.source == AppPaletteSource.system) {
+          _appearanceStore.appPalette.source == AppPaletteSource.system) {
         _application.notifyListeners();
         _appearance.notifyListeners();
       }
@@ -593,7 +541,7 @@ class LibraryState extends ChangeNotifier {
       throw const FormatException('当前设备未提供系统配色，请选择自选配色');
     }
     await _queuePositionWrite(() async {
-      final before = _appPalette;
+      final before = _appearanceStore.appPalette;
       if (before == value) return;
       final iconChanged = before.themedIcon != value.themedIcon;
       if (iconChanged) {
@@ -601,16 +549,12 @@ class LibraryState extends ChangeNotifier {
         await palettePlatform.setThemedIcon(value.themedIcon);
       }
       try {
-        await writeLibraryPreference(
-          _prefs,
-          AppPalettePreferences.key,
-          value.encode(),
-        );
+        await _appearanceStore.writeAppPalette(value);
       } catch (_) {
         if (iconChanged) await palettePlatform.setThemedIcon(before.themedIcon);
         rethrow;
       }
-      _appPalette = value;
+      _appearanceStore.appPalette = value;
       if (!_disposed) {
         if (before.source != value.source || before.seed != value.seed) {
           _application.notifyListeners();
@@ -622,14 +566,13 @@ class LibraryState extends ChangeNotifier {
   }
 
   String? fontError;
-  String _readerTypeface = followAppFont;
-  String get appFontChoice => _appFontId == appFontSystem.id
+  String get appFontChoice => _readerStore.appFontId == appFontSystem.id
       ? 'system'
-      : _appFontId == appFontSourceHanSerif.id
+      : _readerStore.appFontId == appFontSourceHanSerif.id
       ? 'sourceHanSerif'
-      : _appFontId;
+      : _readerStore.appFontId;
   bool independentReaderStyle(int id) => false;
-  String readerTypefaceFor(int? id) => _readerTypeface;
+  String readerTypefaceFor(int? id) => _readerStore.readerTypeface;
   String fontLabel(String choice) {
     if (choice == followAppFont) {
       return '跟随应用（${fontLabel(appFontChoice)}）';
@@ -671,18 +614,18 @@ class LibraryState extends ChangeNotifier {
       final hasLocal = allFonts.any((f) => f.id == choice);
       if (!hasLocal) throw const FormatException('请先导入这款字体');
     }
-    if (_importedFonts.any((f) => f.id == choice)) {
-      final entry = _importedFonts.firstWhere((f) => f.id == choice);
-      if (!await _loadImportedEntry(entry)) {
+    if (_readerStore.importedFonts.any((f) => f.id == choice)) {
+      final entry = _readerStore.importedFonts.firstWhere((f) => f.id == choice);
+      if (!await _readerStore.loadImportedEntry(entry)) {
         throw const FormatException('字体文件无效或已损坏');
       }
     } else {
       await fonts.ensureLoaded(choice);
     }
     await _queuePositionWrite(() async {
-      if (_readerTypeface == choice) return;
+      if (_readerStore.readerTypeface == choice) return;
       await _commitLibraryRecords({'readerTypeface': choice});
-      _readerTypeface = choice;
+      _readerStore.readerTypeface = choice;
       if (!_disposed) {
         _application.notifyListeners();
         _readerSettings.notifyListeners();
@@ -694,8 +637,10 @@ class LibraryState extends ChangeNotifier {
 
   Future<void> removeUserFont(String id) async {
     if (appFontChoice == id) await setAppFont(appFontSystem.id);
-    if (_readerTypeface == id) await setReaderTypeface(followAppFont);
-    if (_importedFonts.any((f) => f.id == id)) {
+    if (_readerStore.readerTypeface == id) {
+      await setReaderTypeface(followAppFont);
+    }
+    if (_readerStore.importedFonts.any((f) => f.id == id)) {
       await removeImportedFont(id);
     }
     await fonts.remove(id);
@@ -733,38 +678,10 @@ class LibraryState extends ChangeNotifier {
       {};
   final Map<int, int> _shelfRevisions = {};
   List<String> _recentSearches = const [];
-  String _shelfSort = 'recentRead';
-  String _shelfFilter = 'all';
-  bool _keepScreenOn = false;
   int _metadataEncodes = 0;
   Future<void>? _positionWrites;
   Completer<void>? _restoreBarrier;
-  ThemeMode _theme = ThemeMode.system;
-  double _fontSize = 19;
-  double _lineHeight = 1.72;
-  bool _reduceMotion = false;
-  HapticPreferences _haptics = const HapticPreferences();
-  String _appFontId = appFontSystem.id;
-  final List<AppFontEntry> _importedFonts = [];
-
-  /// 已通过 FontLoader 注册的 family，避免重复加载。
-  final Set<String> _loadedFontFamilies = {};
-
-  /// 进行中的字体加载任务（按 family），并发调用等待同一任务。
-  final Map<String, Future<bool>> _fontLoadInflight = {};
-  PerformancePreferences _performance = const PerformancePreferences();
-  double _glassBlur = 8;
-  double _glassOpacity = .87;
-  GlassTier? _glassTier;
-  bool _glassAdvanced = false;
   DeviceProfile _deviceProfile = const DeviceProfile();
-  MotionLevel _motionLevel = MotionLevel.light;
-  RandomPickPace _randomPickPace = RandomPickPace.quick;
-  bool _pdfNightInvert = true;
-  ShelfLayout _shelfLayout = ShelfLayout.list;
-  TagMatchMode _tagMatchMode = TagMatchMode.any;
-  OriginalPaletteVariant _paletteVariant = OriginalPaletteVariant.vivid;
-  ReaderPreferences _readerPreferences = const ReaderPreferences();
   bool _disposed = false;
   bool _historyNotificationQueued = false;
 
@@ -798,11 +715,8 @@ class LibraryState extends ChangeNotifier {
   }
 
   void _resetRetiredAppearance() {
-    _reduceMotion = false;
-    _performance = const PerformancePreferences();
-    _glassBlur = 8;
-    _glassOpacity = .87;
-    _glassAdvanced = false;
+    _performanceStore.resetRetired();
+    _appearanceStore.resetRetired();
   }
 
   Set<int> get shelf => _shelfView;
@@ -863,24 +777,28 @@ class LibraryState extends ChangeNotifier {
   Listenable get shelfViewChanges => _shelfViewChanges;
   Listenable get readerBehaviorChanges => _readerBehaviorChanges;
   List<String> get recentSearches => List.unmodifiable(_recentSearches);
-  String get shelfSort => _shelfSort;
-  String get shelfFilter => _shelfFilter;
-  bool get keepScreenOn => _keepScreenOn;
-  ThemeMode get theme => _theme;
-  double get fontSize => _fontSize;
-  double get lineHeight => _lineHeight;
+  String get shelfSort => _appearanceStore.shelfSort;
+  String get shelfFilter => _appearanceStore.shelfFilter;
+  bool get keepScreenOn => _readerStore.keepScreenOn;
+  ThemeMode get theme => _appearanceStore.theme;
+  double get fontSize => _readerStore.fontSize;
+  double get lineHeight => _readerStore.lineHeight;
   int get debugMetadataEncodeCount => _metadataEncodes;
   // Existing route/reader callers must follow the visible motion selector too.
-  bool get reduceMotion => _reduceMotion || _motionLevel == MotionLevel.off;
-  HapticPreferences get haptics => _haptics;
+  bool get reduceMotion =>
+      _performanceStore.reduceMotion ||
+      _performanceStore.motionLevel == MotionLevel.off;
+  HapticPreferences get haptics => _performanceStore.haptics;
 
   /// 当前字体 ID（稳定 ID，持久化）。
-  String get appFontId => _appFontId;
+  String get appFontId => _readerStore.appFontId;
 
   String? get appFontFamily => currentFont.family;
 
   String get effectiveReaderFontId =>
-      _readerTypeface == followAppFont ? _appFontId : _readerTypeface;
+      _readerStore.readerTypeface == followAppFont
+          ? _readerStore.appFontId
+          : _readerStore.readerTypeface;
 
   String? fontFamilyFor(String id) {
     if (id == followAppFont) return appFontFamily;
@@ -904,7 +822,7 @@ class LibraryState extends ChangeNotifier {
   List<AppFontEntry> get allFonts => [
         appFontSystem,
         appFontSourceHanSerif,
-        ..._importedFonts,
+        ..._readerStore.importedFonts,
         for (final font in fonts.fonts)
           AppFontEntry(
             id: font.id,
@@ -922,12 +840,13 @@ class LibraryState extends ChangeNotifier {
             ),
       ];
 
-  List<AppFontEntry> get importedFonts => List.unmodifiable(_importedFonts);
+  List<AppFontEntry> get importedFonts =>
+      List.unmodifiable(_readerStore.importedFonts);
 
   /// 当前字体条目；ID 失效时回退到系统字体。
   AppFontEntry get currentFont {
     for (final f in allFonts) {
-      if (f.id == _appFontId) return f;
+      if (f.id == _readerStore.appFontId) return f;
     }
     return appFontSystem;
   }
@@ -942,37 +861,38 @@ class LibraryState extends ChangeNotifier {
   }
 
   /// 兼容旧代码：由字体 ID 映射回枚举。
-  AppTypeface get appTypeface => _appFontId == appFontSourceHanSerif.id
-      ? AppTypeface.sourceHanSerif
-      : AppTypeface.system;
-  PerformancePreferences get performance => _performance;
+  AppTypeface get appTypeface =>
+      _readerStore.appFontId == appFontSourceHanSerif.id
+          ? AppTypeface.sourceHanSerif
+          : AppTypeface.system;
+  PerformancePreferences get performance => _performanceStore.performance;
   bool get effectiveReduceMotion =>
-      _reduceMotion ||
-      !_performance.motion ||
-      _motionLevel == MotionLevel.off;
-  double get glassBlur => _glassBlur;
-  double get glassOpacity => _glassOpacity;
+      _performanceStore.reduceMotion ||
+      !_performanceStore.performance.motion ||
+      _performanceStore.motionLevel == MotionLevel.off;
+  double get glassBlur => _appearanceStore.glassBlur;
+  double get glassOpacity => _appearanceStore.glassOpacity;
 
   /// Null means the tier is chosen automatically from [deviceProfile].
-  GlassTier? get glassTierChoice => _glassTier;
-  bool get glassAdvanced => _glassAdvanced;
+  GlassTier? get glassTierChoice => _appearanceStore.glassTier;
+  bool get glassAdvanced => _appearanceStore.glassAdvanced;
   DeviceProfile get deviceProfile => _deviceProfile;
-  MotionLevel get motionLevel => _motionLevel;
-  RandomPickPace get randomPickPace => _randomPickPace;
-  bool get pdfNightInvert => _pdfNightInvert;
-  ShelfLayout get shelfLayout => _shelfLayout;
-  TagMatchMode get tagMatchMode => _tagMatchMode;
-  OriginalPaletteVariant get paletteVariant => _paletteVariant;
-  ReaderPreferences get readerPreferences => _readerPreferences;
+  MotionLevel get motionLevel => _performanceStore.motionLevel;
+  RandomPickPace get randomPickPace => _appearanceStore.randomPickPace;
+  bool get pdfNightInvert => _readerStore.pdfNightInvert;
+  ShelfLayout get shelfLayout => _appearanceStore.shelfLayout;
+  TagMatchMode get tagMatchMode => _appearanceStore.tagMatchMode;
+  OriginalPaletteVariant get paletteVariant => _appearanceStore.paletteVariant;
+  ReaderPreferences get readerPreferences => _readerStore.readerPreferences;
 
   /// Tier, advanced sliders and the custom switches resolved together.
   ResolvedGlass get resolvedGlass => resolveGlass(
-    chosen: _glassTier,
+    chosen: _appearanceStore.glassTier,
     lowEndDevice: _deviceProfile.lowEnd,
-    advanced: _glassAdvanced,
-    sliderBlur: _glassBlur,
-    sliderOpacity: _glassOpacity,
-    custom: _performance,
+    advanced: _appearanceStore.glassAdvanced,
+    sliderBlur: _appearanceStore.glassBlur,
+    sliderOpacity: _appearanceStore.glassOpacity,
+    custom: _performanceStore.performance,
   );
 
   /// What PerformanceScope publishes. [performance] stays the raw custom
@@ -1188,18 +1108,19 @@ class LibraryState extends ChangeNotifier {
     await _queuePositionWrite(() async {
       final nextSort = ['recentRead', 'recentAdded', 'title'].contains(sort)
           ? sort!
-          : _shelfSort;
+          : _appearanceStore.shelfSort;
       final nextFilter =
           ['all', 'unread', 'reading', 'finished', 'untagged'].contains(filter)
           ? filter!
-          : _shelfFilter;
+          : _appearanceStore.shelfFilter;
       await _commitLibraryRecords({
         'shelfSort': nextSort,
         'shelfFilter': nextFilter,
       });
-      if (nextSort != _shelfSort || nextFilter != _shelfFilter) {
-        _shelfSort = nextSort;
-        _shelfFilter = nextFilter;
+      if (nextSort != _appearanceStore.shelfSort ||
+          nextFilter != _appearanceStore.shelfFilter) {
+        _appearanceStore.shelfSort = nextSort;
+        _appearanceStore.shelfFilter = nextFilter;
         if (!_disposed) _shelfViewChanges.notifyListeners();
       }
     });
@@ -1210,9 +1131,9 @@ class LibraryState extends ChangeNotifier {
       return barrier.future.then((_) => setKeepScreenOn(value));
     }
     await _queuePositionWrite(() async {
-      await writeLibraryPreference(_prefs, 'readerKeepScreenOn', value);
-      if (_keepScreenOn != value) {
-        _keepScreenOn = value;
+      await _readerStore.writeKeepScreenOn(value);
+      if (_readerStore.keepScreenOn != value) {
+        _readerStore.keepScreenOn = value;
         if (!_disposed) {
           _readerBehaviorChanges.notifyListeners();
           _settings.notifyListeners();
@@ -2555,10 +2476,10 @@ class LibraryState extends ChangeNotifier {
           chapterId: 0,
           offset: 0,
           fraction: pageCount <= 1 ? 0 : page / (pageCount - 1),
-          fontSize: _fontSize,
+          fontSize: _readerStore.fontSize,
           width: 0,
           updatedAt: createdAt.millisecondsSinceEpoch,
-          lineHeight: _lineHeight,
+          lineHeight: _readerStore.lineHeight,
         ),
       );
       final next = [mark, ...marks];
@@ -2827,7 +2748,7 @@ class LibraryState extends ChangeNotifier {
           : null,
       paragraphFraction: paragraphFraction.clamp(0, 1),
       textScale: textScale.clamp(.5, 5),
-      typeface: typeface ?? _appFontId,
+      typeface: typeface ?? _readerStore.appFontId,
     );
     final previousPosition = _positions[novel.id];
     final previousChapter = _chapters[novel.id];
@@ -2892,222 +2813,77 @@ class LibraryState extends ChangeNotifier {
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then((_) => setTheme(mode));
     }
-    if (_theme == mode) {
-      if (_prefs.get('theme') != null && _prefs.get('theme') != mode.name) {
-        await writeLibraryPreference(_prefs, 'theme', mode.name);
+    if (_appearanceStore.theme == mode) {
+      if (_appearanceStore.hasThemeMismatch(mode)) {
+        await _appearanceStore.writeTheme(mode);
       }
       return;
     }
-    _theme = mode;
+    _appearanceStore.theme = mode;
     _application.notifyListeners();
     _appearance.notifyListeners();
     _settings.notifyListeners();
     notifyListeners();
-    await writeLibraryPreference(_prefs, 'theme', mode.name);
-  }
-
-  /// 从持久化恢复字体选择与导入字体列表；兼容旧版 appTypeface。
-  void _loadFontState() {
-    final rawId = _prefs.getString('appFontId');
-    if (rawId != null && rawId.isNotEmpty) {
-      _appFontId = rawId;
-    } else {
-      // 旧版迁移：appTypeface 存的是 'system' / 'sourceHanSerif'。
-      // 落盘迁移结果，下次不再依赖旧 key。
-      _appFontId = AppTypeface.fromRecord(_prefs.get('appTypeface')).name ==
-              'sourceHanSerif'
-          ? appFontSourceHanSerif.id
-          : appFontSystem.id;
-      unawaited(_persistMigratedFontId());
-    }
-    _importedFonts.clear();
-    final rawList = _prefs.getString('importedFonts');
-    if (rawList != null && rawList.isNotEmpty) {
-      try {
-        final list = jsonDecode(rawList);
-        if (list is List) {
-          for (final item in list) {
-            if (item is Map<String, Object?>) {
-              try {
-              final entry = AppFontEntry.fromJson(item);
-              if (entry.id.isNotEmpty &&
-                  entry.source == AppFontSource.imported &&
-                  entry.family != null) {
-                _importedFonts.add(entry);
-              }
-              } on FormatException catch (_) {}
-            }
-          }
-        }
-      } catch (_) {}
-    }
-    // 选择的导入字体若已不在列表中，回退到系统字体（UserFontStore 与下载字库在 loadFonts 中校验）。
-    if (_appFontId != appFontSystem.id &&
-        _appFontId != appFontSourceHanSerif.id &&
-        !_importedFonts.any((f) => f.id == _appFontId) &&
-        !validFontChoice(_appFontId)) {
-      _appFontId = appFontSystem.id;
-    }
-  }
-
-  /// 后台落盘迁移后的字体 ID；异常内部消化，不污染未处理错误通道。
-  Future<void> _persistMigratedFontId() async {
-    try {
-      await _prefs.setString('appFontId', _appFontId);
-    } catch (_) {}
-  }
-
-  Future<void> _persistFontState() async {
-    await _prefs.setString('appFontId', _appFontId);
-    await _prefs.setString(
-      'importedFonts',
-      jsonEncode(_importedFonts.map((f) => f.toJson()).toList()),
-    );
-  }
-
-  /// 持久化导入字体列表（不进备份日志，文件本身不在备份范围内）。
-
-  /// 用 FontLoader 注册单个导入字体；已加载或正在加载的复用同一任务。
-  /// 返回 true 表示可用。
-  Future<bool> _loadImportedEntry(AppFontEntry entry) {
-    final family = entry.family;
-    final path = entry.filePath;
-    if (family == null || path == null) return Future.value(false);
-    if (_loadedFontFamilies.contains(family)) return Future.value(true);
-    final inflight = _fontLoadInflight[family];
-    if (inflight != null) return inflight;
-    late final Future<bool> task;
-    task = _doLoadImportedFont(family, path).then(
-      (ok) {
-        // 仅当仍是当前任务时才清理映射（防御性，避免误删更新的任务）。
-        if (identical(_fontLoadInflight[family], task)) {
-          _fontLoadInflight.remove(family);
-        }
-        if (ok) _loadedFontFamilies.add(family);
-        return ok;
-      },
-      onError: (Object _) {
-        if (identical(_fontLoadInflight[family], task)) {
-          _fontLoadInflight.remove(family);
-        }
-        return false;
-      },
-    );
-    _fontLoadInflight[family] = task;
-    return task;
-  }
-
-  Future<bool> _doLoadImportedFont(String family, String path) async {
-    try {
-      final file = File(path);
-      if (!await _isPrivateFontFile(file) ||
-          await file.length() > _maxImportedFontBytes) {
-        return false;
-      }
-      final bytes = await file.readAsBytes();
-      if (!_hasSupportedFontSignature(bytes)) return false;
-      final loader = FontLoader(family);
-      loader.addFont(Future.value(ByteData.view(bytes.buffer)));
-      await loader.load();
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  Future<bool> _isPrivateFontFile(File file) async {
-    try {
-      final support = await getApplicationSupportDirectory();
-      final fonts = Directory('${support.path}${Platform.pathSeparator}fonts');
-      final root = await fonts.resolveSymbolicLinks();
-      final actual = await file.resolveSymbolicLinks();
-      final separator = Platform.pathSeparator;
-      return actual != root && actual.startsWith('$root$separator');
-    } catch (_) {
-      return false;
-    }
-  }
-
-  bool _hasSupportedFontSignature(Uint8List bytes) {
-    if (bytes.length < 12 || bytes.length > _maxImportedFontBytes) return false;
-    final data = ByteData.sublistView(bytes);
-    final signature = data.getUint32(0);
-    if (signature != 0x4f54544f && signature != 0x00010000) return false;
-    final count = data.getUint16(4);
-    final directoryEnd = 12 + count * 16;
-    if (count == 0 || count > 64 || directoryEnd > bytes.length) return false;
-    final tables = <String>{};
-    for (var index = 0; index < count; index++) {
-      final record = 12 + index * 16;
-      final tag = String.fromCharCodes(bytes.sublist(record, record + 4));
-      final offset = data.getUint32(record + 8);
-      final length = data.getUint32(record + 12);
-      if (!tables.add(tag) || offset < directoryEnd ||
-          offset + length > bytes.length ||
-          (const {'head', 'name', 'maxp'}.contains(tag) && length == 0)) {
-        return false;
-      }
-    }
-    return tables.containsAll(const {'head', 'name', 'maxp'});
+    await _appearanceStore.writeTheme(mode);
   }
 
   /// 确保当前选中的导入或下载字体已通过 FontLoader 加载（启动时调用）。
   /// 加载失败时回退到系统字体。
   Future<void> ensureFontLoaded() async {
-    if (_importedFonts.any((f) => f.id == _appFontId)) {
-      final entry = _importedFonts.firstWhere((f) => f.id == _appFontId);
+    final activeId = _readerStore.appFontId;
+    if (_readerStore.importedFonts.any((f) => f.id == activeId)) {
+      final entry =
+          _readerStore.importedFonts.firstWhere((f) => f.id == activeId);
       try {
-        if (!await _loadImportedEntry(entry)) throw StateError('字体不可用');
+        if (!await _readerStore.loadImportedEntry(entry)) {
+          throw StateError('字体不可用');
+        }
       } catch (_) {
-        _appFontId = appFontSystem.id;
+        _readerStore.appFontId = appFontSystem.id;
         try {
-          await _persistFontState();
+          await _readerStore.persistFontState();
         } catch (_) {}
         notifyListeners();
       }
-    } else if (_appFontId != appFontSystem.id &&
-        _appFontId != appFontSourceHanSerif.id) {
+    } else if (activeId != appFontSystem.id &&
+        activeId != appFontSourceHanSerif.id) {
       try {
-        if (!fonts.available(_appFontId)) throw StateError('字体不可用');
-        await fonts.ensureLoaded(_appFontId);
+        if (!fonts.available(activeId)) throw StateError('字体不可用');
+        await fonts.ensureLoaded(activeId);
       } catch (_) {
-        _appFontId = appFontSystem.id;
+        _readerStore.appFontId = appFontSystem.id;
         try {
-          await _persistFontState();
+          await _readerStore.persistFontState();
         } catch (_) {}
         notifyListeners();
       }
     }
-    if (_readerTypeface != followAppFont) {
-      if (_importedFonts.any((f) => f.id == _readerTypeface)) {
-        final entry = _importedFonts.firstWhere((f) => f.id == _readerTypeface);
+    final readerFont = _readerStore.readerTypeface;
+    if (readerFont != followAppFont) {
+      if (_readerStore.importedFonts.any((f) => f.id == readerFont)) {
+        final entry =
+            _readerStore.importedFonts.firstWhere((f) => f.id == readerFont);
         try {
-          if (!await _loadImportedEntry(entry)) throw StateError('字体不可用');
+          if (!await _readerStore.loadImportedEntry(entry)) {
+            throw StateError('字体不可用');
+          }
         } catch (_) {
-          _readerTypeface = followAppFont;
+          _readerStore.readerTypeface = followAppFont;
         }
-      } else if (_readerTypeface != appFontSystem.id &&
-          _readerTypeface != appFontSourceHanSerif.id) {
+      } else if (readerFont != appFontSystem.id &&
+          readerFont != appFontSourceHanSerif.id) {
         try {
-          if (!fonts.available(_readerTypeface)) throw StateError('字体不可用');
-          await fonts.ensureLoaded(_readerTypeface);
+          if (!fonts.available(readerFont)) throw StateError('字体不可用');
+          await fonts.ensureLoaded(readerFont);
         } catch (_) {
-          _readerTypeface = followAppFont;
+          _readerStore.readerTypeface = followAppFont;
         }
       }
     }
   }
 
   /// 预加载全部已导入字体（供字体选择器预览用）；失败的跳过。
-  /// 遍历快照，避免与导入/删除并发修改冲突。
-  Future<void> preloadImportedFonts() async {
-    final snapshot = List.of(_importedFonts);
-    for (final entry in snapshot) {
-      try {
-        await _loadImportedEntry(entry);
-      } catch (_) {}
-    }
-  }
+  Future<void> preloadImportedFonts() => _readerStore.preloadImportedFonts();
 
   /// 切换应用字体；导入或下载字体会先确保加载成功。
   Future<void> setAppFont(String id) async {
@@ -3116,35 +2892,33 @@ class LibraryState extends ChangeNotifier {
     }
     if (id != appFontSystem.id &&
         id != appFontSourceHanSerif.id &&
-        !_importedFonts.any((f) => f.id == id) &&
+        !_readerStore.importedFonts.any((f) => f.id == id) &&
         !fonts.available(id)) {
       throw const FormatException('请先导入这款字体');
     }
     await _queuePositionWrite(() async {
-      if (_appFontId == id) return;
-      final previous = _appFontId;
-      _appFontId = id;
-      if (_importedFonts.any((f) => f.id == id)) {
+      if (_readerStore.appFontId == id) return;
+      final previous = _readerStore.appFontId;
+      _readerStore.appFontId = id;
+      if (_readerStore.importedFonts.any((f) => f.id == id)) {
         try {
           await ensureFontLoaded();
         } catch (_) {
-          _appFontId = previous;
+          _readerStore.appFontId = previous;
           return;
         }
-        // ensureFontLoaded 失败时已将 _appFontId 置为 system，
-        // 下面继续走持久化与通知，保证回退生效。
       } else if (id != appFontSystem.id && id != appFontSourceHanSerif.id) {
         try {
           await fonts.ensureLoaded(id);
         } catch (_) {
-          _appFontId = previous;
+          _readerStore.appFontId = previous;
           rethrow;
         }
       }
       try {
-        await _persistFontState();
+        await _readerStore.persistFontState();
       } catch (_) {
-        _appFontId = previous;
+        _readerStore.appFontId = previous;
         rethrow;
       }
       if (!_disposed) {
@@ -3163,62 +2937,16 @@ class LibraryState extends ChangeNotifier {
     String filePath,
     String displayName,
   ) async {
-    final file = File(filePath);
-    if (!await _isPrivateFontFile(file)) {
-      throw StateError('字体文件不在应用字体目录内');
-    }
-    final id =
-        'imported_${DateTime.now().millisecondsSinceEpoch}_${filePath.hashCode.abs()}';
-    final entry = AppFontEntry(
-      id: id,
-      displayName: displayName.isEmpty ? '导入字体' : displayName,
-      family: 'user_font_$id',
-      source: AppFontSource.imported,
-      filePath: filePath,
-    );
-    // 先加载验证字体可用；任何失败都删除已复制的文件，不留孤立文件。
-    bool loadedOk = false;
-    try {
-      loadedOk = await _loadImportedEntry(entry);
-    } catch (_) {
-      loadedOk = false;
-    }
-    if (!loadedOk) {
-      try {
-        await file.delete();
-      } catch (_) {}
-      // 加载失败的 family 不应留在去重集合中，允许重试。
-      _loadedFontFamilies.remove(entry.family);
-      _fontLoadInflight.remove(entry.family);
-      throw StateError('字体文件无效或已损坏');
-    }
-    _importedFonts.add(entry);
-    await _persistFontState();
+    final id = await _readerStore.registerImportedFont(filePath, displayName);
     notifyListeners();
     return id;
   }
 
   /// 删除导入的字体（含文件）；若正选中则回退到系统字体。
   Future<void> removeImportedFont(String id) async {
-    final index = _importedFonts.indexWhere((f) => f.id == id);
-    if (index < 0) return;
-    final entry = _importedFonts[index];
-    _importedFonts.removeAt(index);
-    _loadedFontFamilies.remove(entry.family);
-    _fontLoadInflight.remove(entry.family);
+    if (!_readerStore.importedFonts.any((f) => f.id == id)) return;
     try {
-      final path = entry.filePath;
-      if (path != null) {
-        final file = File(path);
-        if (await _isPrivateFontFile(file) && await file.exists()) {
-          await file.delete();
-        }
-      }
-    } catch (_) {}
-    if (_appFontId == id) _appFontId = appFontSystem.id;
-    // 持久化失败也发出通知（内存已是最新状态，调用方会提示重试）。
-    try {
-      await _persistFontState();
+      await _readerStore.removeImportedFont(id);
     } finally {
       if (!_disposed) {
         _application.notifyListeners();
@@ -3259,23 +2987,21 @@ class LibraryState extends ChangeNotifier {
     }
     final font = fontSize?.isFinite == true
         ? fontSize!.clamp(readerFontSizeMin, readerFontSizeMax)
-        : _fontSize;
+        : _readerStore.fontSize;
     final spacing = lineHeight?.isFinite == true
         ? lineHeight!.clamp(1.3, 2.2)
-        : _lineHeight;
-    if (font != _fontSize || spacing != _lineHeight) {
-      _fontSize = font;
-      _lineHeight = spacing;
+        : _readerStore.lineHeight;
+    if (font != _readerStore.fontSize || spacing != _readerStore.lineHeight) {
+      _readerStore.fontSize = font;
+      _readerStore.lineHeight = spacing;
       _readerSettings.notifyListeners();
       _settings.notifyListeners();
     }
     if (persist) {
-      if (fontSize?.isFinite == true) {
-        await writeLibraryPreference(_prefs, 'readerFontSize', font);
-      }
-      if (lineHeight?.isFinite == true) {
-        await writeLibraryPreference(_prefs, 'readerLineHeight', spacing);
-      }
+      await _readerStore.writeTypography(
+        fontSize: fontSize?.isFinite == true ? font : null,
+        lineHeight: lineHeight?.isFinite == true ? spacing : null,
+      );
     }
   }
 
@@ -3284,9 +3010,9 @@ class LibraryState extends ChangeNotifier {
       return barrier.future.then((_) => setHaptics(value));
     }
     await _queuePositionWrite(() async {
-      if (_haptics == value) return;
+      if (_performanceStore.haptics == value) return;
       await _commitLibraryRecords(value.toRecords());
-      _haptics = value;
+      _performanceStore.haptics = value;
       if (!_disposed) {
         _application.notifyListeners();
         _settings.notifyListeners();
@@ -3299,11 +3025,9 @@ class LibraryState extends ChangeNotifier {
       return barrier.future.then((_) => setPerformance(value));
     }
     await _queuePositionWrite(() async {
-      if (_performance == value) return;
-      // Commit all switches together. A failed disk write must not leave the
-      // visible mode different from the one restored on the next launch.
+      if (_performanceStore.performance == value) return;
       await _commitLibraryRecords(value.toRecords());
-      _performance = value;
+      _performanceStore.performance = value;
       if (!_disposed) {
         _application.notifyListeners();
         _appearance.notifyListeners();
@@ -3316,19 +3040,18 @@ class LibraryState extends ChangeNotifier {
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then((_) => setReduceMotion(value));
     }
-    if (_reduceMotion == value) {
-      if (_prefs.get('reduceMotion') != null &&
-          _prefs.get('reduceMotion') != value) {
-        await writeLibraryPreference(_prefs, 'reduceMotion', value);
+    if (_performanceStore.reduceMotion == value) {
+      if (_performanceStore.hasReduceMotionMismatch(value)) {
+        await _performanceStore.writeReduceMotion(value);
       }
       return;
     }
-    _reduceMotion = value;
+    _performanceStore.reduceMotion = value;
     _application.notifyListeners();
     _appearance.notifyListeners();
     _settings.notifyListeners();
     notifyListeners();
-    await writeLibraryPreference(_prefs, 'reduceMotion', value);
+    await _performanceStore.writeReduceMotion(value);
   }
 
   Future<void> setGlassBlur(double value, {bool persist = true}) async {
@@ -3338,16 +3061,15 @@ class LibraryState extends ChangeNotifier {
     if (!value.isFinite) return;
     final next = value.clamp(0.0, 24.0);
     _markGlassAdvanced();
-    if (_glassBlur != next) {
-      _glassBlur = next;
+    if (_appearanceStore.glassBlur != next) {
+      _appearanceStore.glassBlur = next;
       _glassChanges.notifyListeners();
       _appearance.notifyListeners();
       _settings.notifyListeners();
       notifyListeners();
     }
     if (persist) {
-      await writeLibraryPreference(_prefs, 'glassBlur', next);
-      await _persistGlassAdvanced();
+      await _appearanceStore.writeGlassBlur(next);
     }
   }
 
@@ -3360,70 +3082,25 @@ class LibraryState extends ChangeNotifier {
     if (!value.isFinite) return;
     final next = value.clamp(0.0, 1.0);
     _markGlassAdvanced();
-    if (_glassOpacity != next) {
-      _glassOpacity = next;
+    if (_appearanceStore.glassOpacity != next) {
+      _appearanceStore.glassOpacity = next;
       _glassChanges.notifyListeners();
       _appearance.notifyListeners();
       _settings.notifyListeners();
       notifyListeners();
     }
     if (persist) {
-      await writeLibraryPreference(_prefs, 'glassOpacity', next);
-      await _persistGlassAdvanced();
+      await _appearanceStore.writeGlassOpacity(next);
     }
   }
 
   /// Moving an advanced slider means the user wants exactly that value, so the
   /// sliders override the tier's blur/opacity until "恢复档位默认值".
   void _markGlassAdvanced() {
-    if (_glassAdvanced) return;
-    _glassAdvanced = true;
+    if (_appearanceStore.glassAdvanced) return;
+    _appearanceStore.glassAdvanced = true;
     _glassChanges.notifyListeners();
     _settings.notifyListeners();
-  }
-
-  Future<void> _persistGlassAdvanced() async {
-    if (_prefs.get(UiPreferenceKeys.glassAdvanced) != _glassAdvanced) {
-      await writeLibraryPreference(
-        _prefs,
-        UiPreferenceKeys.glassAdvanced,
-        _glassAdvanced,
-      );
-    }
-  }
-
-  /// Reads every key added in the 2026-11 UI round. Missing or unreadable
-  /// values fall back to defaults without rewriting the stored record.
-  void _loadUiPreferences() {
-    final tier = _prefs.get(UiPreferenceKeys.glassTier);
-    _glassTier = tier == glassTierAuto ? null : GlassTier.fromRecord(tier);
-    final advanced = _prefs.get(UiPreferenceKeys.glassAdvanced);
-    // Upgraders who had moved the old sliders keep their look: treat a
-    // non-default stored value as an advanced override.
-    _glassAdvanced = advanced is bool
-        ? advanced
-        : (_prefs.get('glassBlur') is num && _glassBlur != 8) ||
-              (_prefs.get('glassOpacity') is num && _glassOpacity != .87);
-    _motionLevel = MotionLevel.fromRecord(
-      _prefs.get(UiPreferenceKeys.motionLevel),
-    );
-    _randomPickPace = RandomPickPace.fromRecord(
-      _prefs.get(UiPreferenceKeys.randomPickPace),
-    );
-    _pdfNightInvert = _prefs.get(UiPreferenceKeys.pdfNightInvert) != false;
-    _shelfLayout = ShelfLayout.fromRecord(
-      _prefs.get(UiPreferenceKeys.shelfLayout),
-    );
-    _tagMatchMode = TagMatchMode.fromRecord(
-      _prefs.get(UiPreferenceKeys.tagMatchMode),
-    );
-    _paletteVariant = OriginalPaletteVariant.fromRecord(
-      _prefs.get(UiPreferenceKeys.paletteVariant),
-    );
-    final reader = _prefs.get(UiPreferenceKeys.readerPreferences);
-    _readerPreferences = reader == null
-        ? const ReaderPreferences()
-        : ReaderPreferences.fromRecord(reader);
   }
 
   void setDeviceProfile(DeviceProfile profile) {
@@ -3478,7 +3155,7 @@ class LibraryState extends ChangeNotifier {
   Future<void> setGlassTier(GlassTier? tier) => _writeUiPreference(
     UiPreferenceKeys.glassTier,
     tier?.name ?? glassTierAuto,
-    () => _glassTier = tier,
+    () => _appearanceStore.glassTier = tier,
     glass: true,
     application: true,
   );
@@ -3486,27 +3163,27 @@ class LibraryState extends ChangeNotifier {
   Future<void> setMotionLevel(MotionLevel value) => _writeUiPreference(
     UiPreferenceKeys.motionLevel,
     value.name,
-    () => _motionLevel = value,
+    () => _performanceStore.motionLevel = value,
     application: true,
   );
 
   Future<void> setRandomPickPace(RandomPickPace value) => _writeUiPreference(
     UiPreferenceKeys.randomPickPace,
     value.name,
-    () => _randomPickPace = value,
+    () => _appearanceStore.randomPickPace = value,
   );
 
   Future<void> setPdfNightInvert(bool value) => _writeUiPreference(
     UiPreferenceKeys.pdfNightInvert,
     value,
-    () => _pdfNightInvert = value,
+    () => _readerStore.pdfNightInvert = value,
     reader: true,
   );
 
   Future<void> setShelfLayout(ShelfLayout value) => _writeUiPreference(
     UiPreferenceKeys.shelfLayout,
     value.name,
-    () => _shelfLayout = value,
+    () => _appearanceStore.shelfLayout = value,
     shelf: true,
   );
 
@@ -3514,14 +3191,14 @@ class LibraryState extends ChangeNotifier {
       _writeUiPreference(
         UiPreferenceKeys.paletteVariant,
         value.name,
-        () => _paletteVariant = value,
+        () => _appearanceStore.paletteVariant = value,
         application: true,
       );
 
   Future<void> setTagMatchMode(TagMatchMode value) => _writeUiPreference(
     UiPreferenceKeys.tagMatchMode,
     value.name,
-    () => _tagMatchMode = value,
+    () => _appearanceStore.tagMatchMode = value,
     shelf: true,
   );
 
@@ -3529,7 +3206,7 @@ class LibraryState extends ChangeNotifier {
       _writeUiPreference(
         UiPreferenceKeys.readerPreferences,
         jsonEncode(value.toJson()),
-        () => _readerPreferences = value,
+        () => _readerStore.readerPreferences = value,
         reader: true,
       );
 
@@ -3543,29 +3220,9 @@ class LibraryState extends ChangeNotifier {
       'local_shelf_removed': _prefs.getStringList('local_shelf_removed') ?? <String>[],
       'reading_history_hidden': _hiddenHistory.map((id) => '$id').toList(),
       'recentSearches': _recentSearches,
-      'theme': _theme.name,
-      'readerFontSize': _fontSize,
-      'readerLineHeight': _lineHeight,
-      'reduceMotion': _reduceMotion,
-      ..._haptics.toRecords(),
-      'appFontId': _appFontId,
-      ..._performance.toRecords(),
-      'glassBlur': _glassBlur,
-      'glassOpacity': _glassOpacity,
-      UiPreferenceKeys.glassTier: _glassTier?.name ?? glassTierAuto,
-      UiPreferenceKeys.glassAdvanced: _glassAdvanced,
-      UiPreferenceKeys.motionLevel: _motionLevel.name,
-      UiPreferenceKeys.randomPickPace: _randomPickPace.name,
-      UiPreferenceKeys.pdfNightInvert: _pdfNightInvert,
-      UiPreferenceKeys.shelfLayout: _shelfLayout.name,
-      UiPreferenceKeys.tagMatchMode: _tagMatchMode.name,
-      UiPreferenceKeys.paletteVariant: _paletteVariant.name,
-      UiPreferenceKeys.readerPreferences: jsonEncode(
-        _readerPreferences.toJson(),
-      ),
-      'readerKeepScreenOn': _keepScreenOn,
-      'shelfSort': _shelfSort,
-      'shelfFilter': _shelfFilter,
+      ..._appearanceStore.toBackupRecords(),
+      ..._readerStore.toBackupRecords(),
+      ..._performanceStore.toBackupRecords(),
       for (final entry in _added.entries) 'shelf_added_${entry.key}': entry.value,
       for (final entry in _known.entries)
         'novel_meta_${entry.key}': jsonEncode(entry.value.toSnapshot()),
@@ -3787,55 +3444,9 @@ class LibraryState extends ChangeNotifier {
           ..addAll(hidden);
         _recentSearches = searches;
         if (importPreferences) {
-          if (records['theme'] case final String value) {
-            _theme = ThemeMode.values.firstWhere((mode) => mode.name == value,
-                orElse: () => ThemeMode.system);
-          }
-          if (records['readerFontSize'] case final num value) {
-            _fontSize = value.toDouble();
-          }
-          if (records['readerLineHeight'] case final num value) {
-            _lineHeight = value.toDouble();
-          }
-          if (records['glassBlur'] case final num value) {
-            _glassBlur = value.toDouble();
-          }
-          if (records['glassOpacity'] case final num value) {
-            _glassOpacity = value.toDouble();
-          }
-          if (records['reduceMotion'] case final bool value) {
-            _reduceMotion = value;
-          }
-          if (records.containsKey(HapticPreferences.preferenceKey)) {
-            _haptics = HapticPreferences.fromRecords(records);
-          }
-          if (records['appFontId'] case final String value) {
-            if (value == appFontSystem.id ||
-                value == appFontSourceHanSerif.id) {
-              _appFontId = value;
-            }
-          } else if (records['appTypeface'] case final String value) {
-            // 旧版备份兼容。
-            _appFontId = value == 'sourceHanSerif'
-                ? appFontSourceHanSerif.id
-                : appFontSystem.id;
-          }
-          _performance = PerformancePreferences.fromRecords({
-            ..._performance.toRecords(),
-            for (final key in _performance.toRecords().keys)
-              if (records.containsKey(key)) key: records[key],
-          });
-          if (records['readerKeepScreenOn'] case final bool value) {
-            _keepScreenOn = value;
-          }
-          if (records['shelfSort'] case final String value) _shelfSort = value;
-          if (records['shelfFilter'] case final String value) {
-            _shelfFilter = value;
-          }
-          // New keys were committed above with the other allow-listed
-          // preferences; older backups lack them and keep current values.
-          _loadUiPreferences();
-          _resetRetiredAppearance();
+          _appearanceStore.applyBackupRecords(records);
+          _readerStore.applyBackupRecords(records);
+          _performanceStore.applyBackupRecords(records);
         }
         if (!_disposed) {
           _historyChanged();

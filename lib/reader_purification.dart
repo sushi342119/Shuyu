@@ -1424,7 +1424,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(CupertinoIcons.globe, size: 13, color: scheme.primary),
+              ArchiveIcon(CupertinoIcons.globe, size: 13, color: scheme.primary),
               const SizedBox(width: 5),
               ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 210),
@@ -1445,8 +1445,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                 onTap: onDelete,
                 child: Padding(
                   padding: const EdgeInsets.all(2),
-                  child: Icon(
-                    CupertinoIcons.xmark_circle_fill,
+                  child: ArchiveIcon(CupertinoIcons.xmark_circle_fill,
                     size: 15,
                     color: scheme.onSurfaceVariant.withValues(
                       alpha: onDelete == null ? .38 : .75,
@@ -1691,8 +1690,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                       children: [
                         Row(
                           children: [
-                            Icon(
-                              CupertinoIcons.link,
+                            ArchiveIcon(CupertinoIcons.link,
                               size: 15,
                               color: scheme.primary,
                             ),
@@ -1819,8 +1817,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                               ),
                             ),
                             IconButton(
-                              icon: const Icon(
-                                CupertinoIcons.chevron_left,
+                              icon: const ArchiveIcon(CupertinoIcons.chevron_left,
                                 size: 18,
                               ),
                               visualDensity: VisualDensity.compact,
@@ -1833,8 +1830,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                                   : null,
                             ),
                             IconButton(
-                              icon: const Icon(
-                                CupertinoIcons.chevron_right,
+                              icon: const ArchiveIcon(CupertinoIcons.chevron_right,
                                 size: 18,
                               ),
                               visualDensity: VisualDensity.compact,
@@ -2090,7 +2086,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                         horizontal: 12,
                         vertical: 9,
                       ),
-                      prefixIcon: const Icon(CupertinoIcons.search, size: 16),
+                      prefixIcon: const ArchiveIcon(CupertinoIcons.search, size: 16),
                       prefixIconConstraints: const BoxConstraints(
                         minWidth: 34,
                         minHeight: 32,
@@ -2098,8 +2094,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                       suffixIcon: query.isEmpty
                           ? null
                           : IconButton(
-                              icon: const Icon(
-                                CupertinoIcons.clear_circled_solid,
+                              icon: const ArchiveIcon(CupertinoIcons.clear_circled_solid,
                                 size: 16,
                               ),
                               visualDensity: VisualDensity.compact,
@@ -2248,8 +2243,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                                           height: 32,
                                           child: IconButton(
                                             padding: EdgeInsets.zero,
-                                            icon: Icon(
-                                              CupertinoIcons.delete,
+                                            icon: ArchiveIcon(CupertinoIcons.delete,
                                               size: 16,
                                               color: scheme.onSurfaceVariant,
                                             ),

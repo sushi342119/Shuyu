@@ -360,8 +360,7 @@ class _ShelfPageState extends State<ShelfPage> {
                 padding: const EdgeInsets.symmetric(vertical: 90),
                 child: Column(
                   children: [
-                    Icon(
-                      CupertinoIcons.book,
+                    ArchiveIcon(CupertinoIcons.book,
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                       size: 34,
                     ),
@@ -437,7 +436,7 @@ class _ShelfPageState extends State<ShelfPage> {
                           padding: const EdgeInsets.symmetric(vertical: 20),
                           child: Row(
                             children: [
-                              const Icon(CupertinoIcons.book, size: 26),
+                              const ArchiveIcon(CupertinoIcons.book, size: 26),
                               const SizedBox(width: 15),
                               Expanded(child: Text('书籍 $id 暂未载入')),
                               GlassTextButton(
@@ -545,7 +544,7 @@ class _ShelfPageState extends State<ShelfPage> {
             ),
             IconButton(
               tooltip: '退出多选',
-              icon: const Icon(CupertinoIcons.xmark),
+              icon: const ArchiveIcon(CupertinoIcons.xmark),
               onPressed: () => setState(_selection.clear),
             ),
           ],

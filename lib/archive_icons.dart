@@ -246,9 +246,144 @@ abstract final class ArchiveIconSymbols {
     CupertinoIcons.bolt_fill: ArchiveSymbol.charging,
     CupertinoIcons.wrench: ArchiveSymbol.tools,
     CupertinoIcons.paintbrush: ArchiveSymbol.edit,
+    Icons.home_outlined: ArchiveSymbol.discover,
+    Icons.menu_book_outlined: ArchiveSymbol.book,
+    Icons.book: ArchiveSymbol.book,
+    Icons.folder_outlined: ArchiveSymbol.folder,
+    Icons.folder_open_outlined: ArchiveSymbol.folderOpen,
+    Icons.person_outline: ArchiveSymbol.profile,
+    Icons.arrow_back_ios_new: ArchiveSymbol.back,
+    Icons.chevron_left: ArchiveSymbol.back,
+    Icons.chevron_right: ArchiveSymbol.forward,
+    Icons.expand_less: ArchiveSymbol.up,
+    Icons.expand_more: ArchiveSymbol.down,
+    Icons.arrow_back: ArchiveSymbol.arrowLeft,
+    Icons.arrow_forward: ArchiveSymbol.arrowRight,
+    Icons.open_in_new: ArchiveSymbol.external,
+    Icons.close: ArchiveSymbol.close,
+    Icons.more_horiz: ArchiveSymbol.more,
+    Icons.format_list_bulleted: ArchiveSymbol.contents,
+    Icons.bookmark_border: ArchiveSymbol.bookmark,
+    Icons.bookmark: ArchiveSymbol.bookmarked,
+    Icons.text_fields: ArchiveSymbol.typography,
+    Icons.tune: ArchiveSymbol.sliders,
+    Icons.wb_sunny_outlined: ArchiveSymbol.brightness,
+    Icons.nights_stay_outlined: ArchiveSymbol.moon,
+    Icons.headphones_outlined: ArchiveSymbol.headphones,
+    Icons.play_arrow: ArchiveSymbol.play,
+    Icons.pause: ArchiveSymbol.pause,
+    Icons.stop: ArchiveSymbol.stop,
+    Icons.skip_previous: ArchiveSymbol.previous,
+    Icons.skip_next: ArchiveSymbol.next,
+    Icons.graphic_eq: ArchiveSymbol.waveform,
+    Icons.speed: ArchiveSymbol.speed,
+    Icons.schedule: ArchiveSymbol.timer,
+    Icons.search: ArchiveSymbol.search,
+    Icons.filter_list: ArchiveSymbol.filter,
+    Icons.grid_view: ArchiveSymbol.grid,
+    Icons.add: ArchiveSymbol.add,
+    Icons.add_circle_outline: ArchiveSymbol.addCircle,
+    Icons.remove_circle_outline: ArchiveSymbol.removeCircle,
+    Icons.check: ArchiveSymbol.check,
+    Icons.check_circle_outline: ArchiveSymbol.checkCircle,
+    Icons.check_circle: ArchiveSymbol.selected,
+    Icons.radio_button_unchecked: ArchiveSymbol.circle,
+    Icons.edit_outlined: ArchiveSymbol.edit,
+    Icons.delete_outline: ArchiveSymbol.delete,
+    Icons.content_copy: ArchiveSymbol.copy,
+    Icons.share_outlined: ArchiveSymbol.share,
+    Icons.link: ArchiveSymbol.link,
+    Icons.refresh: ArchiveSymbol.refresh,
+    Icons.sync: ArchiveSymbol.sync,
+    Icons.download_outlined: ArchiveSymbol.download,
+    Icons.cloud_download_outlined: ArchiveSymbol.cloudDownload,
+    Icons.upload_outlined: ArchiveSymbol.upload,
+    Icons.description_outlined: ArchiveSymbol.document,
+    Icons.create_new_folder_outlined: ArchiveSymbol.folderAdd,
+    Icons.auto_fix_high_outlined: ArchiveSymbol.wand,
+    Icons.settings_outlined: ArchiveSymbol.settings,
+    Icons.info_outline: ArchiveSymbol.info,
+    Icons.warning_amber_rounded: ArchiveSymbol.warning,
+    Icons.wifi: ArchiveSymbol.wifi,
+    Icons.wifi_off: ArchiveSymbol.wifiOff,
+    Icons.cloud_outlined: ArchiveSymbol.cloud,
+    Icons.language: ArchiveSymbol.globe,
+    Icons.smartphone: ArchiveSymbol.phone,
+    Icons.laptop_mac: ArchiveSymbol.laptop,
+    Icons.visibility_outlined: ArchiveSymbol.eye,
+    Icons.visibility_off_outlined: ArchiveSymbol.eyeOff,
+    Icons.cancel: ArchiveSymbol.closeCircle,
+    Icons.build_outlined: ArchiveSymbol.tools,
   });
 
-  static ArchiveSymbol? resolve(IconData? icon) => legacy[icon];
+  static ArchiveSymbol? resolve(IconData? icon) {
+    if (icon == null) return null;
+    final direct = legacy[icon];
+    if (direct != null) return direct;
+    if (icon == CupertinoIcons.checkmark ||
+        icon == CupertinoIcons.checkmark_alt) {
+      return ArchiveSymbol.check;
+    }
+    if (icon == CupertinoIcons.check_mark_circled_solid ||
+        icon == CupertinoIcons.circle_fill) {
+      return ArchiveSymbol.selected;
+    }
+    if (icon == CupertinoIcons.clear_circled_solid) {
+      return ArchiveSymbol.closeCircle;
+    }
+    if (icon == CupertinoIcons.exclamationmark_circle) {
+      return ArchiveSymbol.warning;
+    }
+    if (icon == CupertinoIcons.tag) {
+      return ArchiveSymbol.bookmark;
+    }
+    if (icon == CupertinoIcons.arrow_right_arrow_left_circle) {
+      return ArchiveSymbol.sync;
+    }
+    if (icon == CupertinoIcons.square_arrow_up ||
+        icon == CupertinoIcons.share) {
+      return ArchiveSymbol.share;
+    }
+    if (icon == CupertinoIcons.square_pencil ||
+        icon == CupertinoIcons.pencil_outline) {
+      return ArchiveSymbol.edit;
+    }
+    if (icon == CupertinoIcons.chart_bar) {
+      return ArchiveSymbol.sliders;
+    }
+    if (icon == CupertinoIcons.textformat_size ||
+        icon == CupertinoIcons.textformat_alt) {
+      return ArchiveSymbol.typography;
+    }
+    if (icon == CupertinoIcons.doc_text_search) {
+      return ArchiveSymbol.search;
+    }
+    if (icon == CupertinoIcons.chevron_up_circle) {
+      return ArchiveSymbol.up;
+    }
+    if (icon == CupertinoIcons.doc_on_clipboard) {
+      return ArchiveSymbol.importFile;
+    }
+    if (icon == CupertinoIcons.delete) {
+      return ArchiveSymbol.delete;
+    }
+    if (icon == CupertinoIcons.sparkles) {
+      return ArchiveSymbol.wand;
+    }
+    if (icon == CupertinoIcons.photo_on_rectangle) {
+      return ArchiveSymbol.image;
+    }
+    if (icon == CupertinoIcons.rectangle_on_rectangle) {
+      return ArchiveSymbol.layout;
+    }
+    if (icon == CupertinoIcons.arrow_down_circle) {
+      return ArchiveSymbol.download;
+    }
+    if (icon.fontPackage == 'cupertino_icons') {
+      return ArchiveSymbol.document;
+    }
+    return null;
+  }
 }
 
 /// A button lends its contact state to its icons. It doesn't add a gesture

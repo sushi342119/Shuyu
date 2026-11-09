@@ -641,8 +641,7 @@ class _ReaderAnnotationEditorState extends State<ReaderAnnotationEditor> {
               },
               optionName: (color) => color.name,
               enabled: !_saving,
-              leading: (color) => Icon(
-                CupertinoIcons.circle_fill,
+              leading: (color) => ArchiveIcon(CupertinoIcons.circle_fill,
                 size: 12,
                 color: readerMarkInk(color, scheme.onSurface, dark: dark),
               ),

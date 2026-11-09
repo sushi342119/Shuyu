@@ -545,13 +545,46 @@ class WebDavBookClient implements CloudBookClient {
     return uri;
   }
 
-  Map<String, String> _headers(Uri uri) => {
+  static Map<String, String> basicAuthHeaders(
+    Uri uri,
+    Uri base,
+    String username,
+    String password,
+  ) => {
     'User-Agent': 'Wenku8/0.3 WebDAV',
-    if (CloudHttp.sameOrigin(uri, config.endpoint) &&
-        (config.username.isNotEmpty || config.password.isNotEmpty))
+    if (CloudHttp.sameOrigin(uri, base) &&
+        (username.isNotEmpty || password.isNotEmpty))
       'Authorization':
-          'Basic ${base64Encode(utf8.encode('${config.username}:${config.password}'))}',
+          'Basic ${base64Encode(utf8.encode('$username:$password'))}',
   };
+
+  static const String propfindBody =
+      '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/><d:getcontentlength/></d:prop></d:propfind>';
+
+  static Iterable<(XmlElement responseNode, String href)> parseMultistatusHrefs(
+    String xmlText,
+  ) sync* {
+    final document = XmlDocument.parse(xmlText);
+    if (document.rootElement.name.local != 'multistatus') {
+      throw const CloudSourceFailure('该地址不是 WebDAV 服务，请检查 /dav/ 路径');
+    }
+    for (final node in document.rootElement.childElements.where(
+      (e) => e.name.local == 'response',
+    )) {
+      final href = node.childElements
+          .where((e) => e.name.local == 'href')
+          .firstOrNull
+          ?.innerText;
+      if (href != null) yield (node, href);
+    }
+  }
+
+  Map<String, String> _headers(Uri uri) => basicAuthHeaders(
+    uri,
+    config.endpoint,
+    config.username,
+    config.password,
+  );
   @override
   Future<CloudBookListing> list(String folder, {int page = 1}) async {
     final uri = _resource(folder);
@@ -564,24 +597,13 @@ class WebDavBookClient implements CloudBookClient {
         'Depth': '1',
         'Content-Type': 'application/xml; charset=utf-8',
       },
-      body: utf8.encode(
-        '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/><d:getcontentlength/></d:prop></d:propfind>',
-      ),
+      body: utf8.encode(propfindBody),
     );
-    final document = XmlDocument.parse(utf8.decode(await http.bytes(res)));
-    if (document.rootElement.name.local != 'multistatus') {
-      throw const CloudSourceFailure('该地址不是 WebDAV 服务，请检查 /dav/ 路径');
-    }
     final entries = <CloudBookEntry>[];
     final seen = <String>{};
-    for (final node in document.rootElement.childElements.where(
-      (e) => e.name.local == 'response',
+    for (final (node, href) in parseMultistatusHrefs(
+      utf8.decode(await http.bytes(res)),
     )) {
-      final href = node.childElements
-          .where((e) => e.name.local == 'href')
-          .firstOrNull
-          ?.innerText;
-      if (href == null) continue;
       Uri candidate;
       try {
         candidate = _resource(uri.resolve(href).toString());

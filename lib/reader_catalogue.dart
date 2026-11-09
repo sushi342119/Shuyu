@@ -651,7 +651,7 @@ class _ReaderMarksSheetState extends State<ReaderMarksSheet> {
                         key: ValueKey('reader-mark-copy-${mark.id}'),
                         tooltip: '复制',
                         visualDensity: VisualDensity.compact,
-                        icon: const Icon(CupertinoIcons.doc_on_doc, size: 17),
+                        icon: const ArchiveIcon(CupertinoIcons.doc_on_doc, size: 17),
                         onPressed: () async {
                           await Clipboard.setData(ClipboardData(text: quote));
                           if (context.mounted) {
@@ -664,14 +664,14 @@ class _ReaderMarksSheetState extends State<ReaderMarksSheet> {
                         key: ValueKey('reader-mark-edit-${mark.id}'),
                         tooltip: '批注',
                         visualDensity: VisualDensity.compact,
-                        icon: const Icon(CupertinoIcons.pencil, size: 17),
+                        icon: const ArchiveIcon(CupertinoIcons.pencil, size: 17),
                         onPressed: () => widget.onEditMark!(mark),
                       ),
                     IconButton(
                       key: ValueKey('reader-mark-delete-${mark.id}'),
                       tooltip: '删除',
                       visualDensity: VisualDensity.compact,
-                      icon: const Icon(CupertinoIcons.trash, size: 17),
+                      icon: const ArchiveIcon(CupertinoIcons.trash, size: 17),
                       onPressed: () async {
                         await widget.state.removeBookmark(
                           widget.novel.id,

@@ -451,8 +451,7 @@ class _LanBookshelfSheet extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(
-                    CupertinoIcons.wifi,
+                  ArchiveIcon(CupertinoIcons.wifi,
                     color: running ? scheme.primary : scheme.onSurfaceVariant,
                   ),
                   const SizedBox(width: 10),

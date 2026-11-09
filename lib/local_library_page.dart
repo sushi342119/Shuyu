@@ -274,7 +274,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             onTap: isScanning || _picking ? null : _pickFolder,
             child: Row(
               children: [
-                const Icon(CupertinoIcons.folder, size: 21),
+                const ArchiveIcon(CupertinoIcons.folder, size: 21),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -295,7 +295,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                     ],
                   ),
                 ),
-                const Icon(CupertinoIcons.chevron_right, size: 14),
+                const ArchiveIcon(CupertinoIcons.chevron_right, size: 14),
               ],
             ),
           ),

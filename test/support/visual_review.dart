@@ -15,10 +15,6 @@ Future<void> loadReviewFonts() async {
       family,
     )..addFont(Future.value(ByteData.sublistView(bytes)))).load();
   }
-  await (FontLoader('packages/cupertino_icons/CupertinoIcons')..addFont(
-        rootBundle.load('packages/cupertino_icons/assets/CupertinoIcons.ttf'),
-      ))
-      .load();
 }
 
 Future<void> captureReview(

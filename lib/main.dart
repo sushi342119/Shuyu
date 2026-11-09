@@ -69,62 +69,49 @@ Future<T> _requiredStartup<T>(
   }
 }
 
+Future<T?> _safeStartup<T>(
+  String item,
+  FutureOr<T> Function() action,
+) async {
+  try {
+    return await action();
+  } catch (error, stackTrace) {
+    if (kDebugMode) {
+      debugPrint('$item init failed: $error\n$stackTrace');
+    }
+    return null;
+  }
+}
+
 Future<void> main() async {
   final binding = WidgetsFlutterBinding.ensureInitialized();
   try {
-    try {
-      registerAppLicenses();
-    } catch (e) {
-      if (kDebugMode) debugPrint('registerAppLicenses failed: $e');
-    }
-    try {
-      TouchSamplingPolicy(binding);
-    } catch (e) {
-      if (kDebugMode) debugPrint('TouchSamplingPolicy failed: $e');
-    }
+    await _safeStartup('registerAppLicenses', registerAppLicenses);
+    await _safeStartup('TouchSamplingPolicy', () => TouchSamplingPolicy(binding));
     unawaited(
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge).catchError(
-        (Object e) {
-          if (kDebugMode) debugPrint('setEnabledSystemUIMode failed: $e');
-        },
+      _safeStartup(
+        'setEnabledSystemUIMode',
+        () => SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge),
       ),
     );
     final state = await _requiredStartup('本地阅读状态', LibraryState.load);
     if (state.appPalette.source == AppPaletteSource.system ||
         !state.appPalette.themedIcon) {
-      try {
-        await state.refreshSystemPalette();
-      } catch (e) {
-        if (kDebugMode) debugPrint('refreshSystemPalette failed: $e');
-      }
+      await _safeStartup('refreshSystemPalette', state.refreshSystemPalette);
     }
-    try {
-      await TagStore.load();
-    } catch (e) {
-      if (kDebugMode) debugPrint('TagStore.load failed: $e');
-    }
-    try {
-      await state.loadFonts();
-    } catch (e) {
-      if (kDebugMode) debugPrint('state.loadFonts failed: $e');
-    }
+    await _safeStartup('TagStore.load', TagStore.load);
+    await _safeStartup('state.loadFonts', state.loadFonts);
     // Automatic glass tier: RAM ≤ 4 GB or Android ≤ 10 starts on 轻. A failed
     // query keeps 标准; the user can always pick a tier by hand.
     if (defaultTargetPlatform == TargetPlatform.android) {
-      try {
+      await _safeStartup('LocalPlatform.deviceProfile', () async {
         state.setDeviceProfile(
           DeviceProfile.fromMap(await LocalPlatform.deviceProfile()),
         );
-      } catch (e) {
-        if (kDebugMode) debugPrint('LocalPlatform.deviceProfile failed: $e');
-      }
+      });
     }
     if (state.effectivePerformance.needsRuntimeEffects) {
-      try {
-        await NativeEffects.prepare();
-      } catch (e) {
-        if (kDebugMode) debugPrint('NativeEffects.prepare failed: $e');
-      }
+      await _safeStartup('NativeEffects.prepare', NativeEffects.prepare);
     }
     final brightness = switch (state.theme) {
       ThemeMode.light => Brightness.light,
@@ -132,26 +119,23 @@ Future<void> main() async {
       ThemeMode.system =>
         WidgetsBinding.instance.platformDispatcher.platformBrightness,
     };
-    try {
-      SystemChrome.setSystemUIOverlayStyle(novelSystemUiStyle(brightness));
-    } catch (e) {
-      if (kDebugMode) debugPrint('setSystemUIOverlayStyle failed: $e');
-    }
+    await _safeStartup(
+      'setSystemUIOverlayStyle',
+      () => SystemChrome.setSystemUIOverlayStyle(novelSystemUiStyle(brightness)),
+    );
     final remote = LegacyWenkuRepository();
     final NovelRepository repository;
     if (defaultTargetPlatform == TargetPlatform.android) {
       final local = await _requiredStartup('本地书库', LocalLibraryStore.load);
-      NovelRepository remoteRepository = remote;
-      try {
-        remoteRepository = OfflineNovelRepository(
-          remote: remote,
-          cache: await OfflineCacheStore.forApp(),
-        );
-      } catch (e, st) {
-        if (kDebugMode) {
-          debugPrint('OfflineNovelRepository init failed, falling back to remote: $e\n$st');
-        }
-      }
+      final remoteRepository =
+          await _safeStartup<NovelRepository>(
+            'OfflineNovelRepository',
+            () async => OfflineNovelRepository(
+              remote: remote,
+              cache: await OfflineCacheStore.forApp(),
+            ),
+          ) ??
+          remote;
       repository = CompositeNovelRepository(
         local: local,
         remote: remoteRepository,
@@ -162,29 +146,26 @@ Future<void> main() async {
     if (repository is CompositeNovelRepository) {
       state.bindLocalChapters(repository.local);
     }
-    ListeningController? listening;
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      try {
-        listening = ListeningController(
-          repository: repository,
-          audio: await SpeechAudioCache.forApp(),
-          store: ListeningStore(await SharedPreferences.getInstance()),
-          outputFactory: createListeningOutput,
-        );
-      } catch (e) {
-        if (kDebugMode) debugPrint('ListeningController init failed: $e');
-      }
-    }
-    AppUpdates? updates;
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      try {
-        updates = AppUpdates(
-          preferences: await SharedPreferences.getInstance(),
-        );
-      } catch (e) {
-        if (kDebugMode) debugPrint('AppUpdates init failed: $e');
-      }
-    }
+    final isAndroid = defaultTargetPlatform == TargetPlatform.android;
+    final listening = isAndroid
+        ? await _safeStartup(
+            'ListeningController',
+            () async => ListeningController(
+              repository: repository,
+              audio: await SpeechAudioCache.forApp(),
+              store: ListeningStore(await SharedPreferences.getInstance()),
+              outputFactory: createListeningOutput,
+            ),
+          )
+        : null;
+    final updates = isAndroid
+        ? await _safeStartup(
+            'AppUpdates',
+            () async => AppUpdates(
+              preferences: await SharedPreferences.getInstance(),
+            ),
+          )
+        : null;
     runApp(
       NovelApp(
         state: state,
@@ -195,9 +176,10 @@ Future<void> main() async {
     );
     if (listening != null) {
       unawaited(
-        prepareListeningService(listening).catchError((Object e) {
-          if (kDebugMode) debugPrint('prepareListeningService failed: $e');
-        }),
+        _safeStartup(
+          'prepareListeningService',
+          () => prepareListeningService(listening),
+        ),
       );
     }
   } catch (error, stackTrace) {

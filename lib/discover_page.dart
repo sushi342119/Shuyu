@@ -639,7 +639,7 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
 
   Widget _searchField(BuildContext context) => Row(
     children: [
-      const SizedBox(width: 46, child: Icon(CupertinoIcons.search, size: 21)),
+      const SizedBox(width: 46, child: ArchiveIcon(CupertinoIcons.search, size: 21)),
       Expanded(
         child: ValueListenableBuilder<TextEditingValue>(
           valueListenable: _searchText,
@@ -662,8 +662,7 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                   ? null
                   : IconButton(
                       tooltip: '清空搜索',
-                      icon: const Icon(
-                        CupertinoIcons.xmark_circle_fill,
+                      icon: const ArchiveIcon(CupertinoIcons.xmark_circle_fill,
                         size: 17,
                       ),
                       onPressed: _searchText.clear,
@@ -679,7 +678,7 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
           key: const ValueKey('inline-search-close'),
           tooltip: '收起搜索',
           onPressed: _closeSearch,
-          icon: const Icon(CupertinoIcons.xmark, size: 17),
+          icon: const ArchiveIcon(CupertinoIcons.xmark, size: 17),
         ),
       ),
     ],
@@ -1328,7 +1327,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
                         ),
                         minimumSize: const Size(0, 32),
                       ),
-                      icon: const Icon(CupertinoIcons.chart_bar, size: 15),
+                      icon: const ArchiveIcon(CupertinoIcons.chart_bar, size: 15),
                       label: const Text(
                         '阅读统计',
                         style: TextStyle(fontSize: 12),
@@ -2131,7 +2130,7 @@ class NovelRow extends StatelessWidget {
               ],
             ),
           ),
-          trailing ?? const Icon(CupertinoIcons.chevron_right, size: 15),
+          trailing ?? const ArchiveIcon(CupertinoIcons.chevron_right, size: 15),
         ],
       ),
     ),
