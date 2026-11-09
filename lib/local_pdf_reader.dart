@@ -7,7 +7,6 @@ import 'package:flutter/services.dart';
 
 import 'app_interactions.dart';
 import 'app_ui.dart';
-import 'reader_chrome.dart';
 import 'reader_skeleton.dart';
 import 'catalog.dart';
 import 'library_state.dart';
@@ -346,76 +345,35 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
         final invert = darkPaper && widget.state.pdfNightInvert;
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: novelSystemUiStyle(theme.brightness),
-          child: Scaffold(
+          child: ReaderScaffold(
+            chrome: _chrome,
+            novelId: widget.novel.id,
+            title: widget.novel.title,
+            bookmarkListenable: widget.state.bookmarkChanges,
+            isBookmarked: () => _pageBookmarks().isNotEmpty,
+            onAddBookmark: count == 0 ? null : _addBookmark,
+            actions: _actions(),
+            progress: count > 1 ? _pageSlider(context, count) : null,
+            useAtmosphere: false,
+            blurBottom: false,
+            bottomMaxWidth: 520,
             backgroundColor: theme.colorScheme.surface,
-            body: Stack(
-              children: [
-                Positioned.fill(
-                  child: count == 0
-                      ? Center(
-                          child: Text(
-                            '无法读取该 PDF',
-                            style: TextStyle(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        )
-                      : GestureDetector(
-                          key: const ValueKey('reader-content-tap'),
-                          behavior: HitTestBehavior.translucent,
-                          onTap: _toggleChrome,
-                          child: _pageView(context, count, invert),
-                        ),
-                ),
-                Positioned.fill(child: ReaderEdgeBlur(animation: _chrome, blurBottom: false)),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: ReaderTopBar(
-                    chrome: _chrome,
-                    novelId: widget.novel.id,
-                    title: widget.novel.title,
-                    bookmarkListenable: widget.state.bookmarkChanges,
-                    isBookmarked: () => _pageBookmarks().isNotEmpty,
-                    onAddBookmark: count == 0 ? null : _addBookmark,
-                  ),
-                ),
-                Align(
-                  alignment: Alignment.bottomCenter,
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      22 + MediaQuery.paddingOf(context).left,
-                      0,
-                      22 + MediaQuery.paddingOf(context).right,
-                      MediaQuery.paddingOf(context).bottom + 12,
-                    ),
-                    child: ReaderChromeLayer(
-                      key: const ValueKey('reader-chrome-dock'),
-                      animation: _chrome,
-                      slide: const Offset(0, 8),
-                      fadeOffset: const Offset(0, 12),
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 520),
-                        child: ReaderBottomPanel(
-                          actions: _actions(),
-                          progress: count > 1 ? _pageSlider(context, count) : null,
-                        ),
+            statusText: count == 0 ? '' : '第 ${_page + 1} / $count 页',
+            body: count == 0
+                ? Center(
+                    child: Text(
+                      '无法读取该 PDF',
+                      style: TextStyle(
+                        color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
+                  )
+                : GestureDetector(
+                    key: const ValueKey('reader-content-tap'),
+                    behavior: HitTestBehavior.translucent,
+                    onTap: _toggleChrome,
+                    child: _pageView(context, count, invert),
                   ),
-                ),
-                Positioned(
-                  left: 24,
-                  right: 24,
-                  bottom: MediaQuery.paddingOf(context).bottom + 6,
-                  child: ReaderStatusLine(
-                    chrome: _chrome,
-                    text: count == 0 ? '' : '第 ${_page + 1} / $count 页',
-                  ),
-                ),
-              ],
-            ),
           ),
         );
       },

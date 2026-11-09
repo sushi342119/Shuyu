@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_ui.dart';
 import 'cloud_sources.dart';
+import 'webdav_transport.dart';
 
 const String _webDavConfigStorageKey = 'webdav.backup.config.v1';
 const String _webDavPasswordKeystoreKey = 'webdav.backup.password.v1';
@@ -253,132 +254,93 @@ class WebDavBackupConfig {
   }
 }
 
-/// WebDAV backup client reusing [CloudHttp] and [WebDavBookClient] XML/Auth helpers.
+/// WebDAV backup client sharing [WebDavTransport] with [WebDavBookClient].
 class WebDavBackupClient {
   const WebDavBackupClient(this.config);
 
   final WebDavBackupConfig config;
   static const int maxResponseBytes = 32 * 1024 * 1024;
 
-  Uri _requireFolder() {
+  Future<T> _withTransport<T>(
+    Future<T> Function(WebDavTransport transport, Uri folder) action,
+  ) async {
     if (!config.isConfigured) {
       throw const FormatException('请先填写完整的 WebDAV 地址、账号与密码');
     }
     config.validateServerUrl();
     final folder = config.folderUri();
     if (folder == null) throw const FormatException('WebDAV 服务器地址或远程目录格式无效');
-    return folder;
-  }
-
-  Map<String, String> _headers(Uri uri, Uri base, [Map<String, String>? extra]) => {
-    ...WebDavBookClient.basicAuthHeaders(
-      uri,
-      base,
-      config.username.trim(),
-      config.password,
-    ),
-    ...?extra,
-  };
-
-  Future<T> _withCloudHttp<T>(Future<T> Function(CloudHttp http, Uri folder) action) async {
-    final folder = _requireFolder();
-    final http = CloudHttp();
+    final transport = WebDavTransport(
+      endpoint: folder,
+      username: config.username.trim(),
+      password: config.password,
+    );
     try {
-      return await action(http, folder);
+      return await action(transport, folder);
     } on CloudSourceFailure catch (e) {
       throw FormatException(e.message);
     } finally {
-      http.close();
+      transport.close();
     }
   }
 
-  Future<void> _ensureFolder(CloudHttp http, Uri folder) async {
-    final res = await http.request(
-      'MKCOL',
-      folder,
-      headers: (u) => _headers(u, folder),
-      redirects: true,
-      allowedStatuses: const {200, 201, 301, 405},
-      authenticationMessage: 'WebDAV 账号或应用密码认证失败（401/403）',
-    );
-    await res.drain<void>();
-  }
-
-  Future<String> uploadBackup(String jsonText) => _withCloudHttp((http, folder) async {
-    await _ensureFolder(http, folder);
-    final date = DateTime.now().toIso8601String().substring(0, 10);
-    final datedFile = 'shuyu-backup-$date.json';
-    final payload = utf8.encode(jsonText);
-    for (final name in [datedFile, 'shuyu-backup-latest.json']) {
-      final uri = config.fileUri(name);
-      if (uri == null) throw const FormatException('WebDAV 目标路径无效');
-      final res = await http.request(
-        'PUT',
-        uri,
-        headers: (u) => _headers(
-          u,
-          folder,
-          const {'Content-Type': 'application/json; charset=utf-8'},
-        ),
-        body: payload,
-        redirects: true,
-      );
-      await res.drain<void>();
-    }
-    return datedFile;
-  });
-
-  Future<List<String>> listBackups() => _withCloudHttp((http, folder) async {
-    await _ensureFolder(http, folder);
-    final res = await http.request(
-      'PROPFIND',
-      folder,
-      headers: (u) => _headers(
-        u,
+  Future<void> _ensureFolder(WebDavTransport transport, Uri folder) =>
+      transport.mkcol(
         folder,
-        const {'Depth': '1', 'Content-Type': 'application/xml; charset=utf-8'},
-      ),
-      body: utf8.encode(WebDavBookClient.propfindBody),
-      redirects: true,
-    );
-    final xml = utf8.decode(
-      await http.bytes(res, limit: maxResponseBytes),
-      allowMalformed: true,
-    );
-    final files = <String>{};
-    for (final (_, href) in WebDavBookClient.parseMultistatusHrefs(xml)) {
-      String decoded;
-      try {
-        decoded = Uri.decodeFull(href.trim());
-      } on ArgumentError {
-        continue;
-      }
-      final parts = decoded.split('/').where((s) => s.isNotEmpty).toList();
-      if (parts.isEmpty) continue;
-      final last = parts.last;
-      if (last.toLowerCase().endsWith('.json') &&
-          !WebDavBackupConfig._hasInvalidSegments([last])) {
-        files.add(last);
-      }
-    }
-    return files.toList()..sort((a, b) => b.compareTo(a));
-  });
+        authenticationMessage: 'WebDAV 账号或应用密码认证失败（401/403）',
+      );
+
+  Future<String> uploadBackup(String jsonText) =>
+      _withTransport((transport, folder) async {
+        await _ensureFolder(transport, folder);
+        final date = DateTime.now().toIso8601String().substring(0, 10);
+        final datedFile = 'shuyu-backup-$date.json';
+        final payload = utf8.encode(jsonText);
+        for (final name in [datedFile, 'shuyu-backup-latest.json']) {
+          final uri = config.fileUri(name);
+          if (uri == null) throw const FormatException('WebDAV 目标路径无效');
+          await transport.putBytes(
+            uri,
+            payload,
+            contentType: 'application/json; charset=utf-8',
+          );
+        }
+        return datedFile;
+      });
+
+  Future<List<String>> listBackups() =>
+      _withTransport((transport, folder) async {
+        await _ensureFolder(transport, folder);
+        final files = <String>{};
+        for (final (_, href) in await transport.propfind(
+          folder,
+          redirects: true,
+          maxBytes: maxResponseBytes,
+        )) {
+          String decoded;
+          try {
+            decoded = Uri.decodeFull(href.trim());
+          } on ArgumentError {
+            continue;
+          }
+          final parts = decoded.split('/').where((s) => s.isNotEmpty).toList();
+          if (parts.isEmpty) continue;
+          final last = parts.last;
+          if (last.toLowerCase().endsWith('.json') &&
+              !WebDavBackupConfig._hasInvalidSegments([last])) {
+            files.add(last);
+          }
+        }
+        return files.toList()..sort((a, b) => b.compareTo(a));
+      });
 
   Future<String> downloadBackup([
     String fileName = 'shuyu-backup-latest.json',
-  ]) => _withCloudHttp((http, folder) async {
+  ]) => _withTransport((transport, _) async {
     final uri = config.fileUri(fileName);
     if (uri == null) throw const FormatException('WebDAV 目标路径无效');
-    final res = await http.request(
-      'GET',
-      uri,
-      headers: (u) => _headers(u, folder),
-      redirects: true,
-    );
-    return utf8.decode(
-      await http.bytes(res, limit: maxResponseBytes),
-      allowMalformed: true,
-    );
+    final bytes = await transport.getBytes(uri, maxBytes: maxResponseBytes);
+    return utf8.decode(bytes, allowMalformed: true);
   });
 }
 

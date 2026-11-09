@@ -2,11 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../http_download.dart';
 
 const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
@@ -213,14 +214,6 @@ class AndroidUpdatePlatform implements UpdatePlatform {
 
 class UpdateCancelled implements Exception {}
 
-class _DigestSink implements Sink<Digest> {
-  Digest? value;
-  @override
-  void add(Digest data) => value = data;
-  @override
-  void close() {}
-}
-
 class UpdateDownload {
   bool cancelled = false;
   HttpClient? _client;
@@ -275,11 +268,12 @@ class GithubUpdateSource implements UpdateSource {
       if (response.statusCode != 200) {
         throw HttpException('GitHub ${response.statusCode}');
       }
-      final data = <int>[];
-      await for (final chunk in response.timeout(const Duration(seconds: 20))) {
-        data.addAll(chunk);
-        if (data.length > 1024 * 1024) throw const FormatException('版本说明过大');
-      }
+      final data = await HttpDownload.readBytes(
+        response,
+        maxBytes: 1024 * 1024,
+        streamTimeout: const Duration(seconds: 20),
+        onLimitExceeded: () => const FormatException('版本说明过大'),
+      );
       return AppRelease.fromGithub(
         jsonDecode(utf8.decode(data)) as Map<String, dynamic>,
         repository,
@@ -299,71 +293,49 @@ class GithubUpdateSource implements UpdateSource {
     final client = _clientFactory()
       ..connectionTimeout = const Duration(seconds: 15);
     task._client = client;
-    IOSink? sink;
     try {
-      var url = asset.url;
-      HttpClientResponse? response;
-      for (var hop = 0; hop < 6; hop++) {
-        task.check();
-        if (url.scheme != 'https' ||
-            url.userInfo.isNotEmpty ||
-            url.port != 443 ||
-            !const {
-              'github.com',
-              'release-assets.githubusercontent.com',
-              'objects.githubusercontent.com',
-            }.contains(url.host)) {
-          throw const FormatException('安装包下载地址无效');
-        }
-        final request = await client.getUrl(url);
-        request.followRedirects = false;
-        final candidate = await request.close().timeout(
-          const Duration(seconds: 30),
-        );
-        if (const [301, 302, 303, 307, 308].contains(candidate.statusCode)) {
-          final location = candidate.headers.value(HttpHeaders.locationHeader);
+      final response = await HttpDownload.getResponse(
+        client,
+        asset.url,
+        maxRedirects: 5,
+        requestTimeout: const Duration(seconds: 30),
+        responseTimeout: const Duration(seconds: 30),
+        checkCancelled: task.check,
+        validateUrl: (url) {
+          if (url.scheme != 'https' ||
+              url.userInfo.isNotEmpty ||
+              url.port != 443 ||
+              !const {
+                'github.com',
+                'release-assets.githubusercontent.com',
+                'objects.githubusercontent.com',
+              }.contains(url.host)) {
+            throw const FormatException('安装包下载地址无效');
+          }
+        },
+        resolveRedirect: (current, location, _) {
           if (location == null) throw const FormatException('下载重定向无效');
-          url = url.resolve(location);
-          await candidate.drain<void>();
-          continue;
-        }
-        response = candidate;
-        break;
-      }
-      if (response == null || response.statusCode != 200) {
-        throw const HttpException('安装包下载失败');
-      }
-      sink = file.openWrite();
-      var count = 0;
-      final digest = _DigestSink();
-      final hashing = asset.digest == null
-          ? null
-          : sha256.startChunkedConversion(digest);
-      await for (final chunk in response.timeout(const Duration(seconds: 30))) {
-        task.check();
-        count += chunk.length;
-        if (count > asset.size) throw const FormatException('安装包大小不匹配');
-        hashing?.add(chunk);
-        sink.add(chunk);
-        progress(count);
-      }
-      hashing?.close();
-      await sink.flush();
-      task.check();
-      if (count != asset.size ||
-          (asset.digest != null && digest.value.toString() != asset.digest)) {
-        throw const FormatException('安装包校验失败，请重新下载');
-      }
-      await sink.close();
-      sink = null;
+          return current.resolve(location);
+        },
+        onStatusError: (_) => const HttpException('安装包下载失败'),
+        onTooManyRedirects: () => const HttpException('安装包下载失败'),
+      );
+      await HttpDownload.streamToFile(
+        response,
+        file,
+        expectedBytes: asset.size,
+        expectedSha256: asset.digest,
+        streamTimeout: const Duration(seconds: 30),
+        checkCancelled: task.check,
+        onProgress: (count, _) => progress(count),
+        onContentLengthMismatch: () => const FormatException('安装包大小不匹配'),
+        onLimitExceeded: () => const FormatException('安装包大小不匹配'),
+        onIncomplete: () => const FormatException('安装包校验失败，请重新下载'),
+        onDigestMismatch: () => const FormatException('安装包校验失败，请重新下载'),
+      );
     } finally {
-      try {
-        await sink?.close();
-      } catch (_) {
-      } finally {
-        client.close(force: true);
-        task._client = null;
-      }
+      client.close(force: true);
+      task._client = null;
     }
   }
 }

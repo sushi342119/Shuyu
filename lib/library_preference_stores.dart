@@ -1,22 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_palette.dart';
 import 'app_typography.dart';
-import 'font_catalog.dart';
 import 'haptic_preferences.dart';
 import 'library_backup.dart';
 import 'performance_preferences.dart';
 import 'reader_preferences.dart';
 import 'ui_preferences.dart';
-
-const _maxImportedFontBytes = 100 * 1024 * 1024;
+import 'user_fonts.dart';
 
 double _readClampedPreference(
   SharedPreferences prefs,
@@ -44,11 +39,8 @@ class ReaderSettingsPreferenceStore {
   bool pdfNightInvert = true;
   ReaderPreferences readerPreferences = const ReaderPreferences();
   String appFontId = appFontSystem.id;
-  final List<AppFontEntry> importedFonts = [];
-  final Set<String> loadedFontFamilies = {};
-  final Map<String, Future<bool>> fontLoadInflight = {};
 
-  void load() {
+  void load({UserFontStore? fonts}) {
     fontSize = _readClampedPreference(
       _prefs,
       'readerFontSize',
@@ -56,13 +48,19 @@ class ReaderSettingsPreferenceStore {
       readerFontSizeMin,
       readerFontSizeMax,
     );
-    lineHeight = _readClampedPreference(_prefs, 'readerLineHeight', 1.72, 1.3, 2.2);
+    lineHeight = _readClampedPreference(
+      _prefs,
+      'readerLineHeight',
+      1.72,
+      1.3,
+      2.2,
+    );
     readerTypeface = switch (_prefs.get('readerTypeface')) {
       final String value when value.isNotEmpty => value,
       _ => followAppFont,
     };
     keepScreenOn = _prefs.get('readerKeepScreenOn') == true;
-    loadFontState();
+    loadFontState(fonts: fonts);
     loadUiPreferences();
   }
 
@@ -74,7 +72,7 @@ class ReaderSettingsPreferenceStore {
         : ReaderPreferences.fromRecord(reader);
   }
 
-  void loadFontState() {
+  void loadFontState({UserFontStore? fonts}) {
     final rawId = _prefs.getString('appFontId');
     if (rawId != null && rawId.isNotEmpty) {
       appFontId = rawId;
@@ -85,30 +83,9 @@ class ReaderSettingsPreferenceStore {
           : appFontSystem.id;
       unawaited(persistMigratedFontId());
     }
-    importedFonts.clear();
-    final rawList = _prefs.getString('importedFonts');
-    if (rawList != null && rawList.isNotEmpty) {
-      try {
-        final list = jsonDecode(rawList);
-        if (list is List) {
-          for (final item in list) {
-            if (item is Map<String, Object?>) {
-              try {
-                final entry = AppFontEntry.fromJson(item);
-                if (entry.id.isNotEmpty &&
-                    entry.source == AppFontSource.imported &&
-                    entry.family != null) {
-                  importedFonts.add(entry);
-                }
-              } on FormatException catch (_) {}
-            }
-          }
-        }
-      } catch (_) {}
-    }
     if (appFontId != appFontSystem.id &&
         appFontId != appFontSourceHanSerif.id &&
-        !importedFonts.any((f) => f.id == appFontId) &&
+        !(fonts?.available(appFontId) ?? false) &&
         !validFontChoice(appFontId)) {
       appFontId = appFontSystem.id;
     }
@@ -120,160 +97,7 @@ class ReaderSettingsPreferenceStore {
     } catch (_) {}
   }
 
-  Future<void> persistFontState() async {
-    await _prefs.setString('appFontId', appFontId);
-    await _prefs.setString(
-      'importedFonts',
-      jsonEncode(importedFonts.map((f) => f.toJson()).toList()),
-    );
-  }
-
-  Future<bool> loadImportedEntry(AppFontEntry entry) {
-    final family = entry.family;
-    final path = entry.filePath;
-    if (family == null || path == null) return Future.value(false);
-    if (loadedFontFamilies.contains(family)) return Future.value(true);
-    final inflight = fontLoadInflight[family];
-    if (inflight != null) return inflight;
-    late final Future<bool> task;
-    task = _doLoadImportedFont(family, path).then(
-      (ok) {
-        if (identical(fontLoadInflight[family], task)) {
-          fontLoadInflight.remove(family);
-        }
-        if (ok) loadedFontFamilies.add(family);
-        return ok;
-      },
-      onError: (Object _) {
-        if (identical(fontLoadInflight[family], task)) {
-          fontLoadInflight.remove(family);
-        }
-        return false;
-      },
-    );
-    fontLoadInflight[family] = task;
-    return task;
-  }
-
-  Future<bool> _doLoadImportedFont(String family, String path) async {
-    try {
-      final file = File(path);
-      if (!await isPrivateFontFile(file) ||
-          await file.length() > _maxImportedFontBytes) {
-        return false;
-      }
-      final bytes = await file.readAsBytes();
-      if (!hasSupportedFontSignature(bytes)) return false;
-      final loader = FontLoader(family);
-      loader.addFont(Future.value(ByteData.view(bytes.buffer)));
-      await loader.load();
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  Future<bool> isPrivateFontFile(File file) async {
-    try {
-      final support = await getApplicationSupportDirectory();
-      final fonts = Directory('${support.path}${Platform.pathSeparator}fonts');
-      final root = await fonts.resolveSymbolicLinks();
-      final actual = await file.resolveSymbolicLinks();
-      final separator = Platform.pathSeparator;
-      return actual != root && actual.startsWith('$root$separator');
-    } catch (_) {
-      return false;
-    }
-  }
-
-  bool hasSupportedFontSignature(Uint8List bytes) {
-    if (bytes.length < 12 || bytes.length > _maxImportedFontBytes) return false;
-    final data = ByteData.sublistView(bytes);
-    final signature = data.getUint32(0);
-    if (signature != 0x4f54544f && signature != 0x00010000) return false;
-    final count = data.getUint16(4);
-    final directoryEnd = 12 + count * 16;
-    if (count == 0 || count > 64 || directoryEnd > bytes.length) return false;
-    final tables = <String>{};
-    for (var index = 0; index < count; index++) {
-      final record = 12 + index * 16;
-      final tag = String.fromCharCodes(bytes.sublist(record, record + 4));
-      final offset = data.getUint32(record + 8);
-      final length = data.getUint32(record + 12);
-      if (!tables.add(tag) ||
-          offset < directoryEnd ||
-          offset + length > bytes.length ||
-          (const {'head', 'name', 'maxp'}.contains(tag) && length == 0)) {
-        return false;
-      }
-    }
-    return tables.containsAll(const {'head', 'name', 'maxp'});
-  }
-
-  Future<void> preloadImportedFonts() async {
-    final snapshot = List.of(importedFonts);
-    for (final entry in snapshot) {
-      try {
-        await loadImportedEntry(entry);
-      } catch (_) {}
-    }
-  }
-
-  Future<String> registerImportedFont(
-    String filePath,
-    String displayName,
-  ) async {
-    final file = File(filePath);
-    if (!await isPrivateFontFile(file)) {
-      throw StateError('字体文件不在应用字体目录内');
-    }
-    final id =
-        'imported_${DateTime.now().millisecondsSinceEpoch}_${filePath.hashCode.abs()}';
-    final entry = AppFontEntry(
-      id: id,
-      displayName: displayName.isEmpty ? '导入字体' : displayName,
-      family: 'user_font_$id',
-      source: AppFontSource.imported,
-      filePath: filePath,
-    );
-    var loadedOk = false;
-    try {
-      loadedOk = await loadImportedEntry(entry);
-    } catch (_) {
-      loadedOk = false;
-    }
-    if (!loadedOk) {
-      try {
-        await file.delete();
-      } catch (_) {}
-      loadedFontFamilies.remove(entry.family);
-      fontLoadInflight.remove(entry.family);
-      throw StateError('字体文件无效或已损坏');
-    }
-    importedFonts.add(entry);
-    await persistFontState();
-    return id;
-  }
-
-  Future<bool> removeImportedFont(String id) async {
-    final index = importedFonts.indexWhere((f) => f.id == id);
-    if (index < 0) return false;
-    final entry = importedFonts.removeAt(index);
-    loadedFontFamilies.remove(entry.family);
-    fontLoadInflight.remove(entry.family);
-    try {
-      final path = entry.filePath;
-      if (path != null) {
-        final file = File(path);
-        if (await isPrivateFontFile(file) && await file.exists()) {
-          await file.delete();
-        }
-      }
-    } catch (_) {}
-    if (appFontId == id) appFontId = appFontSystem.id;
-    await persistFontState();
-    return true;
-  }
+  Future<void> persistFontState() => _prefs.setString('appFontId', appFontId);
 
   Future<void> writeTypography({
     double? fontSize,

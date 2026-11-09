@@ -815,173 +815,122 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
   ];
 
   Widget _readerScaffold(BuildContext context) {
-    return Scaffold(
-      resizeToAvoidBottomInset: false,
-      body: Atmosphere(
-        shareGlass: true,
-        archiveBackdrop: false,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: ReaderSelection(
-                controller: _selection,
-                onUnderline: _toggleSelectionUnderline,
-                isUnderlined: _isSelectionUnderlined,
-                onAnnotate: _annotateSelection,
-                onBookmark: _bookmarkSelection,
-                isBookmarked: _isSelectionBookmarked,
-                child: GestureDetector(
-                  key: const ValueKey('reader-content-tap'),
-                  behavior: HitTestBehavior.translucent,
-                  onTapUp: _tapContent,
-                  child: ColoredBox(
-                    color: Theme.of(context).colorScheme.surface,
-                    child: _total == 0
-                        ? _message('暂无章节')
-                        : AnimatedBuilder(
-                            animation: Listenable.merge([
-                              widget.state.readerSettingsChanges,
-                              ReaderPurificationStore.shared,
-                            ]),
-                            builder: (context, _) => _content(context),
-                          ),
+    return ReaderScaffold(
+      chrome: _chrome,
+      novelId: _novel.id,
+      title: _novel.title,
+      bookmarkListenable: widget.state.bookmarkChanges,
+      isBookmarked: () => _chapterBookmarks().isNotEmpty,
+      onAddBookmark: _total == 0 ? null : _quickAddBookmark,
+      actions: _readerActions(),
+      body: ReaderSelection(
+        controller: _selection,
+        onUnderline: _toggleSelectionUnderline,
+        isUnderlined: _isSelectionUnderlined,
+        onAnnotate: _annotateSelection,
+        onBookmark: _bookmarkSelection,
+        isBookmarked: _isSelectionBookmarked,
+        child: GestureDetector(
+          key: const ValueKey('reader-content-tap'),
+          behavior: HitTestBehavior.translucent,
+          onTapUp: _tapContent,
+          child: ColoredBox(
+            color: Theme.of(context).colorScheme.surface,
+            child: _total == 0
+                ? _message('暂无章节')
+                : AnimatedBuilder(
+                    animation: Listenable.merge([
+                      widget.state.readerSettingsChanges,
+                      ReaderPurificationStore.shared,
+                    ]),
+                    builder: (context, _) => _content(context),
                   ),
-                ),
-              ),
-            ),
-            Positioned.fill(
-              child: ReaderEdgeBlur(animation: _chrome),
-            ),
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: ReaderTopBar(
-                chrome: _chrome,
-                novelId: _novel.id,
-                title: _novel.title,
-                bookmarkListenable: widget.state.bookmarkChanges,
-                isBookmarked: () => _chapterBookmarks().isNotEmpty,
-                onAddBookmark: _total == 0 ? null : _quickAddBookmark,
-              ),
-            ),
-            Align(
-              alignment: Alignment.bottomCenter,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  22 + MediaQuery.paddingOf(context).left,
-                  0,
-                  22 + MediaQuery.paddingOf(context).right,
-                  MediaQuery.paddingOf(context).bottom + 12,
-                ),
-                child: ReaderChromeLayer(
-                  key: const ValueKey('reader-chrome-dock'),
-                  animation: _chrome,
-                  slide: const Offset(0, 8),
-                  fadeOffset: const Offset(0, 12),
-                  child: ReaderBottomPanel(
-                    actions: _readerActions(),
-                    navigation: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // 全书进度条：与 Dock 一起随控件显隐，可拖动跳转。
-                      if (_showProgressBar)
-                        Padding(
-                          padding: const EdgeInsets.only(
-                            left: 56,
-                            right: 56,
-                            bottom: 8,
-                          ),
-                          child: ValueListenableBuilder<double>(
-                            valueListenable: _progressValue,
-                            builder: (context, progress, _) => ReaderProgressBar(
-                              key: const ValueKey('epub-book-progress'),
-                              value: _progressDragging ? _dragValue : progress,
-                              dragging: _progressDragging,
-                              previewText: _dragPreviewText(
-                                _progressDragging ? _dragValue : progress,
-                              ),
-                              onDragStart: () => setState(() {
-                                _progressDragging = true;
-                                _progressPointerCancelled = false;
-                                _dragValue = _progressValue.value;
-                              }),
-                              onDragUpdate: (v) =>
-                                  setState(() => _dragValue = v),
-                              onDragEnd: () async {
-                                // 底层指针取消可能绕开 onCancel 直接进 onEnd：
-                                // 此时只重置状态，不跳转。
-                                final cancelled = _progressPointerCancelled;
-                                final target = _dragValue;
-                                setState(() {
-                                  _progressDragging = false;
-                                  _progressPointerCancelled = false;
-                                });
-                                if (!cancelled) await _jumpToProgress(target);
-                              },
-                              onPointerCancel: () =>
-                                  _progressPointerCancelled = true,
-                              // 取消只重置状态，不跳转。
-                              onDragCancel: () => setState(() {
-                                _progressDragging = false;
-                                _progressPointerCancelled = false;
-                              }),
-                            ),
-                          ),
-                        ),
-                      GlassDock(
-                        key: const ValueKey('reader-liquid-dock'),
-                        selectedIndex: 1,
-                        reduceMotion: widget.state.reduceMotion,
-                        items: [
-                          GlassDockItem(
-                            CupertinoIcons.arrow_left,
-                            '上一章',
-                            enabled: _total > 0 && _chapter > 0,
-                          ),
-                          GlassDockItem(
-                            CupertinoIcons.book,
-                            '${_total == 0 ? 0 : _chapter + 1} / $_total',
-                            enabled: _total > 0,
-                            selectableOnDrag: false,
-                            semanticLabel:
-                                '目录，当前第 ${_total == 0 ? 0 : _chapter + 1} 章，共 $_total 章',
-                          ),
-                          GlassDockItem(
-                            CupertinoIcons.arrow_right,
-                            '下一章',
-                            enabled: _chapter + 1 < _total,
-                          ),
-                        ],
-                        onSelected: (index) {
-                          if (index == 1) {
-                            _catalogue();
-                          } else {
-                            _goTo(_chapter + (index == 0 ? -1 : 1));
-                          }
-                        },
-                      ),
-                    ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              left: 24,
-              right: 24,
-              bottom: MediaQuery.paddingOf(context).bottom + 6,
-              child: ValueListenableBuilder<double>(
-                valueListenable: _progressValue,
-                builder: (context, progress, _) => ReaderStatusLine(
-                  chrome: _chrome,
-                  text: '${_chapterTitle()} · ${(progress * 100).round()}%',
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
+      navigation: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 全书进度条：与 Dock 一起随控件显隐，可拖动跳转。
+          if (_showProgressBar)
+            Padding(
+              padding: const EdgeInsets.only(
+                left: 56,
+                right: 56,
+                bottom: 8,
+              ),
+              child: ValueListenableBuilder<double>(
+                valueListenable: _progressValue,
+                builder: (context, progress, _) => ReaderProgressBar(
+                  key: const ValueKey('epub-book-progress'),
+                  value: _progressDragging ? _dragValue : progress,
+                  dragging: _progressDragging,
+                  previewText: _dragPreviewText(
+                    _progressDragging ? _dragValue : progress,
+                  ),
+                  onDragStart: () => setState(() {
+                    _progressDragging = true;
+                    _progressPointerCancelled = false;
+                    _dragValue = _progressValue.value;
+                  }),
+                  onDragUpdate: (v) => setState(() => _dragValue = v),
+                  onDragEnd: () async {
+                    // 底层指针取消可能绕开 onCancel 直接进 onEnd：
+                    // 此时只重置状态，不跳转。
+                    final cancelled = _progressPointerCancelled;
+                    final target = _dragValue;
+                    setState(() {
+                      _progressDragging = false;
+                      _progressPointerCancelled = false;
+                    });
+                    if (!cancelled) await _jumpToProgress(target);
+                  },
+                  onPointerCancel: () => _progressPointerCancelled = true,
+                  // 取消只重置状态，不跳转。
+                  onDragCancel: () => setState(() {
+                    _progressDragging = false;
+                    _progressPointerCancelled = false;
+                  }),
+                ),
+              ),
+            ),
+          GlassDock(
+            key: const ValueKey('reader-liquid-dock'),
+            selectedIndex: 1,
+            reduceMotion: widget.state.reduceMotion,
+            items: [
+              GlassDockItem(
+                CupertinoIcons.arrow_left,
+                '上一章',
+                enabled: _total > 0 && _chapter > 0,
+              ),
+              GlassDockItem(
+                CupertinoIcons.book,
+                '${_total == 0 ? 0 : _chapter + 1} / $_total',
+                enabled: _total > 0,
+                selectableOnDrag: false,
+                semanticLabel:
+                    '目录，当前第 ${_total == 0 ? 0 : _chapter + 1} 章，共 $_total 章',
+              ),
+              GlassDockItem(
+                CupertinoIcons.arrow_right,
+                '下一章',
+                enabled: _chapter + 1 < _total,
+              ),
+            ],
+            onSelected: (index) {
+              if (index == 1) {
+                _catalogue();
+              } else {
+                _goTo(_chapter + (index == 0 ? -1 : 1));
+              }
+            },
+          ),
+        ],
+      ),
+      statusListenable: _progressValue,
+      statusTextBuilder: (progress) =>
+          '${_chapterTitle()} · ${(progress * 100).round()}%',
     );
   }
 

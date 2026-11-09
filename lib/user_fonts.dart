@@ -5,6 +5,7 @@ import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'app_typography.dart';
 import 'font_download.dart';
 
@@ -16,13 +17,32 @@ bool validFontChoice(Object? value, {bool follow = false}) =>
         RegExp(r'^font_[a-z0-9-]{1,64}$').hasMatch(value));
 
 class UserFont {
-  const UserFont(this.id, this.name, this.extension);
+  const UserFont(
+    this.id,
+    this.name,
+    this.extension, {
+    this.filePath,
+    this.customFamily,
+  });
   final String id, name, extension;
-  String get family => 'WenkuUser_$id';
+  final String? filePath;
+  final String? customFamily;
+  String get family => customFamily ?? 'WenkuUser_$id';
+
+  AppFontEntry toAppFontEntry() => AppFontEntry(
+    id: id,
+    displayName: name,
+    family: family,
+    source: AppFontSource.imported,
+    filePath: filePath,
+  );
+
   Map<String, String> toJson() => {
     'id': id,
     'name': name,
     'extension': extension,
+    if (filePath != null) 'filePath': filePath!,
+    if (customFamily != null) 'family': customFamily!,
   };
 }
 
@@ -38,6 +58,8 @@ class UserFontStore extends ChangeNotifier {
   static const maxBytes = 32 * 1024 * 1024;
   final Future<void> Function(String family, File file)? loader;
   Directory? _directory;
+  SharedPreferences? _prefs;
+  bool _pendingLegacyMigrationSave = false;
   final _fonts = <UserFont>[];
   final Map<String, Future<void>> _loads = {};
   final _loadedFaces = <String>{};
@@ -74,11 +96,76 @@ class UserFontStore extends ChangeNotifier {
   String? family(String id) => available(id)
       ? find(id)?.family ?? AppTypeface.fromRecord(id).family
       : null;
+
+  /// One-time synchronous migration of legacy `importedFonts` entries stored in
+  /// [SharedPreferences] so callers see migrated entries immediately.
+  void migrateLegacyPreferences(SharedPreferences prefs) {
+    _prefs = prefs;
+    final rawList = prefs.getString('importedFonts');
+    if (rawList == null || rawList.isEmpty) return;
+    try {
+      final list = jsonDecode(rawList);
+      if (list is List) {
+        for (final item in list) {
+          if (item is Map<String, Object?>) {
+            try {
+              final entry = AppFontEntry.fromJson(item);
+              if (entry.id.isNotEmpty &&
+                  entry.source == AppFontSource.imported &&
+                  entry.family != null &&
+                  find(entry.id) == null) {
+                final ext = (entry.filePath ?? '')
+                    .split('.')
+                    .last
+                    .toLowerCase();
+                _fonts.add(
+                  UserFont(
+                    entry.id,
+                    entry.displayName,
+                    ext == 'otf' ? 'otf' : 'ttf',
+                    filePath: entry.filePath,
+                    customFamily: entry.family,
+                  ),
+                );
+                _pendingLegacyMigrationSave = true;
+              }
+            } on FormatException catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
   Future<Directory> _root() async => _directory ??= Directory(
     '${(await getApplicationSupportDirectory()).path}/user-fonts',
   );
-  File _file(Directory root, UserFont font) =>
-      File('${root.path}/${font.id}.${font.extension}');
+  File _file(Directory root, UserFont font) => font.filePath != null
+      ? File(font.filePath!)
+      : File('${root.path}/${font.id}.${font.extension}');
+
+  Future<bool> isPrivateFontFile(File file) async {
+    try {
+      final actual = await file.resolveSymbolicLinks();
+      final separator = Platform.pathSeparator;
+      final candidateDirs = <Directory>[
+        await _root(),
+        Directory(
+          '${(await getApplicationSupportDirectory()).path}${separator}fonts',
+        ),
+      ];
+      for (final dir in candidateDirs) {
+        if (!await dir.exists()) continue;
+        final root = await dir.resolveSymbolicLinks();
+        if (actual != root && actual.startsWith('$root$separator')) {
+          return true;
+        }
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> load() async {
     if (_loaded) return;
     final root = await _root();
@@ -100,20 +187,35 @@ class UserFontStore extends ChangeNotifier {
       }
       for (final value in raw) {
         if (value is! Map ||
-            !validFontChoice(value['id']) ||
-            !(value['id'] as String).startsWith('font_') ||
+            value['id'] is! String ||
+            (value['id'] as String).isEmpty ||
+            (value['filePath'] == null &&
+                (!validFontChoice(value['id']) ||
+                    !(value['id'] as String).startsWith('font_'))) ||
             value['name'] is! String ||
             value['name'].length > 160 ||
             !['ttf', 'otf'].contains(value['extension'])) {
           throw const FormatException('字体记录格式有误');
         }
-        final font = UserFont(value['id'], value['name'], value['extension']);
+        final font = UserFont(
+          value['id'] as String,
+          value['name'] as String,
+          value['extension'] as String,
+          filePath: value['filePath'] as String?,
+          customFamily: value['family'] as String?,
+        );
         if (await _file(root, font).exists() && find(font.id) == null) {
           _fonts.add(font);
         }
       }
     }
     _loaded = true;
+    if (_pendingLegacyMigrationSave) {
+      _pendingLegacyMigrationSave = false;
+      try {
+        await _save();
+      } catch (_) {}
+    }
   }
 
   Future<void> ensureLoaded(String id) async {
@@ -129,6 +231,12 @@ class UserFontStore extends ChangeNotifier {
       final file = font == null
           ? File('${root.path}/${downloadableFont(id)!.fileName}')
           : _file(root, font);
+      if (font?.filePath != null) {
+        if (!await isPrivateFontFile(file)) {
+          throw const FormatException('字体文件不在应用字体目录内');
+        }
+        _validateSfnt(file.path);
+      }
       final family = font?.family ?? AppTypeface.fromRecord(id).family!;
       if (loader != null) return loader!(family, file);
       final face = FontLoader(family)
@@ -142,6 +250,15 @@ class UserFontStore extends ChangeNotifier {
       _loads.remove(id);
       _loadedFaces.remove(id);
       rethrow;
+    }
+  }
+
+  Future<void> preloadImportedFonts() async {
+    final snapshot = List.of(_fonts);
+    for (final font in snapshot) {
+      try {
+        await ensureLoaded(font.id);
+      } catch (_) {}
     }
   }
 
@@ -227,6 +344,9 @@ class UserFontStore extends ChangeNotifier {
       flush: true,
     );
     await temp.rename('${root.path}/fonts.json');
+    try {
+      await _prefs?.remove('importedFonts');
+    } catch (_) {}
   }
 
   Future<UserFont> importFile(String name, String path) async {
@@ -276,6 +396,47 @@ class UserFontStore extends ChangeNotifier {
     return font;
   }
 
+  /// Registers a font file already placed in private app font storage.
+  Future<String> registerImportedFont(
+    String filePath,
+    String displayName,
+  ) async {
+    final file = File(filePath);
+    if (!await isPrivateFontFile(file)) {
+      throw StateError('字体文件不在应用字体目录内');
+    }
+    final ext = filePath.split('.').last.toLowerCase();
+    final id =
+        'font_${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}-${Random.secure().nextInt(0x100000000).toRadixString(36)}';
+    final font = UserFont(
+      id,
+      displayName.isEmpty ? '导入字体' : displayName,
+      ext == 'otf' ? 'otf' : 'ttf',
+      filePath: filePath,
+      customFamily: 'user_font_$id',
+    );
+    _fonts.add(font);
+    try {
+      final size = await file.length();
+      if (size <= 0 || size > maxBytes) {
+        throw const FormatException('字体文件大小无效');
+      }
+      _validateSfnt(filePath);
+      await ensureLoaded(id);
+      await _save();
+    } catch (_) {
+      _fonts.remove(font);
+      _loads.remove(id);
+      _loadedFaces.remove(id);
+      try {
+        if (await file.exists()) await file.delete();
+      } catch (_) {}
+      throw StateError('字体文件无效或已损坏');
+    }
+    _changed();
+    return id;
+  }
+
   Future<void> remove(String id) async {
     if (downloadableFont(id) case final spec?) {
       if (downloadingFontId == id) {
@@ -299,8 +460,17 @@ class UserFontStore extends ChangeNotifier {
       _fonts.insert(index, font);
       rethrow;
     }
-    final file = _file(await _root(), font);
-    if (await file.exists()) await file.delete();
+    try {
+      if (font.filePath case final customPath?) {
+        final customFile = File(customPath);
+        if (await isPrivateFontFile(customFile) && await customFile.exists()) {
+          await customFile.delete();
+        }
+      } else {
+        final file = _file(await _root(), font);
+        if (await file.exists()) await file.delete();
+      }
+    } catch (_) {}
     _loads.remove(id);
     _loadedFaces.remove(id);
     _changed();

@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
+import 'http_download.dart';
+
 /// Downloads JSON without relying on the server's (often incorrect) MIME type.
 class ReaderPurificationDownload {
   static const maxBytes = 2 * 1024 * 1024;
@@ -44,58 +46,40 @@ class ReaderPurificationDownload {
     final uri = parseUrl(input, allowHttp: allowHttp);
     final client = HttpClient()..connectionTimeout = timeout;
     try {
-      return await _read(client, uri, allowHttp: allowHttp).timeout(timeout);
+      return await (() async {
+        final response = await HttpDownload.getResponse(
+          client,
+          uri,
+          headers: const {
+            HttpHeaders.acceptHeader: 'application/json, text/plain, */*',
+          },
+          maxRedirects: _maxRedirects,
+          requestTimeout: timeout,
+          responseTimeout: timeout,
+          resolveRedirect: (current, location, _) {
+            if (location == null) {
+              throw const FormatException('规则链接重定向过多或无效');
+            }
+            final resolved = current.resolve(location);
+            if (current.isScheme('https') && resolved.isScheme('http')) {
+              throw const FormatException('不允许从 HTTPS 重定向降级到 HTTP');
+            }
+            return parseUrl(resolved.toString(), allowHttp: allowHttp);
+          },
+          onTooManyRedirects: () => const FormatException('规则链接重定向过多或无效'),
+        );
+        final bytes = await HttpDownload.readBytes(
+          response,
+          maxBytes: maxBytes,
+          streamTimeout: timeout,
+          onLimitExceeded: () =>
+              const FormatException('规则文件超过 2 MB，请使用较小的规则集'),
+        );
+        return utf8.decode(bytes).replaceFirst(RegExp(r'^\uFEFF'), '');
+      })().timeout(timeout);
     } finally {
       client.close(force: true);
     }
-  }
-
-  static Future<String> _read(
-    HttpClient client,
-    Uri uri, {
-    required bool allowHttp,
-  }) async {
-    var current = uri;
-    for (var redirect = 0; redirect <= _maxRedirects; redirect++) {
-      final request = await client.getUrl(current);
-      request.followRedirects = false;
-      request.maxRedirects = 0;
-      request.headers.set(
-        HttpHeaders.acceptHeader,
-        'application/json, text/plain, */*',
-      );
-      final response = await request.close();
-      if (const {301, 302, 303, 307, 308}.contains(response.statusCode)) {
-        final location = response.headers.value(HttpHeaders.locationHeader);
-        await response.drain<void>();
-        if (location == null || redirect == _maxRedirects) {
-          throw const FormatException('规则链接重定向过多或无效');
-        }
-        final resolved = current.resolve(location);
-        if (current.isScheme('https') && resolved.isScheme('http')) {
-          throw const FormatException('不允许从 HTTPS 重定向降级到 HTTP');
-        }
-        current = parseUrl(resolved.toString(), allowHttp: allowHttp);
-        continue;
-      }
-      if (response.statusCode != HttpStatus.ok) {
-        await response.drain<void>();
-        throw HttpException('下载失败（HTTP ${response.statusCode}）');
-      }
-      if (response.contentLength > maxBytes) {
-        await response.drain<void>();
-        throw const FormatException('规则文件超过 2 MB，请使用较小的规则集');
-      }
-      final bytes = <int>[];
-      await for (final chunk in response) {
-        if (bytes.length + chunk.length > maxBytes) {
-          throw const FormatException('规则文件超过 2 MB，请使用较小的规则集');
-        }
-        bytes.addAll(chunk);
-      }
-      return utf8.decode(bytes).replaceFirst(RegExp(r'^\uFEFF'), '');
-    }
-    throw const FormatException('规则链接重定向过多');
   }
 }
 

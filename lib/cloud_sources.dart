@@ -9,6 +9,8 @@ import 'package:xml/xml.dart';
 import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'book_import_limits.dart';
+import 'http_download.dart';
+import 'webdav_transport.dart';
 part 'cloud_s3.dart';
 
 enum CloudSourceKind {
@@ -437,24 +439,20 @@ class CloudHttp {
     HttpClientResponse res, {
     int limit = 4 * 1024 * 1024,
   }) async {
-    if (res.contentLength > limit) {
-      await res.listen((_) {}).cancel();
-      throw const CloudSourceFailure('网盘返回的数据过大');
-    }
-    final result = BytesBuilder(copy: false);
     try {
-      await for (final part in res.timeout(const Duration(seconds: 25))) {
-        if (_closed) throw const CloudTransferCancelled();
-        if (result.length + part.length > limit) {
-          throw const CloudSourceFailure('网盘返回的数据过大');
-        }
-        result.add(part);
-      }
+      return await HttpDownload.readBytes(
+        res,
+        maxBytes: limit,
+        streamTimeout: const Duration(seconds: 25),
+        checkCancelled: () {
+          if (_closed) throw const CloudTransferCancelled();
+        },
+        onLimitExceeded: () => const CloudSourceFailure('网盘返回的数据过大'),
+      );
     } catch (_) {
       if (_closed) throw const CloudTransferCancelled();
       rethrow;
     }
-    return result.takeBytes();
   }
 
   Future<void> save(
@@ -474,7 +472,6 @@ class CloudHttp {
       await res.listen((_) {}).cancel();
       throw const CloudSourceFailure('网盘返回了登录网页，请更新连接或开启 OpenList 下载代理');
     }
-    final total = res.contentLength < 0 ? null : res.contentLength;
     final limit =
         limitBytes ??
         (bookName == null ? maxBookBytes : localBookByteLimit(bookName));
@@ -483,30 +480,23 @@ class CloudHttp {
         (bookName == null
             ? '单本书籍不能超过 256 MiB'
             : localBookSizeMessage(bookName));
-    if ((total ?? 0) > limit) {
-      await res.listen((_) {}).cancel();
-      throw CloudSourceFailure(sizeMessage);
-    }
-    final sink = target.openWrite();
-    var received = 0;
     try {
-      await for (final part in res.timeout(const Duration(seconds: 25))) {
-        if (_closed) throw const CloudTransferCancelled();
-        received += part.length;
-        if (received > limit) {
-          throw CloudSourceFailure(sizeMessage);
-        }
-        sink.add(part);
-        await sink.flush();
-        onProgress?.call(received, total);
-      }
-      if (received == 0 || (total != null && received != total)) {
-        throw const CloudSourceFailure('书籍下载不完整，请重试');
-      }
-      await sink.close();
+      await HttpDownload.streamToFile(
+        res,
+        target,
+        maxBytes: limit,
+        requireNonEmpty: true,
+        streamTimeout: const Duration(seconds: 25),
+        flushEachChunk: true,
+        deleteOnFailure: true,
+        checkCancelled: () {
+          if (_closed) throw const CloudTransferCancelled();
+        },
+        onProgress: onProgress,
+        onLimitExceeded: () => CloudSourceFailure(sizeMessage),
+        onIncomplete: () => const CloudSourceFailure('书籍下载不完整，请重试'),
+      );
     } catch (_) {
-      await sink.close();
-      if (await target.exists()) await target.delete();
       if (_closed) throw const CloudTransferCancelled();
       rethrow;
     }
@@ -520,93 +510,30 @@ class CloudHttp {
 
 class WebDavBookClient implements CloudBookClient {
   WebDavBookClient(this.config, {CloudHttp? http})
-    : http = http ?? CloudHttp() {
+    : transport = WebDavTransport(
+        endpoint: config.endpoint,
+        username: config.username,
+        password: config.password,
+        allowHttp: config.allowHttp,
+        http: http,
+      ) {
     config.validate();
   }
   final CloudSourceConfig config;
-  final CloudHttp http;
+  final WebDavTransport transport;
+  CloudHttp get http => transport.http;
   @override
   String get root => config.endpoint.toString();
-  Uri _resource(String id) {
-    final uri = Uri.parse(id).normalizePath(),
-        base = config.endpoint.normalizePath();
-    final segments = uri.pathSegments,
-        prefix = base.pathSegments.where((e) => e.isNotEmpty).toList();
-    if (!CloudHttp.sameOrigin(uri, base) ||
-        uri.hasQuery ||
-        uri.hasFragment ||
-        segments.any(
-          (s) => s == '..' || s == '.' || s.contains('/') || s.contains('\\'),
-        ) ||
-        segments.length < prefix.length ||
-        !listEquals(segments.take(prefix.length).toList(), prefix)) {
-      throw const CloudSourceFailure('文件地址不在已配置的 WebDAV 目录内');
-    }
-    return uri;
-  }
 
-  static Map<String, String> basicAuthHeaders(
-    Uri uri,
-    Uri base,
-    String username,
-    String password,
-  ) => {
-    'User-Agent': 'Wenku8/0.3 WebDAV',
-    if (CloudHttp.sameOrigin(uri, base) &&
-        (username.isNotEmpty || password.isNotEmpty))
-      'Authorization':
-          'Basic ${base64Encode(utf8.encode('$username:$password'))}',
-  };
-
-  static const String propfindBody =
-      '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/><d:getcontentlength/></d:prop></d:propfind>';
-
-  static Iterable<(XmlElement responseNode, String href)> parseMultistatusHrefs(
-    String xmlText,
-  ) sync* {
-    final document = XmlDocument.parse(xmlText);
-    if (document.rootElement.name.local != 'multistatus') {
-      throw const CloudSourceFailure('该地址不是 WebDAV 服务，请检查 /dav/ 路径');
-    }
-    for (final node in document.rootElement.childElements.where(
-      (e) => e.name.local == 'response',
-    )) {
-      final href = node.childElements
-          .where((e) => e.name.local == 'href')
-          .firstOrNull
-          ?.innerText;
-      if (href != null) yield (node, href);
-    }
-  }
-
-  Map<String, String> _headers(Uri uri) => basicAuthHeaders(
-    uri,
-    config.endpoint,
-    config.username,
-    config.password,
-  );
   @override
   Future<CloudBookListing> list(String folder, {int page = 1}) async {
-    final uri = _resource(folder);
-    final res = await http.request(
-      'PROPFIND',
-      uri,
-      allowHttp: config.allowHttp,
-      headers: (u) => {
-        ..._headers(u),
-        'Depth': '1',
-        'Content-Type': 'application/xml; charset=utf-8',
-      },
-      body: utf8.encode(propfindBody),
-    );
+    final uri = transport.resolveResource(folder);
     final entries = <CloudBookEntry>[];
     final seen = <String>{};
-    for (final (node, href) in parseMultistatusHrefs(
-      utf8.decode(await http.bytes(res)),
-    )) {
+    for (final (node, href) in await transport.propfind(uri)) {
       Uri candidate;
       try {
-        candidate = _resource(uri.resolve(href).toString());
+        candidate = transport.resolveResource(uri.resolve(href).toString());
       } on CloudSourceFailure {
         continue;
       }
@@ -666,20 +593,18 @@ class WebDavBookClient implements CloudBookClient {
     if (!entry.isBook) {
       throw const CloudSourceFailure('请选择支持的电子书或文档');
     }
-    final res = await http.request(
-      'GET',
-      _resource(entry.id),
-      headers: _headers,
-      redirects: true,
-      allowHttp: config.allowHttp,
+    await transport.downloadToFile(
+      transport.resolveResource(entry.id),
+      target,
+      bookName: entry.name,
+      onProgress: onProgress,
     );
-    await http.save(res, target, bookName: entry.name, onProgress: onProgress);
   }
 
   @override
-  void cancel() => http.close();
+  void cancel() => transport.close();
   @override
-  void close() => http.close();
+  void close() => transport.close();
 }
 
 /// An independently implemented read-only client of the web wire protocol

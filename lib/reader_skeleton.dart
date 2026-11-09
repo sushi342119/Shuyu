@@ -9,6 +9,7 @@ import 'app_ui.dart';
 import 'glass_palette.dart';
 import 'library_state.dart';
 import 'performance_preferences.dart';
+import 'reader_chrome.dart';
 import 'reader_preferences.dart';
 
 /// Shared reading skeleton for TXT / EPUB / PDF (design 2026-11 §5.3).
@@ -337,6 +338,134 @@ class _ReaderStatusLineState extends State<ReaderStatusLine> {
           );
         },
       ),
+    );
+  }
+}
+
+/// Unified outer reader scaffold combining [ReaderTopBar], [ReaderEdgeBlur],
+/// [ReaderChromeLayer], [ReaderBottomPanel], and [ReaderStatusLine] for
+/// TXT, EPUB, and PDF readers.
+class ReaderScaffold extends StatelessWidget {
+  const ReaderScaffold({
+    super.key,
+    required this.chrome,
+    required this.novelId,
+    required this.title,
+    required this.bookmarkListenable,
+    required this.isBookmarked,
+    required this.onAddBookmark,
+    required this.actions,
+    required this.body,
+    this.statusText = '',
+    this.statusListenable,
+    this.statusTextBuilder,
+    this.progress,
+    this.navigation,
+    this.leadingStackChild,
+    this.useAtmosphere = true,
+    this.blurBottom = true,
+    this.bottomMaxWidth,
+    this.backgroundColor,
+  });
+
+  final Animation<double> chrome;
+  final int novelId;
+  final String title;
+  final Listenable bookmarkListenable;
+  final bool Function() isBookmarked;
+  final VoidCallback? onAddBookmark;
+  final List<ReaderAction> actions;
+  final Widget body;
+  final String statusText;
+  final ValueListenable<double>? statusListenable;
+  final String Function(double progress)? statusTextBuilder;
+  final Widget? progress;
+  final Widget? navigation;
+  final Widget? leadingStackChild;
+  final bool useAtmosphere;
+  final bool blurBottom;
+  final double? bottomMaxWidth;
+  final Color? backgroundColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.paddingOf(context);
+    Widget bottomPanel = ReaderBottomPanel(
+      actions: actions,
+      progress: progress,
+      navigation: navigation,
+    );
+    if (bottomMaxWidth != null) {
+      bottomPanel = ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: bottomMaxWidth!),
+        child: bottomPanel,
+      );
+    }
+    final statusWidget = statusListenable != null && statusTextBuilder != null
+        ? ValueListenableBuilder<double>(
+            valueListenable: statusListenable!,
+            builder: (context, value, _) => ReaderStatusLine(
+              chrome: chrome,
+              text: statusTextBuilder!(value),
+            ),
+          )
+        : ReaderStatusLine(chrome: chrome, text: statusText);
+    final stack = Stack(
+      children: [
+        ?leadingStackChild,
+        Positioned.fill(child: body),
+        Positioned.fill(
+          child: ReaderEdgeBlur(animation: chrome, blurBottom: blurBottom),
+        ),
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: ReaderTopBar(
+            chrome: chrome,
+            novelId: novelId,
+            title: title,
+            bookmarkListenable: bookmarkListenable,
+            isBookmarked: isBookmarked,
+            onAddBookmark: onAddBookmark,
+          ),
+        ),
+        Align(
+          alignment: Alignment.bottomCenter,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              22 + media.left,
+              0,
+              22 + media.right,
+              media.bottom + 12,
+            ),
+            child: ReaderChromeLayer(
+              key: const ValueKey('reader-chrome-dock'),
+              animation: chrome,
+              slide: const Offset(0, 8),
+              fadeOffset: const Offset(0, 12),
+              child: bottomPanel,
+            ),
+          ),
+        ),
+        Positioned(
+          left: 24,
+          right: 24,
+          bottom: media.bottom + 6,
+          child: statusWidget,
+        ),
+      ],
+    );
+    return Scaffold(
+      resizeToAvoidBottomInset: false,
+      backgroundColor: backgroundColor,
+      body: useAtmosphere
+          ? Atmosphere(
+              shareGlass: true,
+              archiveBackdrop: false,
+              child: stack,
+            )
+          : stack,
     );
   }
 }

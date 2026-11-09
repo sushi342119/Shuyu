@@ -70,9 +70,11 @@ export 'reader_underline.dart'
     show readerRegistrationBounds, paintReaderRegistrationFrame;
 
 
+part 'home_shell.dart';
 part 'discover_page.dart';
 part 'shelf_page.dart';
 part 'settings_page.dart';
 part 'detail_page.dart';
 part 'reader_page.dart';
+part 'reader_page_persistence.dart';
 part 'reader_page_widgets.dart';

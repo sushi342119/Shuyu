@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'font_catalog.dart';
+import 'http_download.dart';
 export 'font_catalog.dart';
 
 class FontDownloadProgress {
@@ -54,7 +55,6 @@ class FontDownloadClient {
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 12);
       cancellation._client = client;
-      RandomAccessFile? output;
       try {
         final request = await client
             .getUrl(source)
@@ -66,44 +66,35 @@ class FontDownloadClient {
         if (response.statusCode != HttpStatus.ok) {
           throw const FormatException('字体下载暂不可用，请稍后重试');
         }
-        if (response.contentLength >= 0 &&
-            response.contentLength != expectedBytes) {
-          throw const FormatException('字体下载内容不完整，请重试');
-        }
-        output = await target.open(mode: FileMode.write);
-        var received = 0, lastPercent = -1;
+        var lastPercent = -1;
         onProgress(FontDownloadProgress(0, expectedBytes));
-        await for (final chunk in response.timeout(
-          const Duration(seconds: 30),
-        )) {
-          cancellation.check();
-          received += chunk.length;
-          if (received > expectedBytes) {
-            throw const FormatException('字体下载内容超出预期，请重试');
-          }
-          await output.writeFrom(chunk);
-          final progress = FontDownloadProgress(received, expectedBytes);
-          if (progress.percent != lastPercent) {
-            lastPercent = progress.percent;
-            onProgress(progress);
-          }
-        }
-        cancellation.check();
-        if (received != expectedBytes) {
-          throw const FormatException('字体下载中断，请重试');
-        }
-        await output.flush();
+        await HttpDownload.streamToFile(
+          response,
+          target,
+          expectedBytes: expectedBytes,
+          streamTimeout: const Duration(seconds: 30),
+          checkCancelled: cancellation.check,
+          onContentLengthMismatch: () =>
+              const FormatException('字体下载内容不完整，请重试'),
+          onLimitExceeded: () => const FormatException('字体下载内容超出预期，请重试'),
+          onIncomplete: () => const FormatException('字体下载中断，请重试'),
+          onProgress: (received, _) {
+            final progress = FontDownloadProgress(received, expectedBytes);
+            if (progress.percent != lastPercent) {
+              lastPercent = progress.percent;
+              onProgress(progress);
+            }
+          },
+        );
         return;
       } on FileSystemException {
         rethrow;
-      } catch (error) {
+      } catch (_) {
         cancellation.check();
-
         if (index == endpoints.length - 1) {
           throw const FormatException('字体下载未完成，请检查网络后重试');
         }
       } finally {
-        await output?.close();
         client.close(force: true);
         cancellation._client = null;
       }
