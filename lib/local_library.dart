@@ -131,6 +131,7 @@ class LocalBook {
     // 来源内稳定的文件身份：SAF 用 documentUri，应用文件夹用规范化绝对路径。
     this.sourceKey = '',
     this.chapterSplitVersion = 0,
+    this.isMobiSource = false,
     this.textFingerprint = '',
     this.sourceFingerprint = '',
     this.epubChapterHrefs = const <String>[],
@@ -156,6 +157,7 @@ class LocalBook {
 
   /// 该书最近一次成功应用的章节切分规则版本。
   final int chapterSplitVersion;
+  final bool isMobiSource;
   final String textFingerprint;
 
   /// SHA-256 of original bytes, including encoding/BOM/line endings.
@@ -223,6 +225,7 @@ class LocalBook {
     sourceId: sourceId ?? this.sourceId,
     sourceKey: sourceKey ?? this.sourceKey,
     chapterSplitVersion: chapterSplitVersion ?? this.chapterSplitVersion,
+    isMobiSource: isMobiSource,
     textFingerprint: textFingerprint ?? this.textFingerprint,
     sourceFingerprint: sourceFingerprint ?? this.sourceFingerprint,
     epubChapterHrefs: epubChapterHrefs ?? this.epubChapterHrefs,
@@ -246,6 +249,7 @@ class LocalBook {
     if (sourceId.isNotEmpty) 'sourceId': sourceId,
     if (sourceKey.isNotEmpty) 'sourceKey': sourceKey,
     'chapterSplitVersion': chapterSplitVersion,
+    if (isMobiSource) 'isMobiSource': true,
     'textFingerprint': textFingerprint,
     'sourceFingerprint': sourceFingerprint,
     if (epubChapterHrefs.isNotEmpty) 'epubChapterHrefs': epubChapterHrefs,
@@ -280,6 +284,7 @@ class LocalBook {
       sourceId: json['sourceId'] as String? ?? '',
       sourceKey: json['sourceKey'] as String? ?? '',
       chapterSplitVersion: (json['chapterSplitVersion'] as num?)?.toInt() ?? 0,
+      isMobiSource: json['isMobiSource'] == true,
       textFingerprint: json['textFingerprint'] as String? ?? '',
       sourceFingerprint: json['sourceFingerprint'] as String? ?? '',
       epubChapterHrefs: (json['epubChapterHrefs'] as List?)
@@ -685,7 +690,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       ? _extendedChapterSplitVersion
       : _chapterSplitVersion;
   int _chapterSplitVersionFor(LocalBook book) =>
-      book.kind == LocalBookKind.txt && !isMobiFileName(book.fileName)
+      book.kind == LocalBookKind.txt &&
+          !book.isMobiSource &&
+          !isMobiFileName(book.fileName)
       ? _activeChapterSplitVersion
       : _chapterSplitVersion;
   final _LocalTextWorker _readerWorker = _LocalTextWorker();
@@ -3801,6 +3808,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
             textFingerprint: textFingerprint,
             sourceFingerprint: sourceFingerprint,
             chapters: mobi.chapters,
+            isMobiSource: true,
             pageCount: 0,
             wordCount: _countWords(mobi.text),
             sourceId: sourceId,
@@ -3852,7 +3860,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         sourceKey: sourceKey,
         customTitle: existing?.customTitle,
         customAuthor: existing?.customAuthor,
-        chapterSplitVersion: _chapterSplitVersion,
+        chapterSplitVersion: _activeChapterSplitVersion,
       );
     } catch (_) {
       return null;
@@ -4044,6 +4052,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   @visibleForTesting
   static List<LocalChapterIndex> splitChaptersForTest(String text) =>
       _splitChapters(text);
+
+  @visibleForTesting
+  int chapterSplitVersionForTest(LocalBook book) => _chapterSplitVersionFor(book);
 
   @visibleForTesting
   static String titleFromNameForTest(String name) => _titleFromName(name);

@@ -17,6 +17,24 @@ import 'package:shuyu/reader_underline.dart';
 const _text =
     '无标题开场😀\n第一章 开始\n甲正文。\n\n简介\n独立目标😀段落。\n\n随后还有第二段。\n第二章 结束\n末尾正文。';
 
+Uint8List _mobiBytes(String magic) {
+  final text = utf8.encode(_text);
+  const headerOffset = 78 + 2 * 8;
+  const textOffset = headerOffset + 16;
+  final bytes = Uint8List(textOffset + text.length);
+  final data = ByteData.sublistView(bytes);
+  bytes.setRange(60, 68, ascii.encode(magic));
+  data.setUint16(76, 2);
+  data.setUint32(78, headerOffset);
+  data.setUint32(86, textOffset);
+  data.setUint16(headerOffset, 1);
+  data.setUint32(headerOffset + 4, text.length);
+  data.setUint16(headerOffset + 8, 1);
+  data.setUint16(headerOffset + 10, 4096);
+  bytes.setRange(textOffset, bytes.length, text);
+  return bytes;
+}
+
 class _Paths extends PathProviderPlatform {
   _Paths(this.root);
   final String root;
@@ -76,6 +94,117 @@ void main() {
   }
 
   for (final enabled in [false, true]) {
+    for (final magic in ['BOOKMOBI', 'TEXtREAd']) {
+      for (final fileName in ['book.epub', 'book.mobi']) {
+        test(
+          'MOBI $magic import as $fileName stays ready with extensions=$enabled',
+          () async {
+            var store = await load(enabled);
+            await store.directory.create(recursive: true);
+            final bytes = _mobiBytes(magic);
+            await File(
+              '${await store.appFolderPath}/$fileName',
+            ).writeAsBytes(bytes);
+            final scan = await store.scanAppFolder();
+            expect(scan.added, 1, reason: scan.failures.toString());
+            expect(scan.failures, isEmpty);
+            final book = store.books.single;
+            expect(book.kind, LocalBookKind.txt);
+            expect(book.fileName, fileName);
+            expect(book.chapterSplitVersion, 5);
+            expect(
+              book.chapterSplitVersion,
+              store.chapterSplitVersionForTest(book),
+            );
+            expect(book.isMobiSource, fileName == 'book.epub');
+            expect(
+              book.copyWith(title: 'renamed').isMobiSource,
+              book.isMobiSource,
+            );
+            expect(
+              book.chapters.map((chapter) => chapter.toJson()),
+              extractMobiBook(
+                bytes,
+              ).chapters.map((chapter) => chapter.toJson()),
+            );
+            final migrations = <LocalChapterRemap>[];
+            store.migrateProgress = (task) async => migrations.add(task);
+            await store.ensureReady(book.id);
+            expect(store.books.single, same(book));
+            expect(store.pendingChapterRemaps, isEmpty);
+            expect(migrations, isEmpty);
+            for (final nextEnabled in [enabled, !enabled]) {
+              store.dispose();
+              store = await load(nextEnabled);
+              store.migrateProgress = (task) async => migrations.add(task);
+              final restored = store.books.single;
+              expect(restored.toJson(), book.toJson());
+              expect(
+                restored.chapterSplitVersion,
+                store.chapterSplitVersionForTest(restored),
+              );
+              await store.ensureReady(book.id);
+              expect(store.books.single, same(restored));
+              expect(store.pendingChapterRemaps, isEmpty);
+              expect(migrations, isEmpty);
+              expect((await store.scanAppFolder()).refreshed, 0);
+            }
+          },
+        );
+      }
+    }
+
+    for (final fileName in ['book.epub', 'book.txt']) {
+      test(
+        'TXT import as $fileName stays ready with extensions=$enabled',
+        () async {
+          var store = await load(enabled);
+          await File(
+            '${await store.appFolderPath}/$fileName',
+          ).writeAsString(_text);
+          final scan = await store.scanAppFolder();
+          expect(scan.added, 1);
+          expect(scan.failures, isEmpty);
+          final book = store.books.single;
+          expect(book.kind, LocalBookKind.txt);
+          expect(book.fileName, fileName);
+          expect(book.isMobiSource, isFalse);
+          expect(book.chapterSplitVersion, enabled ? 6 : 5);
+          expect(
+            book.chapterSplitVersion,
+            store.chapterSplitVersionForTest(book),
+          );
+          expect(
+            book.chapters.map((chapter) => chapter.toJson()),
+            splitLocalChapters(
+              _text,
+              enableChapterExtensions: enabled,
+            ).map((chapter) => chapter.toJson()),
+          );
+          final migrations = <LocalChapterRemap>[];
+          store.migrateProgress = (task) async => migrations.add(task);
+          await store.ensureReady(book.id);
+          expect(store.books.single, same(book));
+          expect(store.pendingChapterRemaps, isEmpty);
+          expect(migrations, isEmpty);
+          store.dispose();
+          store = await load(enabled);
+          store.migrateProgress = (task) async => migrations.add(task);
+          final restored = store.books.single;
+          expect(restored.toJson(), book.toJson());
+          expect(
+            restored.chapterSplitVersion,
+            store.chapterSplitVersionForTest(restored),
+          );
+          await store.ensureReady(book.id);
+          expect(store.books.single, same(restored));
+          expect(store.pendingChapterRemaps, isEmpty);
+          expect(migrations, isEmpty);
+          expect((await store.scanAppFolder()).refreshed, 0);
+        },
+      );
+    }
+
     for (final storedVersion in [3, 4, 5, 6]) {
       test(
         'stored v$storedVersion converges once with extensions=$enabled',
