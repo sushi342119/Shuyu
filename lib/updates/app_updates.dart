@@ -14,13 +14,14 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.9.3',
+  defaultValue: '1.9.4',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 77);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 78);
 const currentReleaseNotes = '''
-1. 「书签与划线」页面新增一键删除按钮：在「我的 → 书签与划线」及阅读统计书签列表的每张书签与划线卡片底部新增垃圾桶删除按钮，无需进入二级批注编辑弹窗即可直接删除，并优化操作按钮间距。
-2. 阅读器选字工具栏支持「删除划线」与「删除书签」：在 TXT 与 EPUB 阅读器中选中已划线或已加书签的正文片段时，浮动工具栏自动显示「删除划线」或「删除书签」；支持选中已有划线的任意重叠片段一键取消划线，不再要求首尾字符完全一致。
-3. 批注面板与阅读工具栏书签列表优化：点击正文已有划线打开「书签与批注」面板时，在顶部原文操作栏直接提供「删除划线 / 删除书签」按钮；阅读器设置面板的书签列表新增摘录正文预览与类型标签展示。
+1. 正文净化新增链接导入：在「设置 → 正文替换 → 链接导入」粘贴 HTTP / HTTPS JSON 地址即可下载、保存并使用规则，剪贴板导入也支持规则链接。
+2. 新增净化总开关，保留逐条开关与删除，并支持按链接来源整组删除；规则保存在本机，离线阅读可继续使用，仅处理阅读显示，保留原始小说文件。
+3. 完善阅读 Legado 规则兼容：保留执行顺序、书名限制、排除范围和正文作用标记，修复捕获组替换与 Unicode 正则；重复规则自动跳过，暂不兼容的 JavaScript 替换脚本和正则会标明原因并停用。
+4. 为规则下载增加超时、重定向次数、文件大小及数量限制，并补充导入、持久化、开关、删除和界面交互测试。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
