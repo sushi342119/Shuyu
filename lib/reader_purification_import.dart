@@ -13,8 +13,9 @@ class ReaderPurificationDownload {
   @visibleForTesting
   static bool allowLoopbackHttpForTesting = false;
 
-  static bool _isAllowedScheme(Uri uri) {
+  static bool _isAllowedScheme(Uri uri, {required bool allowHttp}) {
     if (uri.isScheme('https')) return true;
+    if (allowHttp && uri.isScheme('http')) return true;
     if (allowLoopbackHttpForTesting &&
         uri.isScheme('http') &&
         (uri.host == '127.0.0.1' ||
@@ -25,29 +26,35 @@ class ReaderPurificationDownload {
     return false;
   }
 
-  static Uri parseUrl(String input) {
+  static Uri parseUrl(String input, {bool allowHttp = false}) {
     final uri = Uri.tryParse(input.trim());
     if (uri == null ||
-        !_isAllowedScheme(uri) ||
+        !_isAllowedScheme(uri, allowHttp: allowHttp) ||
         uri.host.isEmpty ||
         uri.userInfo.isNotEmpty ||
         uri.hasFragment) {
-      throw const FormatException('请输入有效的 HTTPS 安全规则链接');
+      throw FormatException(
+        allowHttp ? '请输入有效的 HTTP 或 HTTPS 规则链接' : '请输入有效的 HTTPS 安全规则链接',
+      );
     }
     return uri;
   }
 
-  static Future<String> fetch(String input) async {
-    final uri = parseUrl(input);
+  static Future<String> fetch(String input, {bool allowHttp = false}) async {
+    final uri = parseUrl(input, allowHttp: allowHttp);
     final client = HttpClient()..connectionTimeout = timeout;
     try {
-      return await _read(client, uri).timeout(timeout);
+      return await _read(client, uri, allowHttp: allowHttp).timeout(timeout);
     } finally {
       client.close(force: true);
     }
   }
 
-  static Future<String> _read(HttpClient client, Uri uri) async {
+  static Future<String> _read(
+    HttpClient client,
+    Uri uri, {
+    required bool allowHttp,
+  }) async {
     var current = uri;
     for (var redirect = 0; redirect <= _maxRedirects; redirect++) {
       final request = await client.getUrl(current);
@@ -64,7 +71,11 @@ class ReaderPurificationDownload {
         if (location == null || redirect == _maxRedirects) {
           throw const FormatException('规则链接重定向过多或无效');
         }
-        current = parseUrl(current.resolve(location).toString());
+        final resolved = current.resolve(location);
+        if (current.isScheme('https') && resolved.isScheme('http')) {
+          throw const FormatException('不允许从 HTTPS 重定向降级到 HTTP');
+        }
+        current = parseUrl(resolved.toString(), allowHttp: allowHttp);
         continue;
       }
       if (response.statusCode != HttpStatus.ok) {

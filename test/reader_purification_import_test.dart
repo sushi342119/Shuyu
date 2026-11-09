@@ -135,6 +135,13 @@ void main() {
         );
       }
       expect(
+        ReaderPurificationDownload.parseUrl(
+          'http://example.com/rules.json',
+          allowHttp: true,
+        ).toString(),
+        'http://example.com/rules.json',
+      );
+      expect(
         store.rules,
         hasLength(ReaderPurificationStore.builtInPresets.length),
       );

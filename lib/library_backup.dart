@@ -69,7 +69,7 @@ class LibraryBackup {
     List<String> omittedCoverKeys = const [],
   }) : records = Map.unmodifiable(records),
        omittedCoverKeys = List.unmodifiable(omittedCoverKeys);
-  static const maxBytes = 4 * 1024 * 1024;
+  static const maxBytes = 32 * 1024 * 1024;
   final int createdAt;
   final Map<String, Object> records;
   final List<String> omittedCoverKeys;
@@ -104,13 +104,18 @@ class LibraryBackup {
         if (value is List && value.isNotEmpty) count++;
       }
       return count;
-    } catch (_) {
+    } catch (error) {
+      if (kDebugMode) debugPrint('LibraryBackup.tagCount decode failed: $error');
       return 0;
     }
   }
 
-  static Future<LibraryBackup> parse(String text) =>
-      compute(_decodeBackup, text);
+  static Future<LibraryBackup> parse(String text) async {
+    if (text.length > maxBytes) {
+      throw const FormatException('备份文件超过 32 MiB');
+    }
+    return compute(_decodeBackup, text);
+  }
   static Future<LibraryBackup> fromRecords(Map<String, Object> records) =>
       compute(_createBackup, records);
   static Future<LibraryBackup> fromLocalRecords(Map<String, Object> records) =>
@@ -127,7 +132,7 @@ String _encodeBackup(({int createdAt, Map<String, Object> records}) backup) {
     'records': backup.records,
   });
   if (utf8.encode(text).length > LibraryBackup.maxBytes) {
-    throw const FormatException('备份超过 4 MiB，请减少本地记录后重试');
+    throw const FormatException('备份超过 32 MiB，请清理冗余记录后重试');
   }
   return text;
 }
@@ -163,7 +168,7 @@ LibraryBackup _createLocalBackup(Map<String, Object> records) {
 LibraryBackup _decodeBackup(String text) {
   if (text.length > LibraryBackup.maxBytes ||
       utf8.encode(text).length > LibraryBackup.maxBytes) {
-    throw const FormatException('备份文件超过 4 MiB');
+    throw const FormatException('备份文件超过 32 MiB');
   }
   final raw = jsonDecode(text);
   if (raw is! Map ||

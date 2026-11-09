@@ -310,11 +310,19 @@ void main() {
         isNull,
       );
 
-      final crossSiteReq = await client.getUrl(
+      final queryOnlyReq = await client.getUrl(
         Uri.parse(
           'http://127.0.0.1:${server.port}/api/books?token=${server.accessCode}',
         ),
       );
+      final queryOnlyRes = await queryOnlyReq.close();
+      await queryOnlyRes.drain<void>();
+      expect(queryOnlyRes.statusCode, HttpStatus.unauthorized);
+
+      final crossSiteReq = await client.getUrl(
+        Uri.parse('http://127.0.0.1:${server.port}/api/books'),
+      );
+      crossSiteReq.headers.set('X-Shuyu-Token', server.accessCode);
       crossSiteReq.headers.set('Sec-Fetch-Site', 'cross-site');
       final crossSiteRes = await crossSiteReq.close();
       await crossSiteRes.drain<void>();

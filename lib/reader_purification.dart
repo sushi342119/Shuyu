@@ -601,7 +601,9 @@ class ReaderPurificationStore extends ChangeNotifier {
       _rules = merged;
       _invalidateCaches();
       notifyListeners();
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) debugPrint('ReaderPurificationStore.ensureLoaded failed: $e');
+    }
   }
 
   Future<void> _persist() async {
@@ -610,7 +612,9 @@ class ReaderPurificationStore extends ChangeNotifier {
       final encoded = jsonEncode([for (final r in _rules) r.toJson()]);
       await prefs.setString(preferenceKey, encoded);
       await prefs.setBool(enabledPreferenceKey, _enabled);
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) debugPrint('ReaderPurificationStore._persist failed: $e');
+    }
   }
 
   Future<void> _persistEdits() async {
@@ -621,7 +625,9 @@ class ReaderPurificationStore extends ChangeNotifier {
       } else {
         await prefs.setString(editsPreferenceKey, jsonEncode(_paragraphEdits));
       }
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) debugPrint('ReaderPurificationStore._persistEdits failed: $e');
+    }
   }
 
   static String _editKey(int bookId, int chapterIndex, int paragraphIndex) =>
@@ -773,6 +779,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     int? defaultBookId,
     String? defaultBookTitle,
     bool enableImported = false,
+    bool allowHttp = false,
   }) async {
     final text = input.trim();
     final uri = Uri.tryParse(text);
@@ -782,8 +789,12 @@ class ReaderPurificationStore extends ChangeNotifier {
         !uri.isScheme('shuyu') &&
         !text.startsWith('[') &&
         !text.startsWith('{');
-    final validatedUri = isUrl ? ReaderPurificationDownload.parseUrl(text) : null;
-    final payload = isUrl ? await ReaderPurificationDownload.fetch(text) : text;
+    final validatedUri = isUrl
+        ? ReaderPurificationDownload.parseUrl(text, allowHttp: allowHttp)
+        : null;
+    final payload = isUrl
+        ? await ReaderPurificationDownload.fetch(text, allowHttp: allowHttp)
+        : text;
     return _importPayload(
       payload,
       sourceUrl: validatedUri?.toString(),
@@ -1066,6 +1077,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
   final _urlCtrl = TextEditingController();
   final _searchCtrl = TextEditingController();
   bool _showUrlImport = false;
+  bool _allowHttpUrl = false;
   bool _importing = false;
   String? _importError;
   bool _isRegex = false;
@@ -1230,6 +1242,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
         input,
         defaultBookId: _onlyCurrentBook ? widget.bookId : null,
         defaultBookTitle: _onlyCurrentBook ? widget.bookTitle : null,
+        allowHttp: _allowHttpUrl,
       );
       if (!mounted) return;
       showNovelFeedback(context, result.message);
@@ -1255,7 +1268,10 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
 
   void _submitUrlField() {
     try {
-      ReaderPurificationDownload.parseUrl(_urlCtrl.text);
+      ReaderPurificationDownload.parseUrl(
+        _urlCtrl.text,
+        allowHttp: _allowHttpUrl,
+      );
     } on FormatException catch (error) {
       setState(() => _importError = error.message);
       return;
@@ -1715,6 +1731,32 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                           onSubmitted: _importing
                               ? null
                               : (_) => _submitUrlField(),
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '允许不安全的 HTTP 链接（局域网或旧源）',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                            Switch.adaptive(
+                              key: const ValueKey('purification-allow-http'),
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                              value: _allowHttpUrl,
+                              onChanged: _importing
+                                  ? null
+                                  : (value) => setState(() {
+                                      _allowHttpUrl = value;
+                                      _importError = null;
+                                    }),
+                            ),
+                          ],
                         ),
                         if (_importError != null)
                           Padding(

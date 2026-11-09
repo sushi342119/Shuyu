@@ -74,13 +74,19 @@ Future<void> main() async {
   try {
     try {
       registerAppLicenses();
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) debugPrint('registerAppLicenses failed: $e');
+    }
     try {
       TouchSamplingPolicy(binding);
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) debugPrint('TouchSamplingPolicy failed: $e');
+    }
     unawaited(
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge).catchError(
-        (Object _) {},
+        (Object e) {
+          if (kDebugMode) debugPrint('setEnabledSystemUIMode failed: $e');
+        },
       ),
     );
     final state = await _requiredStartup('本地阅读状态', LibraryState.load);
@@ -88,14 +94,20 @@ Future<void> main() async {
         !state.appPalette.themedIcon) {
       try {
         await state.refreshSystemPalette();
-      } catch (_) {}
+      } catch (e) {
+        if (kDebugMode) debugPrint('refreshSystemPalette failed: $e');
+      }
     }
     try {
       await TagStore.load();
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) debugPrint('TagStore.load failed: $e');
+    }
     try {
       await state.loadFonts();
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) debugPrint('state.loadFonts failed: $e');
+    }
     // Automatic glass tier: RAM ≤ 4 GB or Android ≤ 10 starts on 轻. A failed
     // query keeps 标准; the user can always pick a tier by hand.
     if (defaultTargetPlatform == TargetPlatform.android) {
@@ -103,12 +115,16 @@ Future<void> main() async {
         state.setDeviceProfile(
           DeviceProfile.fromMap(await LocalPlatform.deviceProfile()),
         );
-      } catch (_) {}
+      } catch (e) {
+        if (kDebugMode) debugPrint('LocalPlatform.deviceProfile failed: $e');
+      }
     }
     if (state.effectivePerformance.needsRuntimeEffects) {
       try {
         await NativeEffects.prepare();
-      } catch (_) {}
+      } catch (e) {
+        if (kDebugMode) debugPrint('NativeEffects.prepare failed: $e');
+      }
     }
     final brightness = switch (state.theme) {
       ThemeMode.light => Brightness.light,
@@ -118,7 +134,9 @@ Future<void> main() async {
     };
     try {
       SystemChrome.setSystemUIOverlayStyle(novelSystemUiStyle(brightness));
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) debugPrint('setSystemUIOverlayStyle failed: $e');
+    }
     final remote = LegacyWenkuRepository();
     final NovelRepository repository;
     if (defaultTargetPlatform == TargetPlatform.android) {
@@ -129,7 +147,11 @@ Future<void> main() async {
           remote: remote,
           cache: await OfflineCacheStore.forApp(),
         );
-      } catch (_) {}
+      } catch (e, st) {
+        if (kDebugMode) {
+          debugPrint('OfflineNovelRepository init failed, falling back to remote: $e\n$st');
+        }
+      }
       repository = CompositeNovelRepository(
         local: local,
         remote: remoteRepository,
@@ -149,7 +171,9 @@ Future<void> main() async {
           store: ListeningStore(await SharedPreferences.getInstance()),
           outputFactory: createListeningOutput,
         );
-      } catch (_) {}
+      } catch (e) {
+        if (kDebugMode) debugPrint('ListeningController init failed: $e');
+      }
     }
     AppUpdates? updates;
     if (defaultTargetPlatform == TargetPlatform.android) {
@@ -157,7 +181,9 @@ Future<void> main() async {
         updates = AppUpdates(
           preferences: await SharedPreferences.getInstance(),
         );
-      } catch (_) {}
+      } catch (e) {
+        if (kDebugMode) debugPrint('AppUpdates init failed: $e');
+      }
     }
     runApp(
       NovelApp(
@@ -168,7 +194,11 @@ Future<void> main() async {
       ),
     );
     if (listening != null) {
-      unawaited(prepareListeningService(listening).catchError((Object _) {}));
+      unawaited(
+        prepareListeningService(listening).catchError((Object e) {
+          if (kDebugMode) debugPrint('prepareListeningService failed: $e');
+        }),
+      );
     }
   } catch (error, stackTrace) {
     final failure = error is _StartupFailure
@@ -247,7 +277,9 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
     unawaited(
       _readingWidgets.attach().then((_) {
         if (mounted) return _widgetCards.attach();
-      }).catchError((Object _) {}),
+      }).catchError((Object e) {
+        if (kDebugMode) debugPrint('ReadingWidgetController.attach failed: $e');
+      }),
     );
   }
 
@@ -259,7 +291,9 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
         lifecycle == AppLifecycleState.hidden) {
       unawaited(
         Future<void>.delayed(Duration.zero, _readingWidgets.publish)
-            .catchError((Object _) {}),
+            .catchError((Object e) {
+              if (kDebugMode) debugPrint('ReadingWidgetController.publish failed: $e');
+            }),
       );
     }
     if (lifecycle == AppLifecycleState.resumed &&

@@ -55,7 +55,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         private const val GALLERY_PERMISSION_REQUEST = 8022
         private const val REQUEST_FONT = 8023
         private const val MAX_FONT_BYTES = 100 * 1024 * 1024
-        private const val MAX_BYTES = 4 * 1024 * 1024
+        private const val MAX_BYTES = 32 * 1024 * 1024
         private const val MAX_TEXT_BYTES = 256 * 1024 * 1024
         private const val MAX_EPUB_BYTES = 1024L * 1024 * 1024
         private const val MAX_TEXT_BUFFER_BYTES = 32 * 1024 * 1024

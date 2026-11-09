@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -78,7 +79,9 @@ class LanBookshelfServer extends ChangeNotifier {
           return iface.addresses.first.address;
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) debugPrint('LanBookshelfServer.resolveLanIp failed: $e');
+    }
     return '127.0.0.1';
   }
 
@@ -91,24 +94,32 @@ class LanBookshelfServer extends ChangeNotifier {
     try {
       _hostIp = await resolveLanIp();
       _accessCode = _generateAccessCode();
-      final address = bindAddress ?? InternetAddress.anyIPv4;
+      final preferredAddress =
+          bindAddress ??
+          (_hostIp != '127.0.0.1' ? InternetAddress.tryParse(_hostIp) : null) ??
+          InternetAddress.anyIPv4;
       HttpServer server;
       try {
-        server = await HttpServer.bind(address, preferredPort);
+        server = await HttpServer.bind(preferredAddress, preferredPort);
       } catch (_) {
-        server = await HttpServer.bind(address, 0);
+        server = await HttpServer.bind(
+          bindAddress ?? InternetAddress.anyIPv4,
+          0,
+        );
       }
       _server = server;
       _port = server.port;
       server.listen(
         _handleRequest,
         onError: (Object error) {
+          if (kDebugMode) debugPrint('LanBookshelfServer stream error: $error');
           _lastError = '局域网服务连接异常';
           notifyListeners();
         },
       );
       notifyListeners();
-    } catch (_) {
+    } catch (e) {
+      if (kDebugMode) debugPrint('LanBookshelfServer.start failed: $e');
       _accessCode = '';
       _lastError = '启动局域网服务失败，请检查无线网络连接';
       notifyListeners();
@@ -123,7 +134,9 @@ class LanBookshelfServer extends ChangeNotifier {
     if (server != null) {
       try {
         await server.close(force: true);
-      } catch (_) {}
+      } catch (e) {
+        if (kDebugMode) debugPrint('LanBookshelfServer.stop failed: $e');
+      }
     }
     notifyListeners();
   }
@@ -148,10 +161,7 @@ class LanBookshelfServer extends ChangeNotifier {
 
   bool _isAuthorized(HttpRequest request) {
     if (_accessCode.isEmpty) return false;
-    final candidate =
-        request.headers.value('x-shuyu-token') ??
-        request.uri.queryParameters['token'] ??
-        '';
+    final candidate = request.headers.value('x-shuyu-token') ?? '';
     return _constantTimeEquals(candidate.trim(), _accessCode);
   }
 
@@ -470,7 +480,7 @@ class _LanBookshelfSheet extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                '确保电脑或另一台设备与本机连接同一 Wi-Fi，在浏览器打开下方带口令地址（或输入 6 位访问口令）即可上传书籍或在线阅读：',
+                '确保电脑或另一台设备与本机连接同一 Wi-Fi，扫码或打开下方带口令地址即可上传书籍或在线阅读：',
                 style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
               ),
               const SizedBox(height: 12),
@@ -529,6 +539,23 @@ class _LanBookshelfSheet extends StatelessWidget {
                           color: scheme.onSurfaceVariant,
                         ),
                       ),
+                      const SizedBox(height: 12),
+                      Center(
+                        child: _LanQrCodeView(
+                          key: const ValueKey('lan-server-qr'),
+                          data: server.url,
+                          size: 148,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '扫码自动填充 X-Shuyu-Token 口令',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
                     ],
                   ],
                 ),
@@ -562,6 +589,264 @@ class _LanBookshelfSheet extends StatelessWidget {
         );
       },
     );
+  }
+}
+
+class _LanQrCodeView extends StatelessWidget {
+  const _LanQrCodeView({
+    super.key,
+    required this.data,
+    this.size = 148,
+  });
+
+  final String data;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final matrix = _QrCodeMatrix.encode(data);
+    return Container(
+      width: size,
+      height: size,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: CustomPaint(
+        painter: _QrCodePainter(matrix),
+        size: Size.square(size - 20),
+      ),
+    );
+  }
+}
+
+class _QrCodePainter extends CustomPainter {
+  const _QrCodePainter(this.matrix);
+  final List<List<bool>> matrix;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final count = matrix.length;
+    if (count == 0) return;
+    final cell = size.width / count;
+    final paint = Paint()
+      ..color = const Color(0xFF1A1612)
+      ..style = PaintingStyle.fill;
+    for (var r = 0; r < count; r++) {
+      for (var c = 0; c < count; c++) {
+        if (matrix[r][c]) {
+          canvas.drawRect(
+            Rect.fromLTWH(c * cell, r * cell, cell + 0.35, cell + 0.35),
+            paint,
+          );
+        }
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _QrCodePainter oldDelegate) =>
+      oldDelegate.matrix != matrix;
+}
+
+/// Compact ISO/IEC 18004 QR Code (Byte mode, Level L, Versions 1–5) encoder.
+class _QrCodeMatrix {
+  static const _versions = <(int dataBytes, int ecBytes, List<int> align)>[
+    (19, 7, []),
+    (34, 10, [6, 18]),
+    (55, 15, [6, 22]),
+    (80, 20, [6, 26]),
+    (108, 26, [6, 30]),
+  ];
+
+  static List<List<bool>> encode(String text) {
+    final payload = utf8.encode(text);
+    var version = 1;
+    while (version <= _versions.length &&
+        payload.length + 2 > _versions[version - 1].$1) {
+      version++;
+    }
+    if (version > _versions.length) {
+      version = _versions.length;
+    }
+    final spec = _versions[version - 1];
+    final dataCap = spec.$1;
+    final ecCount = spec.$2;
+    final trimmed = payload.length + 2 > dataCap
+        ? payload.sublist(0, dataCap - 2)
+        : payload;
+
+    final bits = <int>[];
+    void pushBits(int val, int len) {
+      for (var i = len - 1; i >= 0; i--) {
+        bits.add((val >> i) & 1);
+      }
+    }
+
+    pushBits(0x4, 4); // Byte mode
+    pushBits(trimmed.length, 8);
+    for (final b in trimmed) {
+      pushBits(b, 8);
+    }
+    final maxBits = dataCap * 8;
+    for (var i = 0; i < 4 && bits.length < maxBits; i++) {
+      bits.add(0);
+    }
+    while (bits.length % 8 != 0) {
+      bits.add(0);
+    }
+    final dataCodewords = <int>[
+      for (var i = 0; i < bits.length; i += 8)
+        (bits[i] << 7) |
+            (bits[i + 1] << 6) |
+            (bits[i + 2] << 5) |
+            (bits[i + 3] << 4) |
+            (bits[i + 4] << 3) |
+            (bits[i + 5] << 2) |
+            (bits[i + 6] << 1) |
+            bits[i + 7],
+    ];
+    var padIndex = 0;
+    while (dataCodewords.length < dataCap) {
+      dataCodewords.add(padIndex.isEven ? 0xEC : 0x11);
+      padIndex++;
+    }
+
+    final ecCodewords = _reedSolomonRemainder(dataCodewords, ecCount);
+    final allCodewords = <int>[...dataCodewords, ...ecCodewords];
+
+    final size = 17 + version * 4;
+    final modules = List.generate(size, (_) => List<bool>.filled(size, false));
+    final isFunc = List.generate(size, (_) => List<bool>.filled(size, false));
+
+    void setFunc(int r, int c, bool dark) {
+      if (r < 0 || r >= size || c < 0 || c >= size) return;
+      modules[r][c] = dark;
+      isFunc[r][c] = true;
+    }
+
+    void drawFinder(int top, int left) {
+      for (var dr = -1; dr <= 7; dr++) {
+        for (var dc = -1; dc <= 7; dc++) {
+          final inBounds = dr >= 0 && dr <= 6 && dc >= 0 && dc <= 6;
+          final onBorder = dr == 0 || dr == 6 || dc == 0 || dc == 6;
+          final inCenter = dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4;
+          setFunc(top + dr, left + dc, inBounds && (onBorder || inCenter));
+        }
+      }
+    }
+
+    drawFinder(0, 0);
+    drawFinder(0, size - 7);
+    drawFinder(size - 7, 0);
+
+    for (var i = 8; i < size - 8; i++) {
+      setFunc(6, i, i.isEven);
+      setFunc(i, 6, i.isEven);
+    }
+
+    final align = spec.$3;
+    if (align.length >= 2) {
+      final center = align.last;
+      for (var dr = -2; dr <= 2; dr++) {
+        for (var dc = -2; dc <= 2; dc++) {
+          final dist = max(dr.abs(), dc.abs());
+          setFunc(center + dr, center + dc, dist != 1);
+        }
+      }
+    }
+
+    // Reserve format info & dark module
+    for (var i = 0; i <= 8; i++) {
+      if (i != 6) {
+        isFunc[8][i] = true;
+        isFunc[i][8] = true;
+      }
+    }
+    for (var i = 0; i < 8; i++) {
+      isFunc[8][size - 1 - i] = true;
+      if (i < 7) isFunc[size - 1 - i][8] = true;
+    }
+    setFunc(4 * version + 9, 8, true);
+
+    var bitIdx = 0;
+    final totalBits = allCodewords.length * 8;
+    var upward = true;
+    for (var right = size - 1; right >= 1; right -= 2) {
+      if (right == 6) right = 5;
+      for (var vert = 0; vert < size; vert++) {
+        final r = upward ? (size - 1 - vert) : vert;
+        for (var j = 0; j < 2; j++) {
+          final c = right - j;
+          if (!isFunc[r][c]) {
+            var dark = false;
+            if (bitIdx < totalBits) {
+              dark =
+                  ((allCodewords[bitIdx >> 3] >> (7 - (bitIdx & 7))) & 1) != 0;
+              bitIdx++;
+            }
+            // Mask 0: (r + c) % 2 == 0
+            if ((r + c).isEven) dark = !dark;
+            modules[r][c] = dark;
+          }
+        }
+      }
+      upward = !upward;
+    }
+
+    // Format info for Level L (01) + Mask 0 (000) -> 0x77C4
+    const formatBits = 0x77C4;
+    bool fmtBit(int i) => ((formatBits >> i) & 1) != 0;
+    for (var i = 0; i <= 5; i++) {
+      modules[8][i] = fmtBit(i);
+    }
+    modules[8][7] = fmtBit(6);
+    modules[8][8] = fmtBit(7);
+    modules[7][8] = fmtBit(8);
+    for (var i = 9; i < 15; i++) {
+      modules[14 - i][8] = fmtBit(i);
+    }
+    for (var i = 0; i < 7; i++) {
+      modules[size - 1 - i][8] = fmtBit(i);
+    }
+    for (var i = 7; i < 15; i++) {
+      modules[8][size - 15 + i] = fmtBit(i);
+    }
+
+    return modules;
+  }
+
+  static int _gfMul(int x, int y) {
+    var z = 0;
+    for (var i = 7; i >= 0; i--) {
+      z = (z << 1) ^ ((z >> 7) * 0x11D);
+      z ^= ((y >> i) & 1) * x;
+    }
+    return z;
+  }
+
+  static List<int> _reedSolomonRemainder(List<int> data, int degree) {
+    var gen = <int>[1];
+    var root = 1;
+    for (var i = 0; i < degree; i++) {
+      final next = List<int>.filled(gen.length + 1, 0);
+      for (var j = 0; j < gen.length; j++) {
+        next[j] ^= gen[j];
+        next[j + 1] ^= _gfMul(gen[j], root);
+      }
+      gen = next;
+      root = _gfMul(root, 0x02);
+    }
+    final rem = List<int>.filled(degree, 0);
+    for (final b in data) {
+      final factor = b ^ rem[0];
+      for (var i = 0; i < degree - 1; i++) {
+        rem[i] = rem[i + 1] ^ _gfMul(gen[i + 1], factor);
+      }
+      rem[degree - 1] = _gfMul(gen[degree], factor);
+    }
+    return rem;
   }
 }
 
@@ -698,6 +983,9 @@ let currentBookId = 0, currentChapter = 0, totalChapters = 0;
 const initialToken = new URLSearchParams(location.search).get('token') || '';
 if (initialToken) {
   document.getElementById('tokenInput').value = initialToken;
+  if (window.history && window.history.replaceState) {
+    window.history.replaceState(null, '', location.pathname);
+  }
 }
 function authHeaders() {
   const token = (document.getElementById('tokenInput').value || '').trim();

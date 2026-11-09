@@ -102,15 +102,19 @@ const currentAppBuild = int.fromEnvironment(
         self.assertIn("defaultValue: 2", synced)
         self.assertIn("const currentReleaseNotes = '''\n- 新功能\n''';", synced)
 
-    def test_version_segments_carry_over_at_ten(self):
-        self.assertEqual(next_version("1.8.9", 56), ("1.9.0", 57))
-        self.assertEqual(next_version("1.9.0", 74), ("1.9.1", 75))
-        self.assertEqual(next_version("1.9.9", 83), ("2.0.0", 84))
-        for bad_version in ("1.8.10", "1.10.0", "1.8.26"):
-            with self.subTest(version=bad_version):
-                (self.root / "pubspec.yaml").write_text(f"version: {bad_version}+10\n")
-                with self.assertRaisesRegex(ValueError, "carry over at 10"):
-                    metadata(self.root)
+    def test_multi_digit_semver_segments_are_supported(self):
+        self.assertEqual(next_version("1.8.9", 56), ("1.8.10", 57))
+        self.assertEqual(next_version("1.9.9", 83), ("1.9.10", 84))
+        self.assertEqual(next_version("1.10.0", 90), ("1.10.1", 91))
+        for multi_version in ("1.8.10", "1.10.0", "1.8.26"):
+            with self.subTest(version=multi_version):
+                (self.root / "pubspec.yaml").write_text(f"version: {multi_version}+10\n")
+                (self.root / "lib/updates/app_updates.dart").write_text(
+                    f"const currentAppVersion = '{multi_version}';\n"
+                    "const currentAppBuild = 10;\n"
+                )
+                (self.root / "CHANGELOG.md").write_text(f"## {multi_version}\n- 多位数语义化版本\n")
+                self.assertEqual(metadata(self.root), (multi_version, 10, "- 多位数语义化版本\n"))
 
     def test_from_environment_default_values_are_supported(self):
         (self.root / "lib/updates/app_updates.dart").write_text(

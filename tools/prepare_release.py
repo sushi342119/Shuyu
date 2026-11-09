@@ -9,10 +9,9 @@ import re
 
 def next_version(version: str, build: int) -> tuple[str, int]:
     parts = [int(part) for part in version.split(".")]
-    if len(parts) != 3 or any(p < 0 for p in parts) or parts[1] >= 10 or parts[2] >= 10:
-        raise ValueError("Version segments must be 0-9 (carry over at 10)")
-    total = parts[0] * 100 + parts[1] * 10 + parts[2] + 1
-    return f"{total // 100}.{(total // 10) % 10}.{total % 10}", build + 1
+    if len(parts) != 3 or any(p < 0 for p in parts):
+        raise ValueError("Version segments must be non-negative major.minor.patch integers")
+    return f"{parts[0]}.{parts[1]}.{parts[2] + 1}", build + 1
 
 
 def metadata(root: Path, tag: str | None = None) -> tuple[str, int, str]:
@@ -21,11 +20,6 @@ def metadata(root: Path, tag: str | None = None) -> tuple[str, int, str]:
     if version is None or not 0 < int(version[4]) < 2100000000:
         raise ValueError("pubspec.yaml needs a semantic version and a positive Android build number")
     major, minor, patch, build = int(version[1]), int(version[2]), int(version[3]), int(version[4])
-    if minor >= 10 or patch >= 10:
-        raise ValueError(
-            f"Version {major}.{minor}.{patch} must carry over at 10 "
-            "(minor and patch digits must be 0-9, e.g. 1.8.9 -> 1.9.0 -> 1.9.9 -> 2.0.0)"
-        )
     name = f"{major}.{minor}.{patch}"
     dart = (root / "lib/updates/app_updates.dart").read_text()
     # Release builds inject pubspec's values. Defaults are for development/tests
