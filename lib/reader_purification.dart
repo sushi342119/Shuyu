@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_interactions.dart';
 import 'app_ui.dart';
+import 'reader_purification_import.dart';
 
 const _quoteChars = {0x0022, 0x201C, 0x201D}; // " “ ”
 const _sentenceEndChars = '。！？!?…~～';
@@ -82,7 +84,9 @@ String reSegmentDialogueText(String input) {
         if (_sentenceEndChars.contains(prev) &&
             (next == '“' ||
                 next == '「' ||
-                (sinceBreak >= 90 && !_closingFollowChars.contains(next) && !_speechVerbs.contains(next)))) {
+                (sinceBreak >= 90 &&
+                    !_closingFollowChars.contains(next) &&
+                    !_speechVerbs.contains(next)))) {
           out.write('\n　　');
           sinceBreak = 0;
         }
@@ -138,6 +142,11 @@ class ReaderPurificationRule {
     this.scopeBookId,
     this.scopeBookTitle,
     this.applyToTitle = false,
+    this.applyToContent = true,
+    this.importScope = '',
+    this.excludeScope = '',
+    this.sourceUrl,
+    this.unsupportedReason,
   });
 
   final String id;
@@ -150,9 +159,34 @@ class ReaderPurificationRule {
   final int? scopeBookId;
   final String? scopeBookTitle;
   final bool applyToTitle;
+  final bool applyToContent;
+  final String importScope;
+  final String excludeScope;
+  final String? sourceUrl;
+  final String? unsupportedReason;
 
-  bool appliesToBook(int? bookId) =>
-      scopeBookId == null || (bookId != null && scopeBookId == bookId);
+  bool appliesToBook(int? bookId, {String? bookTitle}) {
+    if (scopeBookId != null && scopeBookId != bookId) return false;
+    bool matchesScope(String scope) => scope
+        .split(';')
+        .any((entry) => bookTitle != null && entry.trim() == bookTitle.trim());
+    // Local books have no web source URL. Source-only scopes stay inactive.
+    if (importScope.trim().isNotEmpty && !matchesScope(importScope)) {
+      return false;
+    }
+    return excludeScope.trim().isEmpty || !matchesScope(excludeScope);
+  }
+
+  String get signature => jsonEncode([
+    pattern,
+    replacement,
+    isRegex,
+    scopeBookId,
+    importScope,
+    excludeScope,
+    applyToTitle,
+    applyToContent,
+  ]);
 
   ReaderPurificationRule copyWith({
     String? name,
@@ -177,6 +211,11 @@ class ReaderPurificationRule {
         ? null
         : (scopeBookTitle ?? this.scopeBookTitle),
     applyToTitle: applyToTitle ?? this.applyToTitle,
+    applyToContent: applyToContent,
+    importScope: importScope,
+    excludeScope: excludeScope,
+    sourceUrl: sourceUrl,
+    unsupportedReason: unsupportedReason,
   );
 
   static final Map<String, RegExp> _regExpCache = {};
@@ -185,10 +224,37 @@ class ReaderPurificationRule {
     try {
       var regExp = _regExpCache[pattern];
       if (regExp == null) {
-        if (_regExpCache.length >= 128) {
+        if (_regExpCache.length >= 1024) {
           _regExpCache.remove(_regExpCache.keys.first);
         }
-        regExp = RegExp(pattern, multiLine: true);
+        var source = pattern;
+        var caseSensitive = true;
+        var dotAll = false;
+        final flags = RegExp(r'^\(\?([ims]+)\)').firstMatch(source);
+        if (flags != null) {
+          caseSensitive = !flags[1]!.contains('i');
+          dotAll = flags[1]!.contains('s');
+          source = source.substring(flags.end);
+        }
+        final unicode =
+            source.contains(r'\p{') ||
+            source.contains(r'\P{') ||
+            source.runes.any((r) => r > 0xffff);
+        if (unicode) {
+          // Java permits escaped non-ASCII punctuation; Unicode ECMAScript
+          // expects those same literal characters without an identity escape.
+          source = source.replaceAllMapped(
+            RegExp(r'\\([^\x00-\x7f])'),
+            (m) => m[1]!,
+          );
+        }
+        regExp = RegExp(
+          source,
+          multiLine: true,
+          caseSensitive: caseSensitive,
+          dotAll: dotAll,
+          unicode: unicode,
+        );
         _regExpCache[pattern] = regExp;
       }
       return regExp;
@@ -198,7 +264,13 @@ class ReaderPurificationRule {
   }
 
   bool matches(String input) {
-    if (!enabled || pattern.isEmpty || input.isEmpty) return false;
+    if (!enabled ||
+        unsupportedReason != null ||
+        replacement.trimLeft().startsWith('@js:') ||
+        pattern.isEmpty ||
+        input.isEmpty) {
+      return false;
+    }
     if (id == 'builtin_smart_quotes') {
       return repairReaderQuotes(input) != input;
     }
@@ -211,7 +283,12 @@ class ReaderPurificationRule {
   }
 
   String apply(String input) {
-    if (!enabled || input.isEmpty) return input;
+    if (!enabled ||
+        unsupportedReason != null ||
+        replacement.trimLeft().startsWith('@js:') ||
+        input.isEmpty) {
+      return input;
+    }
     if (id == 'builtin_smart_quotes') {
       return repairReaderQuotes(input);
     }
@@ -224,7 +301,39 @@ class ReaderPurificationRule {
     }
     final regExp = _compile(pattern);
     if (regExp == null) return input;
-    return input.replaceAll(regExp, replacement);
+    return input.replaceAllMapped(regExp, (match) {
+      // Dart replaceAll treats $1 literally; Legado uses Java-style groups.
+      final out = StringBuffer();
+      for (var i = 0; i < replacement.length; i++) {
+        final ch = replacement[i];
+        if (ch == r'\' && i + 1 < replacement.length) {
+          out.write(switch (replacement[++i]) {
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            final escaped => escaped,
+          });
+        } else if (ch == r'$' &&
+            i + 1 < replacement.length &&
+            RegExp(r'[0-9]').hasMatch(replacement[i + 1])) {
+          var group = int.parse(replacement[++i]);
+          if (group > match.groupCount) {
+            out.write('\$$group');
+            continue;
+          }
+          while (i + 1 < replacement.length) {
+            final digit = int.tryParse(replacement[i + 1]);
+            if (digit == null || group * 10 + digit > match.groupCount) break;
+            group = group * 10 + digit;
+            i++;
+          }
+          out.write(match.group(group) ?? '');
+        } else {
+          out.write(ch);
+        }
+      }
+      return out.toString();
+    });
   }
 
   Map<String, Object?> toJson() => {
@@ -239,6 +348,11 @@ class ReaderPurificationRule {
     if (scopeBookTitle != null && scopeBookTitle!.isNotEmpty)
       'scopeBookTitle': scopeBookTitle,
     if (applyToTitle) 'applyToTitle': true,
+    'applyToContent': applyToContent,
+    if (importScope.isNotEmpty) 'scope': importScope,
+    if (excludeScope.isNotEmpty) 'excludeScope': excludeScope,
+    if (sourceUrl != null) 'sourceUrl': sourceUrl,
+    if (unsupportedReason != null) 'unsupportedReason': unsupportedReason,
   };
 
   static ReaderPurificationRule? fromJson(
@@ -247,8 +361,8 @@ class ReaderPurificationRule {
     String? defaultBookTitle,
   }) {
     if (raw is! Map) return null;
-    final name = (raw['name'] as String?)?.trim();
-    final pattern = raw['pattern'] as String?;
+    final name = raw['name'] is String ? (raw['name'] as String).trim() : null;
+    final pattern = raw['pattern'] is String ? raw['pattern'] as String : null;
     if (name == null || name.isEmpty || pattern == null || pattern.isEmpty) {
       return null;
     }
@@ -256,16 +370,20 @@ class ReaderPurificationRule {
     final id = (rawId is String && rawId.isNotEmpty)
         ? rawId
         : 'custom_${DateTime.now().microsecondsSinceEpoch}_${name.hashCode.abs()}';
-    final scopeId = (raw['scopeBookId'] as num?)?.toInt() ?? defaultBookId;
+    final scopeId =
+        (raw['scopeBookId'] is num
+            ? (raw['scopeBookId'] as num).toInt()
+            : null) ??
+        defaultBookId;
     final scopeTitle =
-        (raw['scopeBookTitle'] as String?) ??
-        (raw['scope'] as String?) ??
+        (raw['scopeBookTitle'] is String
+            ? raw['scopeBookTitle'] as String
+            : null) ??
         (scopeId != null ? defaultBookTitle : null);
     final enabled = raw.containsKey('enabled')
         ? raw['enabled'] == true
         : (raw['isEnabled'] != false);
-    final applyTitle =
-        raw['applyToTitle'] == true || raw['scopeTitle'] == true;
+    final applyTitle = raw['applyToTitle'] == true || raw['scopeTitle'] == true;
     return ReaderPurificationRule(
       id: id,
       name: name,
@@ -279,6 +397,16 @@ class ReaderPurificationRule {
       scopeBookId: scopeId,
       scopeBookTitle: scopeTitle,
       applyToTitle: applyTitle,
+      applyToContent:
+          raw['applyToContent'] != false && raw['scopeContent'] != false,
+      importScope: raw['scope'] is String ? raw['scope'] as String : '',
+      excludeScope: raw['excludeScope'] is String
+          ? raw['excludeScope'] as String
+          : '',
+      sourceUrl: raw['sourceUrl'] is String ? raw['sourceUrl'] as String : null,
+      unsupportedReason: raw['unsupportedReason'] is String
+          ? raw['unsupportedReason'] as String
+          : null,
     );
   }
 }
@@ -289,6 +417,7 @@ class ReaderPurificationStore extends ChangeNotifier {
   static final ReaderPurificationStore shared = ReaderPurificationStore._();
   static const String preferenceKey = 'reader_purification_rules_v1';
   static const String editsPreferenceKey = 'reader_paragraph_edits_v1';
+  static const String enabledPreferenceKey = 'reader_purification_enabled_v1';
 
   static const List<ReaderPurificationRule> builtInPresets = [
     ReaderPurificationRule(
@@ -359,17 +488,21 @@ class ReaderPurificationStore extends ChangeNotifier {
   List<ReaderPurificationRule> _rules = [...builtInPresets];
   Map<String, String> _paragraphEdits = {};
   bool _loaded = false;
+  bool _enabled = true;
+  bool get enabled => _enabled;
 
   List<ReaderPurificationRule> get rules => List.unmodifiable(_rules);
 
   bool get hasEnabledRules =>
-      _rules.any((rule) => rule.enabled) || _paragraphEdits.isNotEmpty;
+      _enabled &&
+      _rules.any((rule) => rule.enabled && rule.unsupportedReason == null);
 
   @visibleForTesting
   void resetForTesting() {
     _rules = [...builtInPresets];
     _paragraphEdits = {};
     _loaded = false;
+    _enabled = true;
   }
 
   Future<void> ensureLoaded() async {
@@ -377,6 +510,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     _loaded = true;
     try {
       final prefs = await SharedPreferences.getInstance();
+      _enabled = prefs.getBool(enabledPreferenceKey) ?? true;
       final rawEdits = prefs.getString(editsPreferenceKey);
       if (rawEdits != null && rawEdits.isNotEmpty) {
         final decodedEdits = jsonDecode(rawEdits);
@@ -414,6 +548,7 @@ class ReaderPurificationStore extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       final encoded = jsonEncode([for (final r in _rules) r.toJson()]);
       await prefs.setString(preferenceKey, encoded);
+      await prefs.setBool(enabledPreferenceKey, _enabled);
     } catch (_) {}
   }
 
@@ -459,6 +594,22 @@ class ReaderPurificationStore extends ChangeNotifier {
     _paragraphEdits = next;
     notifyListeners();
     await _persistEdits();
+  }
+
+  Future<void> setEnabled(bool value) async {
+    await ensureLoaded();
+    _enabled = value;
+    notifyListeners();
+    await _persist();
+  }
+
+  Future<void> removeSource(String sourceUrl) async {
+    await ensureLoaded();
+    _rules = _rules
+        .where((r) => r.builtIn || r.sourceUrl != sourceUrl)
+        .toList();
+    notifyListeners();
+    await _persist();
   }
 
   Future<void> toggleRule(String id, bool enabled) async {
@@ -525,16 +676,42 @@ class ReaderPurificationStore extends ChangeNotifier {
     return 'shuyu://purification?data=$encoded';
   }
 
-  /// Imports rules from a Shuyu share token or a JSON array (including Legado's
-  /// `replaceRule.json` format). Returns the number of imported rules.
+  /// Accepts a remote JSON URL, share token, or pasted JSON.
+  Future<ReaderPurificationImportResult> importRulesFromInput(
+    String input, {
+    int? defaultBookId,
+    String? defaultBookTitle,
+  }) async {
+    final text = input.trim();
+    final uri = Uri.tryParse(text);
+    final isUrl = uri != null && {'http', 'https'}.contains(uri.scheme);
+    final payload = isUrl ? await ReaderPurificationDownload.fetch(text) : text;
+    return _importPayload(
+      payload,
+      sourceUrl: isUrl ? uri.toString() : null,
+      defaultBookId: defaultBookId,
+      defaultBookTitle: defaultBookTitle,
+    );
+  }
+
   Future<int> importRulesFromText(
+    String text, {
+    int? defaultBookId,
+    String? defaultBookTitle,
+  }) async => (await _importPayload(
+    text,
+    defaultBookId: defaultBookId,
+    defaultBookTitle: defaultBookTitle,
+  )).imported;
+
+  Future<ReaderPurificationImportResult> _importPayload(
     String rawText, {
+    String? sourceUrl,
     int? defaultBookId,
     String? defaultBookTitle,
   }) async {
     await ensureLoaded();
-    var payload = rawText.trim();
-    if (payload.isEmpty) return 0;
+    var payload = rawText.trim().replaceFirst(RegExp(r'^\uFEFF'), '');
     final tokenMatch = RegExp(
       r'shuyu://purification\?data=([A-Za-z0-9_\-=]+)',
     ).firstMatch(payload);
@@ -544,36 +721,65 @@ class ReaderPurificationStore extends ChangeNotifier {
       );
     }
     final decoded = jsonDecode(payload);
-    final items = decoded is List
-        ? decoded
-        : (decoded is Map ? [decoded] : const <Object?>[]);
-    final existingPatterns = {
-      for (final r in _rules) '${r.pattern}|${r.replacement}|${r.scopeBookId}',
-    };
+    if (decoded is! List && decoded is! Map) {
+      throw const FormatException('规则文件必须是 JSON 数组或规则对象');
+    }
+    final items = decoded is List ? decoded : [decoded];
+    if (items.length > 5000) throw const FormatException('单次最多导入 5000 条规则');
+    // Preserve Legado's explicit order; keep input order for ties/missing values.
+    final indexed = [for (var i = 0; i < items.length; i++) (i, items[i])];
+    int order(Object? item) => item is Map && item['order'] is num
+        ? (item['order'] as num).toInt()
+        : 0;
+    indexed.sort((a, b) {
+      final result = order(a.$2).compareTo(order(b.$2));
+      return result == 0 ? a.$1.compareTo(b.$1) : result;
+    });
+    final signatures = {for (final rule in _rules) rule.signature};
     final added = <ReaderPurificationRule>[];
-    var seq = 0;
-    for (final item in items) {
+    var duplicates = 0;
+    var invalid = 0;
+    var disabled = 0;
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    for (final entry in indexed) {
       final parsed = ReaderPurificationRule.fromJson(
-        item,
+        entry.$2,
         defaultBookId: defaultBookId,
         defaultBookTitle: defaultBookTitle,
       );
-      if (parsed == null || parsed.builtIn) continue;
-      final sig =
-          '${parsed.pattern}|${parsed.replacement}|${parsed.scopeBookId}';
-      if (!existingPatterns.add(sig)) continue;
-      seq++;
+      if (parsed == null || parsed.builtIn) {
+        invalid++;
+        continue;
+      }
+      if (!signatures.add(parsed.signature)) {
+        duplicates++;
+        continue;
+      }
+      final reason =
+          parsed.unsupportedReason ??
+          (parsed.replacement.trimLeft().startsWith('@js:')
+              ? '暂不支持 JavaScript 替换脚本'
+              : parsed.isRegex &&
+                    ReaderPurificationRule._compile(parsed.pattern) == null
+              ? '正则表达式暂不兼容'
+              : null);
+      if (reason != null) disabled++;
       added.add(
         ReaderPurificationRule(
-          id: 'custom_${DateTime.now().microsecondsSinceEpoch}_$seq',
+          id: 'custom_${stamp}_${added.length}',
           name: parsed.name,
           pattern: parsed.pattern,
           replacement: parsed.replacement,
           isRegex: parsed.isRegex,
-          enabled: parsed.enabled,
+          enabled: reason == null && parsed.enabled,
           scopeBookId: parsed.scopeBookId,
           scopeBookTitle: parsed.scopeBookTitle,
           applyToTitle: parsed.applyToTitle,
+          applyToContent: parsed.applyToContent,
+          importScope: parsed.importScope,
+          excludeScope: parsed.excludeScope,
+          sourceUrl: sourceUrl ?? parsed.sourceUrl,
+          unsupportedReason: reason,
         ),
       );
     }
@@ -582,7 +788,12 @@ class ReaderPurificationStore extends ChangeNotifier {
       notifyListeners();
       await _persist();
     }
-    return added.length;
+    return ReaderPurificationImportResult(
+      imported: added.length,
+      disabled: disabled,
+      duplicates: duplicates,
+      invalid: invalid,
+    );
   }
 
   /// Returns the enabled rules that actually match the given chapter content
@@ -590,12 +801,15 @@ class ReaderPurificationStore extends ChangeNotifier {
   List<ReaderPurificationRule> effectiveRulesForChapter(
     Iterable<String> paragraphs, {
     int? bookId,
+    String? bookTitle,
     String? chapterTitle,
   }) {
+    if (!_enabled) return const [];
     final active = <ReaderPurificationRule>[];
     final paragraphList = paragraphs.toList(growable: false);
     for (final rule in _rules) {
-      if (!rule.enabled || !rule.appliesToBook(bookId)) continue;
+      if (!rule.enabled || !rule.appliesToBook(bookId, bookTitle: bookTitle))
+        continue;
       if (rule.id == 'builtin_dedup_chapter_title') {
         if (paragraphList.isNotEmpty &&
             dedupLeadingChapterTitle(paragraphList.first, chapterTitle) !=
@@ -610,6 +824,7 @@ class ReaderPurificationStore extends ChangeNotifier {
         active.add(rule);
         continue;
       }
+      if (!rule.applyToContent) continue;
       for (final p in paragraphList) {
         if (rule.matches(p)) {
           active.add(rule);
@@ -623,6 +838,7 @@ class ReaderPurificationStore extends ChangeNotifier {
   String purifyParagraph(
     String text, {
     int? bookId,
+    String? bookTitle,
     int? chapterIndex,
     int? paragraphIndex,
     String? chapterTitle,
@@ -641,14 +857,15 @@ class ReaderPurificationStore extends ChangeNotifier {
     }
     var current = text;
     for (final rule in _rules) {
-      if (!rule.enabled || !rule.appliesToBook(bookId)) continue;
+      if (!rule.enabled || !rule.appliesToBook(bookId, bookTitle: bookTitle))
+        continue;
       if (rule.id == 'builtin_dedup_chapter_title') {
         if (isFirstParagraph && chapterTitle != null) {
           current = dedupLeadingChapterTitle(current, chapterTitle);
         }
         continue;
       }
-      current = rule.apply(current);
+      if (rule.applyToContent) current = rule.apply(current);
     }
     return current;
   }
@@ -714,6 +931,10 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
   final _patternCtrl = TextEditingController();
   final _replacementCtrl = TextEditingController();
   final _editParagraphCtrl = TextEditingController();
+  final _urlCtrl = TextEditingController();
+  bool _showUrlImport = false;
+  bool _importing = false;
+  String? _importError;
   bool _isRegex = false;
   bool _onlyCurrentBook = false;
   bool _applyToTitle = false;
@@ -768,6 +989,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
     _patternCtrl.dispose();
     _replacementCtrl.dispose();
     _editParagraphCtrl.dispose();
+    _urlCtrl.dispose();
     super.dispose();
   }
 
@@ -847,26 +1069,46 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
 
   Future<void> _importRules() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted) return;
     final raw = data?.text?.trim() ?? '';
     if (raw.isEmpty) {
-      if (mounted) showNovelFeedback(context, '剪贴板为空，请先复制净化规则口令或 JSON');
+      showNovelFeedback(context, '请先复制规则链接、分享口令或 JSON');
       return;
     }
+    await _runImport(raw);
+  }
+
+  Future<void> _runImport(String input) async {
+    if (_importing) return;
+    setState(() {
+      _importing = true;
+      _importError = null;
+    });
     try {
-      final count = await ReaderPurificationStore.shared.importRulesFromText(
-        raw,
+      final result = await ReaderPurificationStore.shared.importRulesFromInput(
+        input,
         defaultBookId: _onlyCurrentBook ? widget.bookId : null,
         defaultBookTitle: _onlyCurrentBook ? widget.bookTitle : null,
       );
       if (!mounted) return;
-      showNovelFeedback(
-        context,
-        count > 0 ? '成功导入 $count 条净化规则' : '未发现可导入的新规则',
-      );
-    } catch (_) {
-      if (mounted) {
-        showNovelFeedback(context, '规则格式无法识别，支持书屿口令或阅读 Legado JSON');
-      }
+      showNovelFeedback(context, result.message);
+      if (result.imported > 0) setState(() => _showUrlImport = false);
+    } catch (error) {
+      if (!mounted) return;
+      final message = switch (error) {
+        TimeoutException() => '下载超时，请检查网络后重试',
+        SocketException() => '无法连接规则链接，请检查网络或链接地址',
+        HttpException() => error.message,
+        FormatException() =>
+          '规则无法导入：${error.message}。支持 JSON 规则链接、书屿口令和阅读 Legado JSON',
+        _ => '导入失败，请检查链接和规则格式后重试',
+      };
+      setState(() {
+        _importError = message;
+        _showUrlImport = true;
+      });
+    } finally {
+      if (mounted) setState(() => _importing = false);
     }
   }
 
@@ -880,6 +1122,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
             ? store.effectiveRulesForChapter(
                 widget.chapterParagraphs!,
                 bookId: widget.bookId,
+                bookTitle: widget.bookTitle,
                 chapterTitle: widget.chapterTitle,
               )
             : const <ReaderPurificationRule>[];
@@ -944,12 +1187,104 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '支持智能引号配对修复、对话重分段、按书绑定替换与章节纠错，兼容阅读 Legado 规则导入。',
+                  '支持通过链接、JSON 或分享口令导入阅读 Legado 净化规则，仅处理阅读显示，保留原始文件。',
                   style: TextStyle(
                     fontSize: 12,
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
+                SwitchListTile.adaptive(
+                  key: const ValueKey('purification-master-switch'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('启用净化规则'),
+                  value: store.enabled,
+                  onChanged: store.setEnabled,
+                ),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    GlassTextButton(
+                      key: const ValueKey('purification-import-url'),
+                      onPressed: _importing
+                          ? null
+                          : () => setState(() {
+                              _showUrlImport = !_showUrlImport;
+                              _importError = null;
+                            }),
+                      child: Text(_importing ? '正在导入…' : '链接导入'),
+                    ),
+                    for (final source
+                        in allRules
+                            .map((r) => r.sourceUrl)
+                            .whereType<String>()
+                            .toSet())
+                      InputChip(
+                        label: Text(
+                          '规则来源：${Uri.tryParse(source)?.host ?? source}',
+                        ),
+                        tooltip: source,
+                        onDeleted: _importing
+                            ? null
+                            : () => store.removeSource(source),
+                        deleteButtonTooltipMessage: '删除此链接导入的全部规则',
+                      ),
+                  ],
+                ),
+                if (_showUrlImport) ...[
+                  const SizedBox(height: 10),
+                  TextField(
+                    key: const ValueKey('purification-url-field'),
+                    controller: _urlCtrl,
+                    enabled: !_importing,
+                    keyboardType: TextInputType.url,
+                    autocorrect: false,
+                    decoration: const InputDecoration(
+                      labelText: '规则链接',
+                      hintText: 'https://…/rules.json',
+                      border: OutlineInputBorder(),
+                    ),
+                    onSubmitted: _importing
+                        ? null
+                        : (value) {
+                            try {
+                              ReaderPurificationDownload.parseUrl(value);
+                            } on FormatException catch (error) {
+                              setState(() => _importError = error.message);
+                              return;
+                            }
+                            _runImport(value);
+                          },
+                  ),
+                  if (_importError != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        _importError!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  GlassTextButton(
+                    key: const ValueKey('purification-import-url-submit'),
+                    onPressed: _importing
+                        ? null
+                        : () {
+                            try {
+                              ReaderPurificationDownload.parseUrl(
+                                _urlCtrl.text,
+                              );
+                            } on FormatException catch (error) {
+                              setState(() => _importError = error.message);
+                              return;
+                            }
+                            _runImport(_urlCtrl.text);
+                          },
+                    child: Text(_importing ? '正在下载并导入…' : '导入并使用'),
+                  ),
+                ],
                 if (widget.chapterParagraphs != null) ...[
                   const SizedBox(height: 10),
                   Wrap(
@@ -965,7 +1300,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                       ),
                       GlassTextButton(
                         key: const ValueKey('purification-import-clipboard'),
-                        onPressed: _importRules,
+                        onPressed: _importing ? null : _importRules,
                         child: const Text('剪贴板导入'),
                       ),
                       GlassTextButton(
@@ -983,7 +1318,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                     children: [
                       GlassTextButton(
                         key: const ValueKey('purification-import-clipboard'),
-                        onPressed: _importRules,
+                        onPressed: _importing ? null : _importRules,
                         child: const Text('从剪贴板导入规则/口令'),
                       ),
                       GlassTextButton(
@@ -1231,8 +1566,18 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                                             ArchiveCode(
                                               '仅《${rule.scopeBookTitle ?? rule.scopeBookId}》',
                                             ),
-                                          if (isHit)
-                                            const ArchiveCode('本章命中'),
+                                          if (rule.importScope.isNotEmpty)
+                                            Tooltip(
+                                              message: rule.importScope,
+                                              child: const ArchiveCode(
+                                                '限定书籍/来源',
+                                              ),
+                                            ),
+                                          if (rule.unsupportedReason != null)
+                                            ArchiveCode(
+                                              rule.unsupportedReason!,
+                                            ),
+                                          if (isHit) const ArchiveCode('本章命中'),
                                         ],
                                       ),
                                       const SizedBox(height: 4),
@@ -1264,8 +1609,9 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                                   ),
                                 Switch.adaptive(
                                   value: rule.enabled,
-                                  onChanged: (v) =>
-                                      store.toggleRule(rule.id, v),
+                                  onChanged: rule.unsupportedReason != null
+                                      ? null
+                                      : (v) => store.toggleRule(rule.id, v),
                                 ),
                               ],
                             );

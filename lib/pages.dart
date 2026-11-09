@@ -6781,6 +6781,7 @@ class _ReaderPageState extends State<ReaderPage>
     final purified = ReaderPurificationStore.shared.purifyParagraph(
       paragraphs[index],
       bookId: _novel.id,
+      bookTitle: _novel.title,
       chapterIndex: _chapter,
       paragraphIndex: index,
       chapterTitle: _chapter >= 0 && _chapter < _novel.chapters.length
