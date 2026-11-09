@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
+import 'dart:math';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -24,16 +24,38 @@ class LanBookshelfServer extends ChangeNotifier {
   HttpServer? _server;
   String _hostIp = '127.0.0.1';
   int _port = 0;
+  String _accessCode = '';
   int _uploadedCount = 0;
   String? _lastError;
   final List<String> _recentUploads = <String>[];
 
   bool get isRunning => _server != null;
-  String get url => isRunning ? 'http://$_hostIp:$_port' : '';
+  String get baseUrl => isRunning ? 'http://$_hostIp:$_port' : '';
+  String get url =>
+      isRunning ? 'http://$_hostIp:$_port/?token=$_accessCode' : '';
+  String get accessCode => _accessCode;
   int get port => _port;
   int get uploadedCount => _uploadedCount;
   String? get lastError => _lastError;
   List<String> get recentUploads => List.unmodifiable(_recentUploads);
+
+  static String _generateAccessCode() {
+    final random = Random.secure();
+    final buffer = StringBuffer();
+    for (var i = 0; i < 6; i++) {
+      buffer.write(random.nextInt(10));
+    }
+    return buffer.toString();
+  }
+
+  static bool _constantTimeEquals(String a, String b) {
+    if (a.isEmpty || b.isEmpty || a.length != b.length) return false;
+    var diff = 0;
+    for (var i = 0; i < a.length; i++) {
+      diff |= a.codeUnitAt(i) ^ b.codeUnitAt(i);
+    }
+    return diff == 0;
+  }
 
   static Future<String> resolveLanIp() async {
     try {
@@ -60,29 +82,35 @@ class LanBookshelfServer extends ChangeNotifier {
     return '127.0.0.1';
   }
 
-  Future<void> start({int preferredPort = 8899}) async {
+  Future<void> start({
+    int preferredPort = 8899,
+    InternetAddress? bindAddress,
+  }) async {
     if (_server != null) return;
     _lastError = null;
     try {
       _hostIp = await resolveLanIp();
+      _accessCode = _generateAccessCode();
+      final address = bindAddress ?? InternetAddress.anyIPv4;
       HttpServer server;
       try {
-        server = await HttpServer.bind(InternetAddress.anyIPv4, preferredPort);
+        server = await HttpServer.bind(address, preferredPort);
       } catch (_) {
-        server = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+        server = await HttpServer.bind(address, 0);
       }
       _server = server;
       _port = server.port;
       server.listen(
         _handleRequest,
         onError: (Object error) {
-          _lastError = error.toString();
+          _lastError = '局域网服务连接异常';
           notifyListeners();
         },
       );
       notifyListeners();
-    } catch (error) {
-      _lastError = '启动局域网服务失败：$error';
+    } catch (_) {
+      _accessCode = '';
+      _lastError = '启动局域网服务失败，请检查无线网络连接';
       notifyListeners();
     }
   }
@@ -91,6 +119,7 @@ class LanBookshelfServer extends ChangeNotifier {
     final server = _server;
     _server = null;
     _port = 0;
+    _accessCode = '';
     if (server != null) {
       try {
         await server.close(force: true);
@@ -99,32 +128,91 @@ class LanBookshelfServer extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool _isCrossOrigin(HttpRequest request) {
+    final fetchSite = request.headers.value('sec-fetch-site')?.toLowerCase();
+    if (fetchSite != null &&
+        fetchSite != 'same-origin' &&
+        fetchSite != 'none') {
+      return true;
+    }
+    final origin = request.headers.value('origin');
+    if (origin != null) {
+      final parsed = Uri.tryParse(origin);
+      final host = request.headers.value(HttpHeaders.hostHeader);
+      if (parsed == null || host == null || parsed.authority != host) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool _isAuthorized(HttpRequest request) {
+    if (_accessCode.isEmpty) return false;
+    final candidate =
+        request.headers.value('x-shuyu-token') ??
+        request.uri.queryParameters['token'] ??
+        '';
+    return _constantTimeEquals(candidate.trim(), _accessCode);
+  }
+
+  static String _sanitizeUploadFileName(String rawName) {
+    String decoded;
+    try {
+      decoded = Uri.decodeComponent(rawName).trim();
+    } on ArgumentError {
+      decoded = rawName.trim();
+    }
+    final baseName = decoded.split(RegExp(r'[/\\]')).last.trim();
+    final cleaned = baseName.replaceAll(
+      RegExp(r'[\\/:*?"<>|\x00-\x1f\x7f]'),
+      '_',
+    );
+    if (cleaned.isEmpty || cleaned == '.' || cleaned == '..') {
+      return 'uploaded_book.txt';
+    }
+    return cleaned;
+  }
+
   Future<void> _handleRequest(HttpRequest request) async {
     final response = request.response;
-    response.headers.set('Access-Control-Allow-Origin', '*');
-    response.headers.set(
-      'Access-Control-Allow-Methods',
-      'GET, POST, OPTIONS',
-    );
-    response.headers.set(
-      'Access-Control-Allow-Headers',
-      'Content-Type, X-File-Name',
-    );
-
-    if (request.method == 'OPTIONS') {
-      response.statusCode = HttpStatus.noContent;
-      await response.close();
-      return;
-    }
+    response.headers.set('X-Content-Type-Options', 'nosniff');
+    response.headers.set('X-Frame-Options', 'DENY');
+    response.headers.set('Cache-Control', 'no-store');
+    response.headers.set('Cross-Origin-Resource-Policy', 'same-origin');
 
     final path = request.uri.path;
     try {
       if (request.method == 'GET' && (path == '/' || path == '/index.html')) {
+        response.headers.set(
+          'Content-Security-Policy',
+          "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'",
+        );
         response.headers.contentType = ContentType.html;
         response.write(_webAppHtml);
         await response.close();
         return;
       }
+
+      if (_isCrossOrigin(request)) {
+        _writeJson(
+          response,
+          {'ok': false, 'error': '已拒绝跨站请求'},
+          status: HttpStatus.forbidden,
+        );
+        await response.close();
+        return;
+      }
+
+      if (!_isAuthorized(request)) {
+        _writeJson(
+          response,
+          {'ok': false, 'error': '未授权访问，请输入手机端显示的 6 位访问口令'},
+          status: HttpStatus.unauthorized,
+        );
+        await response.close();
+        return;
+      }
+
       if (request.method == 'GET' && path == '/api/books') {
         final list = [
           for (final book in local.books)
@@ -196,36 +284,46 @@ class LanBookshelfServer extends ChangeNotifier {
         return;
       }
       if (request.method == 'POST' && path == '/api/upload') {
-        final rawName =
-            request.uri.queryParameters['name'] ??
-            request.headers.value('x-file-name') ??
-            'uploaded_book.txt';
-        final fileName = Uri.decodeComponent(rawName).trim();
-        final builder = BytesBuilder(copy: false);
-        await for (final chunk in request) {
-          builder.add(chunk);
-          if (builder.length > localTextMaxSourceBytes) {
-            throw const FormatException('上传文件超过 256 MiB 限制');
-          }
-        }
-        final bytes = builder.takeBytes();
-        if (bytes.isEmpty) {
+        if (request.contentLength > localTextMaxSourceBytes) {
           _writeJson(
             response,
-            {'ok': false, 'error': '上传文件内容为空'},
-            status: HttpStatus.badRequest,
+            {'ok': false, 'error': '上传文件超过 256 MiB 限制'},
+            status: HttpStatus.requestEntityTooLarge,
           );
           await response.close();
           return;
         }
+        final rawName =
+            request.uri.queryParameters['name'] ??
+            request.headers.value('x-file-name') ??
+            'uploaded_book.txt';
+        final safeName = _sanitizeUploadFileName(rawName);
         final tempDir = await Directory.systemTemp.createTemp('shuyu_wifi_');
         try {
-          final safeName = fileName.replaceAll(
-            RegExp(r'[\\/:*?"<>|\x00-\x1f]'),
-            '_',
-          );
           final tempFile = File('${tempDir.path}/$safeName');
-          await tempFile.writeAsBytes(bytes, flush: true);
+          final sink = tempFile.openWrite();
+          var totalBytes = 0;
+          try {
+            await for (final chunk in request) {
+              totalBytes += chunk.length;
+              if (totalBytes > localTextMaxSourceBytes) {
+                throw const FormatException('上传文件超过 256 MiB 限制');
+              }
+              sink.add(chunk);
+            }
+            await sink.flush();
+          } finally {
+            await sink.close();
+          }
+          if (totalBytes == 0) {
+            _writeJson(
+              response,
+              {'ok': false, 'error': '上传文件内容为空'},
+              status: HttpStatus.badRequest,
+            );
+            await response.close();
+            return;
+          }
           if (safeName.toLowerCase().endsWith('.zip')) {
             final res = await local.importCloudBatch(safeName, tempFile.path);
             await state.addShelfBooks([
@@ -260,10 +358,17 @@ class LanBookshelfServer extends ChangeNotifier {
         status: HttpStatus.notFound,
       );
       await response.close();
-    } catch (error) {
+    } on FormatException catch (error) {
       _writeJson(
         response,
-        {'ok': false, 'error': error.toString()},
+        {'ok': false, 'error': error.message},
+        status: HttpStatus.badRequest,
+      );
+      await response.close();
+    } catch (_) {
+      _writeJson(
+        response,
+        {'ok': false, 'error': '请求处理失败'},
         status: HttpStatus.internalServerError,
       );
       await response.close();
@@ -365,7 +470,7 @@ class _LanBookshelfSheet extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                '确保电脑或另一台设备与本机连接同一 Wi-Fi，在浏览器打开下方地址即可拖拽上传 TXT / EPUB / MOBI / AZW3 书籍或在线阅读：',
+                '确保电脑或另一台设备与本机连接同一 Wi-Fi，在浏览器打开下方带口令地址（或输入 6 位访问口令）即可上传书籍或在线阅读：',
                 style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
               ),
               const SizedBox(height: 12),
@@ -380,34 +485,51 @@ class _LanBookshelfSheet extends StatelessWidget {
                     ArchiveDesign.panelRadius,
                   ),
                 ),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Expanded(
-                      child: SelectableText(
-                        running ? server.url : '服务已暂停',
-                        key: const ValueKey('lan-server-url'),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SelectableText(
+                            running ? server.url : '服务已暂停',
+                            key: const ValueKey('lan-server-url'),
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: running
+                                  ? scheme.primary
+                                  : scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                        if (running)
+                          GlassTextButton(
+                            key: const ValueKey('lan-server-copy-url'),
+                            onPressed: () async {
+                              await Clipboard.setData(
+                                ClipboardData(text: server.url),
+                              );
+                              if (context.mounted) {
+                                showNovelFeedback(context, '已复制带口令的局域网地址');
+                              }
+                            },
+                            child: const Text('复制地址'),
+                          ),
+                      ],
+                    ),
+                    if (running) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        '本次会话访问口令：${server.accessCode}',
+                        key: const ValueKey('lan-server-pin'),
                         style: TextStyle(
-                          fontSize: 16,
+                          fontSize: 12,
                           fontWeight: FontWeight.w600,
-                          color: running
-                              ? scheme.primary
-                              : scheme.onSurfaceVariant,
+                          color: scheme.onSurfaceVariant,
                         ),
                       ),
-                    ),
-                    if (running)
-                      GlassTextButton(
-                        key: const ValueKey('lan-server-copy-url'),
-                        onPressed: () async {
-                          await Clipboard.setData(
-                            ClipboardData(text: server.url),
-                          );
-                          if (context.mounted) {
-                            showNovelFeedback(context, '已复制局域网地址');
-                          }
-                        },
-                        child: const Text('复制地址'),
-                      ),
+                    ],
                   ],
                 ),
               ),
@@ -420,7 +542,7 @@ class _LanBookshelfSheet extends StatelessWidget {
               ],
               const SizedBox(height: 12),
               Text(
-                '本次已接收 ${server.uploadedCount} 本书籍 · 关闭此面板将自动停止局域网服务',
+                '本次已接收 ${server.uploadedCount} 本书籍 · 关闭此面板将自动停止局域网服务并销毁口令',
                 style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
               ),
               if (server.recentUploads.isNotEmpty) ...[
@@ -467,14 +589,26 @@ const _webAppHtml = '''<!DOCTYPE html>
     line-height: 1.6;
   }
   header {
-    padding: 20px 24px;
+    padding: 16px 24px;
     border-bottom: 1px solid var(--border);
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
     background: var(--card);
   }
   header h1 { margin: 0; font-size: 20px; font-weight: 600; }
+  .auth-bar { display: flex; align-items: center; gap: 8px; }
+  .auth-bar input {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 13px;
+    width: 120px;
+    background: var(--bg);
+    color: var(--ink);
+  }
   main { max-width: 960px; margin: 24px auto; padding: 0 16px; }
   .dropzone {
     border: 2px dashed var(--accent);
@@ -529,7 +663,11 @@ const _webAppHtml = '''<!DOCTYPE html>
 <body>
 <header>
   <h1>书屿 · Wi-Fi 传书与网页书架</h1>
-  <span id="status" style="font-size:13px;color:var(--muted)">已连接</span>
+  <div class="auth-bar">
+    <input id="tokenInput" type="password" placeholder="6位访问口令" autocomplete="off">
+    <button onclick="loadBooks()">验证并刷新</button>
+    <span id="status" style="font-size:13px;color:var(--muted)">待验证</span>
+  </div>
 </header>
 <main>
   <div class="dropzone" onclick="document.getElementById('fileInput').click()"
@@ -557,11 +695,25 @@ const _webAppHtml = '''<!DOCTYPE html>
 </main>
 <script>
 let currentBookId = 0, currentChapter = 0, totalChapters = 0;
+const initialToken = new URLSearchParams(location.search).get('token') || '';
+if (initialToken) {
+  document.getElementById('tokenInput').value = initialToken;
+}
+function authHeaders() {
+  const token = (document.getElementById('tokenInput').value || '').trim();
+  return {'X-Shuyu-Token': token};
+}
 async function loadBooks() {
-  const res = await fetch('/api/books');
+  const status = document.getElementById('status');
+  const res = await fetch('/api/books', {headers: authHeaders()});
   const data = await res.json();
   const container = document.getElementById('books');
   container.innerHTML = '';
+  if (!data.ok) {
+    status.textContent = data.error || '口令未验证';
+    return;
+  }
+  status.textContent = '已授权连接';
   for (const b of (data.books || [])) {
     const div = document.createElement('div');
     div.className = 'book-card';
@@ -572,7 +724,9 @@ async function loadBooks() {
   }
 }
 async function openBook(id, ch) {
-  const res = await fetch('/api/book?id=' + id + '&chapter=' + ch);
+  const res = await fetch('/api/book?id=' + id + '&chapter=' + ch, {
+    headers: authHeaders()
+  });
   const data = await res.json();
   if (!data.ok) return alert(data.error || '加载失败');
   currentBookId = data.id;
@@ -593,6 +747,7 @@ async function uploadFiles(files) {
     status.textContent = '正在上传 ' + file.name + '…';
     const res = await fetch('/api/upload?name=' + encodeURIComponent(file.name), {
       method: 'POST',
+      headers: authHeaders(),
       body: file
     });
     const data = await res.json();

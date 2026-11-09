@@ -223,4 +223,111 @@ void main() {
       expect(await link.exists(), true);
     });
   });
+
+  test('WebDAV backup stores password in Keystore, scrubs prefs and rejects HTTP', () async {
+    WebDavSecretStorage.resetForTesting();
+    final keystoreVault = <String, String>{};
+    messenger.setMockMethodCallHandler(WebDavSecretStorage.channel, (call) async {
+      final args = call.arguments as Map<dynamic, dynamic>?;
+      final key = (args?['key'] as String?) ?? 'config';
+      if (call.method == 'readSecret') return keystoreVault[key];
+      if (call.method == 'writeSecret') {
+        final val = args?['value'] as String?;
+        if (val == null || val.isEmpty) {
+          keystoreVault.remove(key);
+        } else {
+          keystoreVault[key] = val;
+        }
+        return null;
+      }
+      return null;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(WebDavSecretStorage.channel, null);
+      WebDavSecretStorage.resetForTesting();
+    });
+
+    SharedPreferences.setMockInitialValues({
+      'webdav.backup.config.v1': jsonEncode({
+        'serverUrl': 'https://dav.example.com/dav/',
+        'username': 'reader',
+        'password': 'legacy-secret-password',
+        'remoteFolder': 'shuyu_backup',
+      }),
+    });
+    final prefs = await SharedPreferences.getInstance();
+    final migrated = await WebDavBackupConfig.loadAsync(prefs);
+    expect(migrated.password, 'legacy-secret-password');
+    expect(keystoreVault['webdav.backup.password.v1'], 'legacy-secret-password');
+    final scrubbedRaw = prefs.getString('webdav.backup.config.v1')!;
+    expect(scrubbedRaw, isNot(contains('legacy-secret-password')));
+    expect((jsonDecode(scrubbedRaw) as Map).containsKey('password'), isFalse);
+
+    const insecure = WebDavBackupConfig(
+      serverUrl: 'http://dav.example.com/dav/',
+      username: 'reader',
+      password: 'pw',
+    );
+    expect(insecure.folderUri(), isNull);
+    expect(insecure.validateServerUrl, throwsFormatException);
+  });
+
+  test('LAN bookshelf server enforces session token and blocks wildcard CORS', () async {
+    final root = await Directory.systemTemp.createTemp('batch-c-lan-');
+    final previous = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _Paths(root.path);
+    SharedPreferences.setMockInitialValues({});
+    final state = await LibraryState.load();
+    final local = await LocalLibraryStore.load();
+    final server = LanBookshelfServer(local: local, state: state);
+    addTearDown(() async {
+      await server.stop();
+      server.dispose();
+      state.dispose();
+      PathProviderPlatform.instance = previous;
+      if (await root.exists()) await root.delete(recursive: true);
+    });
+
+    await HttpOverrides.runWithHttpOverrides(() async {
+      await server.start(
+        preferredPort: 0,
+        bindAddress: InternetAddress.loopbackIPv4,
+      );
+      expect(server.isRunning, isTrue);
+      expect(server.accessCode, hasLength(6));
+
+      final client = HttpClient();
+      addTearDown(() => client.close(force: true));
+
+      final unauthReq = await client.getUrl(
+        Uri.parse('http://127.0.0.1:${server.port}/api/books'),
+      );
+      final unauthRes = await unauthReq.close();
+      await unauthRes.drain<void>();
+      expect(unauthRes.statusCode, HttpStatus.unauthorized);
+      expect(
+        unauthRes.headers.value('access-control-allow-origin'),
+        isNull,
+      );
+
+      final crossSiteReq = await client.getUrl(
+        Uri.parse(
+          'http://127.0.0.1:${server.port}/api/books?token=${server.accessCode}',
+        ),
+      );
+      crossSiteReq.headers.set('Sec-Fetch-Site', 'cross-site');
+      final crossSiteRes = await crossSiteReq.close();
+      await crossSiteRes.drain<void>();
+      expect(crossSiteRes.statusCode, HttpStatus.forbidden);
+
+      final authReq = await client.getUrl(
+        Uri.parse('http://127.0.0.1:${server.port}/api/books'),
+      );
+      authReq.headers.set('X-Shuyu-Token', server.accessCode);
+      final authRes = await authReq.close();
+      final body = jsonDecode(await utf8.decoder.bind(authRes).join()) as Map;
+      expect(authRes.statusCode, HttpStatus.ok);
+      expect(body['ok'], isTrue);
+    }, null);
+  });
 }

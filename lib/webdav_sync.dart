@@ -4,11 +4,56 @@ import 'dart:io';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_ui.dart';
 
 const String _webDavConfigStorageKey = 'webdav.backup.config.v1';
+const String _webDavPasswordKeystoreKey = 'webdav.backup.password.v1';
+
+class WebDavSecretStorage {
+  const WebDavSecretStorage._();
+
+  static const MethodChannel channel = MethodChannel(
+    'org.mewx.wenku8/cloud_sources',
+  );
+  static String _memoryFallbackPassword = '';
+
+  @visibleForTesting
+  static void resetForTesting() {
+    _memoryFallbackPassword = '';
+  }
+
+  static Future<String> readPassword() async {
+    try {
+      final result = await channel.invokeMethod<String>('readSecret', {
+        'key': _webDavPasswordKeystoreKey,
+      });
+      if (result != null) {
+        _memoryFallbackPassword = result;
+        return result;
+      }
+    } on MissingPluginException {
+      return _memoryFallbackPassword;
+    } on PlatformException {
+      return _memoryFallbackPassword;
+    }
+    return _memoryFallbackPassword;
+  }
+
+  static Future<void> writePassword(String password) async {
+    _memoryFallbackPassword = password;
+    try {
+      await channel.invokeMethod<void>('writeSecret', {
+        'key': _webDavPasswordKeystoreKey,
+        'value': password.isEmpty ? null : password,
+      });
+    } on MissingPluginException {
+      // Non-Android test environments fall back to in-memory session storage.
+    }
+  }
+}
 
 @immutable
 class WebDavBackupConfig {
@@ -31,26 +76,89 @@ class WebDavBackupConfig {
       username.trim().isNotEmpty &&
       password.isNotEmpty;
 
+  static bool _hasInvalidSegments(Iterable<String> segments) {
+    for (final segment in segments) {
+      if (segment == '.' || segment == '..') return true;
+      if (segment.runes.any((r) => r < 0x20 || r == 0x7f)) return true;
+    }
+    return false;
+  }
+
+  void validateServerUrl() {
+    final raw = serverUrl.trim();
+    if (raw.isEmpty) {
+      throw const FormatException('WebDAV 服务器地址不能为空');
+    }
+    final normalizedBase = raw.endsWith('/') ? raw : '$raw/';
+    final base = Uri.tryParse(normalizedBase);
+    if (base == null || !base.hasAuthority || base.host.isEmpty) {
+      throw const FormatException('WebDAV 服务器地址格式无效');
+    }
+    if (base.isScheme('http')) {
+      throw const FormatException('WebDAV 备份仅支持 HTTPS 加密连接，已拒绝明文 HTTP');
+    }
+    if (!base.isScheme('https')) {
+      throw const FormatException('WebDAV 服务器地址必须使用 https:// 协议');
+    }
+    if (base.userInfo.isNotEmpty || base.hasQuery || base.hasFragment) {
+      throw const FormatException('WebDAV 服务器地址不能包含账号信息、查询参数或锚点');
+    }
+    if (_hasInvalidSegments(base.pathSegments)) {
+      throw const FormatException('WebDAV 服务器路径包含非法段落');
+    }
+  }
+
   Uri? folderUri() {
     final raw = serverUrl.trim();
     if (raw.isEmpty) return null;
     final normalizedBase = raw.endsWith('/') ? raw : '$raw/';
     final base = Uri.tryParse(normalizedBase);
-    if (base == null || (!base.isScheme('http') && !base.isScheme('https'))) {
+    if (base == null ||
+        !base.isScheme('https') ||
+        !base.hasAuthority ||
+        base.host.isEmpty ||
+        base.userInfo.isNotEmpty ||
+        base.hasQuery ||
+        base.hasFragment ||
+        _hasInvalidSegments(base.pathSegments)) {
       return null;
     }
     final cleanFolder = remoteFolder
         .trim()
         .replaceAll(RegExp(r'^/+|/+$'), '');
     if (cleanFolder.isEmpty) return base;
-    return base.resolve('$cleanFolder/');
+    final folderSegments = cleanFolder
+        .split('/')
+        .where((s) => s.isNotEmpty)
+        .toList(growable: false);
+    if (folderSegments.isEmpty || _hasInvalidSegments(folderSegments)) {
+      return null;
+    }
+    return base.replace(
+      pathSegments: [
+        ...base.pathSegments.where((s) => s.isNotEmpty),
+        ...folderSegments,
+        '',
+      ],
+    );
   }
 
   Uri? fileUri(String fileName) {
     final folder = folderUri();
     if (folder == null) return null;
-    final cleanName = fileName.replaceAll(RegExp(r'^/+'), '');
-    return folder.resolve(cleanName);
+    final cleanName = fileName.trim().replaceAll(RegExp(r'^/+'), '');
+    if (cleanName.isEmpty ||
+        cleanName.contains('/') ||
+        cleanName.contains(r'\') ||
+        _hasInvalidSegments([cleanName])) {
+      return null;
+    }
+    return folder.replace(
+      pathSegments: [
+        ...folder.pathSegments.where((s) => s.isNotEmpty),
+        cleanName,
+      ],
+    );
   }
 
   WebDavBackupConfig copyWith({
@@ -67,37 +175,84 @@ class WebDavBackupConfig {
     autoBackup: autoBackup ?? this.autoBackup,
   );
 
+  /// Serializes only non-sensitive metadata for SharedPreferences.
+  /// The password is stored exclusively in Android Keystore via [WebDavSecretStorage].
   Map<String, dynamic> toJson() => {
     'serverUrl': serverUrl,
     'username': username,
-    'password': password,
     'remoteFolder': remoteFolder,
     'autoBackup': autoBackup,
   };
 
-  factory WebDavBackupConfig.fromJson(Map<String, dynamic> json) =>
-      WebDavBackupConfig(
-        serverUrl: (json['serverUrl'] as String?) ??
-            'https://dav.jianguoyun.com/dav/',
-        username: (json['username'] as String?) ?? '',
-        password: (json['password'] as String?) ?? '',
-        remoteFolder: (json['remoteFolder'] as String?) ?? 'shuyu_backup',
-        autoBackup: (json['autoBackup'] as bool?) ?? false,
-      );
+  factory WebDavBackupConfig.fromJson(
+    Map<String, dynamic> json, {
+    String? passwordOverride,
+  }) => WebDavBackupConfig(
+    serverUrl: (json['serverUrl'] as String?) ??
+        'https://dav.jianguoyun.com/dav/',
+    username: (json['username'] as String?) ?? '',
+    password: passwordOverride ?? (json['password'] as String?) ?? '',
+    remoteFolder: (json['remoteFolder'] as String?) ?? 'shuyu_backup',
+    autoBackup: (json['autoBackup'] as bool?) ?? false,
+  );
 
   static WebDavBackupConfig load(SharedPreferences? prefs) {
     final raw = prefs?.getString(_webDavConfigStorageKey);
-    if (raw == null || raw.isEmpty) return const WebDavBackupConfig();
+    if (raw == null || raw.isEmpty) {
+      return WebDavBackupConfig(
+        password: WebDavSecretStorage._memoryFallbackPassword,
+      );
+    }
     try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
       return WebDavBackupConfig.fromJson(
-        jsonDecode(raw) as Map<String, dynamic>,
+        decoded,
+        passwordOverride:
+            (decoded['password'] as String?) ??
+            WebDavSecretStorage._memoryFallbackPassword,
       );
     } catch (_) {
       return const WebDavBackupConfig();
     }
   }
 
+  static Future<WebDavBackupConfig> loadAsync(SharedPreferences? prefs) async {
+    final secretPassword = await WebDavSecretStorage.readPassword();
+    final raw = prefs?.getString(_webDavConfigStorageKey);
+    if (raw == null || raw.isEmpty) {
+      return WebDavBackupConfig(password: secretPassword);
+    }
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final legacyPlaintextPassword = decoded['password'] as String?;
+      final effectivePassword =
+          secretPassword.isNotEmpty
+              ? secretPassword
+              : (legacyPlaintextPassword ?? '');
+      final config = WebDavBackupConfig.fromJson(
+        decoded,
+        passwordOverride: effectivePassword,
+      );
+      if (decoded.containsKey('password')) {
+        // Migrate legacy plaintext password to Keystore and scrub SharedPreferences.
+        if (legacyPlaintextPassword != null &&
+            legacyPlaintextPassword.isNotEmpty &&
+            secretPassword.isEmpty) {
+          await WebDavSecretStorage.writePassword(legacyPlaintextPassword);
+        }
+        await prefs?.setString(
+          _webDavConfigStorageKey,
+          jsonEncode(config.toJson()),
+        );
+      }
+      return config;
+    } catch (_) {
+      return WebDavBackupConfig(password: secretPassword);
+    }
+  }
+
   Future<void> save(SharedPreferences? prefs) async {
+    await WebDavSecretStorage.writePassword(password);
     await prefs?.setString(_webDavConfigStorageKey, jsonEncode(toJson()));
   }
 }
@@ -106,12 +261,37 @@ class WebDavBackupClient {
   const WebDavBackupClient(this.config);
 
   final WebDavBackupConfig config;
+  static const int maxResponseBytes = 32 * 1024 * 1024;
+  static const int _maxRedirects = 3;
 
   String get _basicAuthHeader {
     final token = base64Encode(
       utf8.encode('${config.username.trim()}:${config.password}'),
     );
     return 'Basic $token';
+  }
+
+  static bool _sameOrigin(Uri a, Uri b) =>
+      a.scheme.toLowerCase() == b.scheme.toLowerCase() &&
+      a.host.toLowerCase() == b.host.toLowerCase() &&
+      a.port == b.port;
+
+  static Future<String> _readUtf8Bounded(
+    HttpClientResponse response, {
+    int maxBytes = maxResponseBytes,
+  }) async {
+    if (response.contentLength > maxBytes) {
+      await response.drain<void>();
+      throw const FormatException('WebDAV 响应超过大小限制');
+    }
+    final bytes = <int>[];
+    await for (final chunk in response) {
+      if (bytes.length + chunk.length > maxBytes) {
+        throw const FormatException('WebDAV 响应超过大小限制');
+      }
+      bytes.addAll(chunk);
+    }
+    return utf8.decode(bytes, allowMalformed: true);
   }
 
   Future<HttpClientResponse> _send(
@@ -121,22 +301,50 @@ class WebDavBackupClient {
     Map<String, String>? headers,
     List<int>? body,
   }) async {
-    final request = await client
-        .openUrl(method, uri)
-        .timeout(const Duration(seconds: 20));
-    request.headers.set(HttpHeaders.authorizationHeader, _basicAuthHeader);
-    request.headers.set(HttpHeaders.userAgentHeader, 'Shuyu-WebDAV/1.0');
-    headers?.forEach(request.headers.set);
-    if (body != null) {
-      request.contentLength = body.length;
-      request.add(body);
+    var current = uri;
+    for (var redirect = 0; redirect <= _maxRedirects; redirect++) {
+      if (!current.isScheme('https')) {
+        throw const FormatException('WebDAV 备份仅支持 HTTPS 加密连接，已拒绝明文 HTTP');
+      }
+      final request = await client
+          .openUrl(method, current)
+          .timeout(const Duration(seconds: 20));
+      request.followRedirects = false;
+      request.maxRedirects = 0;
+      request.headers.set(HttpHeaders.authorizationHeader, _basicAuthHeader);
+      request.headers.set(HttpHeaders.userAgentHeader, 'Shuyu-WebDAV/1.0');
+      headers?.forEach(request.headers.set);
+      if (body != null) {
+        request.contentLength = body.length;
+        request.add(body);
+      }
+      final response = await request.close().timeout(
+        const Duration(seconds: 25),
+      );
+      if (!const {301, 302, 307, 308}.contains(response.statusCode)) {
+        return response;
+      }
+      final location = response.headers.value(HttpHeaders.locationHeader);
+      await response.drain<void>();
+      if (location == null || redirect == _maxRedirects) {
+        throw const FormatException('WebDAV 重定向过多或缺少目标地址');
+      }
+      final next = current.resolve(location);
+      if (!next.isScheme('https') ||
+          !next.hasAuthority ||
+          next.userInfo.isNotEmpty ||
+          !_sameOrigin(current, next)) {
+        throw const FormatException('已拒绝跨源或非 HTTPS 的 WebDAV 重定向');
+      }
+      current = next;
     }
-    return request.close().timeout(const Duration(seconds: 25));
+    throw const FormatException('WebDAV 重定向过多');
   }
 
   Future<void> ensureFolder(HttpClient client) async {
+    config.validateServerUrl();
     final uri = config.folderUri();
-    if (uri == null) throw const FormatException('WebDAV 服务器地址格式无效');
+    if (uri == null) throw const FormatException('WebDAV 服务器地址或远程目录格式无效');
     final response = await _send(client, 'MKCOL', uri);
     await response.drain<void>();
     // 201 Created, 405 Method Not Allowed (already exists), 301/200 OK
@@ -149,6 +357,7 @@ class WebDavBackupClient {
     if (!config.isConfigured) {
       throw const FormatException('请先填写完整的 WebDAV 地址、账号与密码');
     }
+    config.validateServerUrl();
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 15);
     try {
@@ -182,6 +391,7 @@ class WebDavBackupClient {
     if (!config.isConfigured) {
       throw const FormatException('请先填写完整的 WebDAV 地址、账号与密码');
     }
+    config.validateServerUrl();
     final uri = config.folderUri();
     if (uri == null) throw const FormatException('WebDAV 服务器地址格式无效');
     final client = HttpClient()
@@ -205,21 +415,27 @@ class WebDavBackupClient {
         await response.drain<void>();
         throw FormatException('WebDAV 目录读取失败（HTTP ${response.statusCode}）');
       }
-      final xml = await utf8.decoder.bind(response).join();
+      final xml = await _readUtf8Bounded(response);
       final matches = RegExp(
         r'<(?:\w+:)?href[^>]*>([^<]+)</(?:\w+:)?href>',
         caseSensitive: false,
       ).allMatches(xml);
       final files = <String>{};
       for (final match in matches) {
-        final rawHref = Uri.decodeFull((match.group(1) ?? '').trim());
+        String rawHref;
+        try {
+          rawHref = Uri.decodeFull((match.group(1) ?? '').trim());
+        } on ArgumentError {
+          continue;
+        }
         final segments = rawHref
             .split('/')
             .where((segment) => segment.isNotEmpty)
             .toList(growable: false);
         if (segments.isEmpty) continue;
         final last = segments.last;
-        if (last.toLowerCase().endsWith('.json')) {
+        if (last.toLowerCase().endsWith('.json') &&
+            !WebDavBackupConfig._hasInvalidSegments([last])) {
           files.add(last);
         }
       }
@@ -236,6 +452,7 @@ class WebDavBackupClient {
     if (!config.isConfigured) {
       throw const FormatException('请先填写完整的 WebDAV 地址、账号与密码');
     }
+    config.validateServerUrl();
     final uri = config.fileUri(fileName);
     if (uri == null) throw const FormatException('WebDAV 目标路径无效');
     final client = HttpClient()
@@ -250,7 +467,7 @@ class WebDavBackupClient {
         await response.drain<void>();
         throw FormatException('WebDAV 下载失败（HTTP ${response.statusCode}）');
       }
-      return await utf8.decoder.bind(response).join();
+      return await _readUtf8Bounded(response);
     } finally {
       client.close(force: true);
     }
@@ -307,6 +524,18 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
     _userController = TextEditingController(text: _config.username);
     _passController = TextEditingController(text: _config.password);
     _folderController = TextEditingController(text: _config.remoteFolder);
+    unawaited(_loadSecureConfig());
+  }
+
+  Future<void> _loadSecureConfig() async {
+    final loaded = await WebDavBackupConfig.loadAsync(widget.preferences);
+    if (!mounted) return;
+    setState(() {
+      _config = loaded;
+      if (_passController.text.isEmpty && loaded.password.isNotEmpty) {
+        _passController.text = loaded.password;
+      }
+    });
   }
 
   @override

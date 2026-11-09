@@ -219,8 +219,27 @@ class ReaderPurificationRule {
   );
 
   static final Map<String, RegExp> _regExpCache = {};
+  static final Set<String> _trippedRuleIds = <String>{};
+
+  /// Detects regex patterns prone to catastrophic backtracking (ReDoS) or
+  /// excessive complexity before they can block the UI isolate.
+  static String? detectUnsafeRegexPattern(String pattern) {
+    if (pattern.length > 512) {
+      return '正则表达式过长，已禁用以防卡顿';
+    }
+    // Nested quantifiers inside a group followed by an outer quantifier, e.g.
+    // (a+)+, (.*)+, ([a-z]+)*, (?:a|aa)+, or adjacent unbounded wildcards .*.*
+    final nestedQuantifier = RegExp(
+      r'\((?:\?[:=!])?[^()]*[+*?\}][^()]*\)\s*(?:[+*?]|\{\d)|(?:\.\*){2,}|(?:\.\+){2,}',
+    );
+    if (nestedQuantifier.hasMatch(pattern)) {
+      return '正则表达式存在灾难性回溯风险，已自动禁用';
+    }
+    return null;
+  }
 
   static RegExp? _compile(String pattern) {
+    if (detectUnsafeRegexPattern(pattern) != null) return null;
     try {
       var regExp = _regExpCache[pattern];
       if (regExp == null) {
@@ -266,6 +285,7 @@ class ReaderPurificationRule {
   bool matches(String input) {
     if (!enabled ||
         unsupportedReason != null ||
+        _trippedRuleIds.contains(id) ||
         replacement.trimLeft().startsWith('@js:') ||
         pattern.isEmpty ||
         input.isEmpty) {
@@ -279,12 +299,20 @@ class ReaderPurificationRule {
     }
     if (!isRegex) return input.contains(pattern);
     final regExp = _compile(pattern);
-    return regExp != null && regExp.hasMatch(input);
+    if (regExp == null) return false;
+    final sw = Stopwatch()..start();
+    final matched = regExp.hasMatch(input);
+    sw.stop();
+    if (sw.elapsedMicroseconds > 8000) {
+      _trippedRuleIds.add(id);
+    }
+    return matched;
   }
 
   String apply(String input) {
     if (!enabled ||
         unsupportedReason != null ||
+        _trippedRuleIds.contains(id) ||
         replacement.trimLeft().startsWith('@js:') ||
         input.isEmpty) {
       return input;
@@ -301,7 +329,8 @@ class ReaderPurificationRule {
     }
     final regExp = _compile(pattern);
     if (regExp == null) return input;
-    return input.replaceAllMapped(regExp, (match) {
+    final sw = Stopwatch()..start();
+    final result = input.replaceAllMapped(regExp, (match) {
       // Dart replaceAll treats $1 literally; Legado uses Java-style groups.
       final out = StringBuffer();
       for (var i = 0; i < replacement.length; i++) {
@@ -334,6 +363,11 @@ class ReaderPurificationRule {
       }
       return out.toString();
     });
+    sw.stop();
+    if (sw.elapsedMicroseconds > 8000) {
+      _trippedRuleIds.add(id);
+    }
+    return result;
   }
 
   Map<String, Object?> toJson() => {
@@ -359,6 +393,7 @@ class ReaderPurificationRule {
     Object? raw, {
     int? defaultBookId,
     String? defaultBookTitle,
+    bool allowLegacyEnabledField = false,
   }) {
     if (raw is! Map) return null;
     final name = raw['name'] is String ? (raw['name'] as String).trim() : null;
@@ -380,9 +415,16 @@ class ReaderPurificationRule {
             ? raw['scopeBookTitle'] as String
             : null) ??
         (scopeId != null ? defaultBookTitle : null);
-    final enabled = raw.containsKey('enabled')
-        ? raw['enabled'] == true
-        : (raw['isEnabled'] != false);
+    final isRegex = raw['isRegex'] == true;
+    final unsafeReason = isRegex ? detectUnsafeRegexPattern(pattern) : null;
+    final rawUnsupported = raw['unsupportedReason'] is String
+        ? raw['unsupportedReason'] as String
+        : unsafeReason;
+    final enabled =
+        rawUnsupported == null &&
+        (raw.containsKey('enabled')
+            ? raw['enabled'] == true
+            : (allowLegacyEnabledField && raw['isEnabled'] == true));
     final applyTitle = raw['applyToTitle'] == true || raw['scopeTitle'] == true;
     return ReaderPurificationRule(
       id: id,
@@ -391,7 +433,7 @@ class ReaderPurificationRule {
       replacement: raw['replacement'] is String
           ? raw['replacement'] as String
           : '',
-      isRegex: raw['isRegex'] == true,
+      isRegex: isRegex,
       enabled: enabled,
       builtIn: raw['builtIn'] == true,
       scopeBookId: scopeId,
@@ -404,9 +446,7 @@ class ReaderPurificationRule {
           ? raw['excludeScope'] as String
           : '',
       sourceUrl: raw['sourceUrl'] is String ? raw['sourceUrl'] as String : null,
-      unsupportedReason: raw['unsupportedReason'] is String
-          ? raw['unsupportedReason'] as String
-          : null,
+      unsupportedReason: rawUnsupported,
     );
   }
 }
@@ -486,16 +526,34 @@ class ReaderPurificationStore extends ChangeNotifier {
   ];
 
   List<ReaderPurificationRule> _rules = [...builtInPresets];
+  List<ReaderPurificationRule>? _cachedEnabledRules;
+  final Map<String, String> _paragraphCache = <String, String>{};
+  final Map<String, List<ReaderPurificationRule>> _chapterEffectiveCache =
+      <String, List<ReaderPurificationRule>>{};
   Map<String, String> _paragraphEdits = {};
   bool _loaded = false;
   bool _enabled = true;
   bool get enabled => _enabled;
 
+  void _invalidateCaches() {
+    _cachedEnabledRules = null;
+    _paragraphCache.clear();
+    _chapterEffectiveCache.clear();
+  }
+
+  List<ReaderPurificationRule> get _enabledRules =>
+      _cachedEnabledRules ??= _rules
+          .where(
+            (rule) =>
+                rule.enabled &&
+                rule.unsupportedReason == null &&
+                !ReaderPurificationRule._trippedRuleIds.contains(rule.id),
+          )
+          .toList(growable: false);
+
   List<ReaderPurificationRule> get rules => List.unmodifiable(_rules);
 
-  bool get hasEnabledRules =>
-      _enabled &&
-      _rules.any((rule) => rule.enabled && rule.unsupportedReason == null);
+  bool get hasEnabledRules => _enabled && _enabledRules.isNotEmpty;
 
   @visibleForTesting
   void resetForTesting() {
@@ -503,6 +561,8 @@ class ReaderPurificationStore extends ChangeNotifier {
     _paragraphEdits = {};
     _loaded = false;
     _enabled = true;
+    ReaderPurificationRule._trippedRuleIds.clear();
+    _invalidateCaches();
   }
 
   Future<void> ensureLoaded() async {
@@ -539,6 +599,7 @@ class ReaderPurificationStore extends ChangeNotifier {
             custom,
       ];
       _rules = merged;
+      _invalidateCaches();
       notifyListeners();
     } catch (_) {}
   }
@@ -578,6 +639,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     await ensureLoaded();
     final key = _editKey(bookId, chapterIndex, paragraphIndex);
     _paragraphEdits = {..._paragraphEdits, key: editedText};
+    _invalidateCaches();
     notifyListeners();
     await _persistEdits();
   }
@@ -592,6 +654,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     if (!_paragraphEdits.containsKey(key)) return;
     final next = Map<String, String>.of(_paragraphEdits)..remove(key);
     _paragraphEdits = next;
+    _invalidateCaches();
     notifyListeners();
     await _persistEdits();
   }
@@ -599,6 +662,7 @@ class ReaderPurificationStore extends ChangeNotifier {
   Future<void> setEnabled(bool value) async {
     await ensureLoaded();
     _enabled = value;
+    _invalidateCaches();
     notifyListeners();
     await _persist();
   }
@@ -608,6 +672,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     _rules = _rules
         .where((r) => r.builtIn || r.sourceUrl != sourceUrl)
         .toList();
+    _invalidateCaches();
     notifyListeners();
     await _persist();
   }
@@ -616,8 +681,26 @@ class ReaderPurificationStore extends ChangeNotifier {
     await ensureLoaded();
     _rules = [
       for (final rule in _rules)
-        if (rule.id == id) rule.copyWith(enabled: enabled) else rule,
+        if (rule.id == id && rule.unsupportedReason == null)
+          rule.copyWith(enabled: enabled)
+        else
+          rule,
     ];
+    _invalidateCaches();
+    notifyListeners();
+    await _persist();
+  }
+
+  Future<void> enableAllCustomRules([bool enabled = true]) async {
+    await ensureLoaded();
+    _rules = [
+      for (final rule in _rules)
+        if (!rule.builtIn && rule.unsupportedReason == null)
+          rule.copyWith(enabled: enabled)
+        else
+          rule,
+    ];
+    _invalidateCaches();
     notifyListeners();
     await _persist();
   }
@@ -634,6 +717,9 @@ class ReaderPurificationStore extends ChangeNotifier {
     await ensureLoaded();
     final trimmedName = name.trim();
     if (trimmedName.isEmpty || pattern.isEmpty) return;
+    final unsafeReason = isRegex
+        ? ReaderPurificationRule.detectUnsafeRegexPattern(pattern)
+        : null;
     final id = 'custom_${DateTime.now().microsecondsSinceEpoch}';
     _rules = [
       ..._rules,
@@ -643,12 +729,14 @@ class ReaderPurificationStore extends ChangeNotifier {
         pattern: pattern,
         replacement: replacement,
         isRegex: isRegex,
-        enabled: true,
+        enabled: unsafeReason == null,
         scopeBookId: scopeBookId,
         scopeBookTitle: scopeBookTitle,
         applyToTitle: applyToTitle,
+        unsupportedReason: unsafeReason,
       ),
     ];
+    _invalidateCaches();
     notifyListeners();
     await _persist();
   }
@@ -659,6 +747,7 @@ class ReaderPurificationStore extends ChangeNotifier {
       for (final rule in _rules)
         if (rule.id != id || rule.builtIn) rule,
     ];
+    _invalidateCaches();
     notifyListeners();
     await _persist();
   }
@@ -676,21 +765,31 @@ class ReaderPurificationStore extends ChangeNotifier {
     return 'shuyu://purification?data=$encoded';
   }
 
-  /// Accepts a remote JSON URL, share token, or pasted JSON.
+  /// Accepts a remote HTTPS JSON URL, share token, or pasted JSON.
+  /// External imports default to disabled (`enableImported = false`) so
+  /// untrusted or expensive rules never auto-run before user confirmation.
   Future<ReaderPurificationImportResult> importRulesFromInput(
     String input, {
     int? defaultBookId,
     String? defaultBookTitle,
+    bool enableImported = false,
   }) async {
     final text = input.trim();
     final uri = Uri.tryParse(text);
-    final isUrl = uri != null && {'http', 'https'}.contains(uri.scheme);
+    final isUrl =
+        uri != null &&
+        uri.hasScheme &&
+        !uri.isScheme('shuyu') &&
+        !text.startsWith('[') &&
+        !text.startsWith('{');
+    final validatedUri = isUrl ? ReaderPurificationDownload.parseUrl(text) : null;
     final payload = isUrl ? await ReaderPurificationDownload.fetch(text) : text;
     return _importPayload(
       payload,
-      sourceUrl: isUrl ? uri.toString() : null,
+      sourceUrl: validatedUri?.toString(),
       defaultBookId: defaultBookId,
       defaultBookTitle: defaultBookTitle,
+      enableImported: enableImported,
     );
   }
 
@@ -698,10 +797,12 @@ class ReaderPurificationStore extends ChangeNotifier {
     String text, {
     int? defaultBookId,
     String? defaultBookTitle,
+    bool enableImported = false,
   }) async => (await _importPayload(
     text,
     defaultBookId: defaultBookId,
     defaultBookTitle: defaultBookTitle,
+    enableImported: enableImported,
   )).imported;
 
   Future<ReaderPurificationImportResult> _importPayload(
@@ -709,6 +810,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     String? sourceUrl,
     int? defaultBookId,
     String? defaultBookTitle,
+    bool enableImported = false,
   }) async {
     await ensureLoaded();
     var payload = rawText.trim().replaceFirst(RegExp(r'^\uFEFF'), '');
@@ -746,6 +848,7 @@ class ReaderPurificationStore extends ChangeNotifier {
         entry.$2,
         defaultBookId: defaultBookId,
         defaultBookTitle: defaultBookTitle,
+        allowLegacyEnabledField: enableImported,
       );
       if (parsed == null || parsed.builtIn) {
         invalid++;
@@ -761,7 +864,7 @@ class ReaderPurificationStore extends ChangeNotifier {
               ? '暂不支持 JavaScript 替换脚本'
               : parsed.isRegex &&
                     ReaderPurificationRule._compile(parsed.pattern) == null
-              ? '正则表达式暂不兼容'
+              ? '正则表达式暂不兼容或存在风险'
               : null);
       if (reason != null) disabled++;
       added.add(
@@ -771,7 +874,7 @@ class ReaderPurificationStore extends ChangeNotifier {
           pattern: parsed.pattern,
           replacement: parsed.replacement,
           isRegex: parsed.isRegex,
-          enabled: reason == null && parsed.enabled,
+          enabled: enableImported && reason == null && parsed.enabled,
           scopeBookId: parsed.scopeBookId,
           scopeBookTitle: parsed.scopeBookTitle,
           applyToTitle: parsed.applyToTitle,
@@ -785,6 +888,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     }
     if (added.isNotEmpty) {
       _rules = [..._rules, ...added];
+      _invalidateCaches();
       notifyListeners();
       await _persist();
     }
@@ -805,11 +909,21 @@ class ReaderPurificationStore extends ChangeNotifier {
     String? chapterTitle,
   }) {
     if (!_enabled) return const [];
-    final active = <ReaderPurificationRule>[];
+    final enabledRules = _enabledRules;
+    if (enabledRules.isEmpty) return const [];
     final paragraphList = paragraphs.toList(growable: false);
-    for (final rule in _rules) {
-      if (!rule.enabled || !rule.appliesToBook(bookId, bookTitle: bookTitle))
+    final cacheKey =
+        '${bookId ?? ''}\x00${bookTitle ?? ''}\x00${chapterTitle ?? ''}\x00'
+        '${paragraphList.length}\x00'
+        '${paragraphList.isEmpty ? 0 : Object.hash(paragraphList.first, paragraphList.last)}';
+    final cached = _chapterEffectiveCache[cacheKey];
+    if (cached != null) return cached;
+
+    final active = <ReaderPurificationRule>[];
+    for (final rule in enabledRules) {
+      if (!rule.appliesToBook(bookId, bookTitle: bookTitle)) {
         continue;
+      }
       if (rule.id == 'builtin_dedup_chapter_title') {
         if (paragraphList.isNotEmpty &&
             dedupLeadingChapterTitle(paragraphList.first, chapterTitle) !=
@@ -832,7 +946,12 @@ class ReaderPurificationStore extends ChangeNotifier {
         }
       }
     }
-    return active;
+    final unmodifiable = List<ReaderPurificationRule>.unmodifiable(active);
+    if (_chapterEffectiveCache.length >= 64) {
+      _chapterEffectiveCache.remove(_chapterEffectiveCache.keys.first);
+    }
+    _chapterEffectiveCache[cacheKey] = unmodifiable;
+    return unmodifiable;
   }
 
   String purifyParagraph(
@@ -855,10 +974,17 @@ class ReaderPurificationStore extends ChangeNotifier {
         trimmed.startsWith('https://')) {
       return text;
     }
+    final cacheKey =
+        '${bookId ?? ''}\x00${bookTitle ?? ''}\x00'
+        '${isFirstParagraph ? (chapterTitle ?? '') : ''}\x00$text';
+    final cached = _paragraphCache[cacheKey];
+    if (cached != null) return cached;
+
     var current = text;
-    for (final rule in _rules) {
-      if (!rule.enabled || !rule.appliesToBook(bookId, bookTitle: bookTitle))
+    for (final rule in _enabledRules) {
+      if (!rule.appliesToBook(bookId, bookTitle: bookTitle)) {
         continue;
+      }
       if (rule.id == 'builtin_dedup_chapter_title') {
         if (isFirstParagraph && chapterTitle != null) {
           current = dedupLeadingChapterTitle(current, chapterTitle);
@@ -867,6 +993,10 @@ class ReaderPurificationStore extends ChangeNotifier {
       }
       if (rule.applyToContent) current = rule.apply(current);
     }
+    if (_paragraphCache.length >= 2048) {
+      _paragraphCache.remove(_paragraphCache.keys.first);
+    }
+    _paragraphCache[cacheKey] = current;
     return current;
   }
 }
@@ -1006,6 +1136,13 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
       return;
     }
     if (_isRegex) {
+      final unsafeReason = ReaderPurificationRule.detectUnsafeRegexPattern(
+        pattern,
+      );
+      if (unsafeReason != null) {
+        setState(() => _error = unsafeReason);
+        return;
+      }
       try {
         RegExp(pattern, multiLine: true);
       } on FormatException catch (e) {

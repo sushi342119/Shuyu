@@ -2,7 +2,7 @@
 
 ## 应用源码
 
-基于 [MewX/light-novel-library_Wenku8_Android](https://github.com/MewX/light-novel-library_Wenku8_Android) 与原贡献者的工作。原始 [LICENSE](../LICENSE) 保留 GNU GPL version 2 或后续版本条款。本次 Flutter 组合版本按 [GPL version 3](../assets/licenses/GPL-3.0.txt) 分发，以兼容 LGPL v3 的协议适配代码。保留原署名、修改说明和构建脚本；发布 APK 时一并提供对应 Flutter 工程归档。
+基于 [MewX/light-novel-library_Wenku8_Android](https://github.com/MewX/light-novel-library_Wenku8_Android) 与原贡献者的工作。原始 [GPL-2.0-or-later 许可](../assets/licenses/GPL-2.0-upstream.txt) 保留 GNU GPL version 2 或后续版本条款。本次 Flutter 组合版本按根目录 [LICENSE (GPL version 3)](../LICENSE) 分发，以兼容 LGPL v3 的协议适配代码。保留原署名、修改说明和构建脚本；发布 APK 时一并提供对应 Flutter 工程归档。
 
 ## 原版 API 运行库：libcpp.so
 

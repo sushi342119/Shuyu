@@ -31,7 +31,13 @@ Map<String, Object?> rule(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   // Network tests below only use their own loopback HTTP server.
-  setUpAll(() => HttpOverrides.global = null);
+  setUpAll(() {
+    HttpOverrides.global = null;
+    ReaderPurificationDownload.allowLoopbackHttpForTesting = true;
+  });
+  tearDownAll(() {
+    ReaderPurificationDownload.allowLoopbackHttpForTesting = false;
+  });
   final store = ReaderPurificationStore.shared;
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -39,7 +45,7 @@ void main() {
   });
 
   test(
-    'downloads JSON through redirects, deduplicates and deletes its source',
+    'downloads JSON through redirects, defaults imported rules to disabled until enabled, deduplicates and deletes its source',
     () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));
@@ -62,6 +68,10 @@ void main() {
       });
       final result = await store.importRulesFromInput(url);
       expect(result.imported, 1);
+      // Imported rules default to disabled until explicitly enabled by the user.
+      expect(store.rules.last.enabled, isFalse);
+      expect(store.purifyParagraph('这是广告正文'), '这是广告正文');
+      await store.enableAllCustomRules();
       expect(store.purifyParagraph('这是广告正文'), '这是正文');
       expect(store.rules.last.sourceUrl, url);
       expect((await store.importRulesFromInput(url)).duplicates, 1);
@@ -83,7 +93,7 @@ void main() {
   );
 
   test(
-    'failed HTTP, HTML, invalid URL and oversized downloads leave rules intact',
+    'failed HTTP, HTML, non-HTTPS external URLs and oversized downloads leave rules intact',
     () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));
@@ -115,6 +125,7 @@ void main() {
       );
       for (final url in [
         'file:///rules.json',
+        'http://example.com/rules.json',
         'https://',
         'https://user:pass@example.com/rules',
       ]) {
@@ -144,6 +155,7 @@ void main() {
           rule('Y', excludeScope: 'Book A', order: 7),
           {'name': 123, 'pattern': 456},
         ]),
+        enableImported: true,
       );
       expect(result.imported, 7);
       expect(result.invalid, 1);
@@ -158,17 +170,19 @@ void main() {
   );
 
   test(
-    'incompatible rules are disabled and never output script text',
+    'incompatible and ReDoS rules are disabled and never output script text',
     () async {
       final result = await store.importRulesFromInput(
         jsonEncode([
           rule('广告'),
           rule('word', replacement: '@js:result.toUpperCase()'),
           rule('[unclosed', regex: true),
+          rule('(a+)+b', regex: true),
         ]),
+        enableImported: true,
       );
-      expect(result.imported, 3);
-      expect(result.disabled, 2);
+      expect(result.imported, 4);
+      expect(result.disabled, 3);
       expect(store.purifyParagraph('word广告'), 'word');
       final script = store.rules.firstWhere(
         (r) => r.replacement.startsWith('@js:'),
@@ -192,6 +206,7 @@ void main() {
           rule(r'[𝓟\｡]+', regex: true),
           rule(r'[^\p{L}\p{N}\s]+(?=END)', replacement: '', regex: true),
         ]),
+        enableImported: true,
       );
       expect(store.purifyParagraph('你好！！！😀🙏𝓟｡\n广告\n!END'), '你好！！\n\nEND');
     },
@@ -200,7 +215,10 @@ void main() {
   test(
     'master and individual switches persist, deletion restores original text',
     () async {
-      await store.importRulesFromInput(jsonEncode([rule('广告')]));
+      await store.importRulesFromInput(
+        jsonEncode([rule('广告')]),
+        enableImported: true,
+      );
       final id = store.rules.last.id;
       await store.toggleRule(id, false);
       expect(store.purifyParagraph('广告正文'), '广告正文');
@@ -228,11 +246,12 @@ void main() {
             'sourceUrl': 'https://example.com/rules',
           },
         ]),
+        enableImported: true,
       );
       final token = store.exportRulesShareToken();
       store.resetForTesting();
       SharedPreferences.setMockInitialValues({});
-      await store.importRulesFromInput(token);
+      await store.importRulesFromInput(token, enableImported: true);
       expect(store.rules.last.applyToTitle, isTrue);
       expect(store.rules.last.applyToContent, isFalse);
       expect(store.rules.last.sourceUrl, 'https://example.com/rules');
@@ -240,7 +259,7 @@ void main() {
     },
   );
 
-  testWidgets('link import validates input and clipboard still accepts JSON', (
+  testWidgets('link import validates HTTPS input and clipboard imports rules safely disabled by default', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -270,14 +289,15 @@ void main() {
       find.byKey(const ValueKey('purification-import-url-submit')),
     );
     await tester.pumpAndSettle();
-    expect(find.text('请输入有效的 HTTP 或 HTTPS 规则链接'), findsOneWidget);
+    expect(find.text('请输入有效的 HTTPS 安全规则链接'), findsOneWidget);
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       SystemChannels.platform,
       (call) async {
-        if (call.method == 'Clipboard.getData')
+        if (call.method == 'Clipboard.getData') {
           return {
             'text': jsonEncode([rule('广告')]),
           };
+        }
         return null;
       },
     );
@@ -294,6 +314,8 @@ void main() {
       find.byKey(const ValueKey('purification-import-clipboard')),
     );
     await tester.pumpAndSettle();
+    expect(store.rules.last.enabled, isFalse);
+    await store.enableAllCustomRules();
     expect(store.purifyParagraph('广告正文'), '正文');
     expect(tester.takeException(), isNull);
   });

@@ -33,23 +33,29 @@ class CloudSourceConfigPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         channel = MethodChannel(binding.binaryMessenger, "org.mewx.wenku8/cloud_sources").also { it.setMethodCallHandler(this) }
     }
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-        if (call.method != "read" && call.method != "write") { result.notImplemented(); return }
+        if (call.method != "read" && call.method != "write" &&
+            call.method != "readSecret" && call.method != "writeSecret") {
+            result.notImplemented(); return
+        }
         io.execute {
             try {
                 val prefs = context.getSharedPreferences("cloud_sources_secure", 0)
-                val value = if (call.method == "read") prefs.getString("config", null)?.let {
+                val argsMap = call.arguments as? Map<*, *>
+                val prefKey = (argsMap?.get("key") as? String)?.takeIf { it.isNotBlank() } ?: "config"
+                val isRead = call.method == "read" || call.method == "readSecret"
+                val value = if (isRead) prefs.getString(prefKey, null)?.let {
                     val parts = it.split(':'); require(parts.size == 2)
                     val cipher = Cipher.getInstance("AES/GCM/NoPadding")
                     cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)))
                     cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)).toString(Charsets.UTF_8)
                 } else {
-                    val text = call.arguments as? String
-                    if (text == null) check(prefs.edit().remove("config").commit()) else {
+                    val text = if (argsMap != null) argsMap["value"] as? String else call.arguments as? String
+                    if (text.isNullOrEmpty()) check(prefs.edit().remove(prefKey).commit()) else {
                         require(text.length <= 65536)
                         val cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.ENCRYPT_MODE, key())
                         val data = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
                             Base64.encodeToString(cipher.doFinal(text.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
-                        check(prefs.edit().putString("config", data).commit())
+                        check(prefs.edit().putString(prefKey, data).commit())
                     }; null
                 }
                 main.post { result.success(value) }

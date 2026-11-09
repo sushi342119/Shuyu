@@ -4,8 +4,9 @@ Based on MewX/light-novel-library_Wenku8_Android and its contributors.
 https://github.com/MewX/light-novel-library_Wenku8_Android
 
 The upstream project's GNU GPL version 2 or (at your option) a later version
-notice is retained in LICENSE. Original notices remain applicable. This Flutter
-combined distribution uses GNU GPL version 3; see assets/licenses/GPL-3.0.txt.
+notice is retained in assets/licenses/GPL-2.0-upstream.txt. Original notices
+remain applicable. This Flutter combined distribution uses GNU GPL version 3;
+see LICENSE and assets/licenses/GPL-3.0.txt.
 
 Flutter branch changes, September-October 2026:
 New Flutter presentation, reader, local library/cache, Android bridges and

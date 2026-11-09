@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
+    <exclude domain="file" path="local_books" />
     <exclude domain="file" path="wenku8-offline-v1" />
     <exclude domain="file" path="wenku8-illustrations-v1" />
     <exclude domain="sharedpref" path="wenku_account_session.xml" />
+    <exclude domain="sharedpref" path="cloud_sources_secure.xml" />
 </full-backup-content>

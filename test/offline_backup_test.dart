@@ -5,13 +5,14 @@ import 'package:xml/xml.dart';
 
 void main() {
   test(
-    'Android backup rules exclude caches and device-bound sessions, not reading preferences',
+    'Android backup rules exclude caches, local books and device-bound sessions',
     () async {
       const base = 'android/app/src/main';
       final manifest = XmlDocument.parse(
         await File('$base/AndroidManifest.xml').readAsString(),
       );
       final app = manifest.findAllElements('application').single;
+      expect(app.getAttribute('android:allowBackup'), 'false');
       expect(
         app.getAttribute('android:fullBackupContent'),
         '@xml/backup_rules',
@@ -40,9 +41,11 @@ void main() {
                 )
                 .toSet(),
             {
+              ('file', 'local_books'),
               ('file', 'wenku8-offline-v1'),
               ('file', 'wenku8-illustrations-v1'),
               ('sharedpref', 'wenku_account_session.xml'),
+              ('sharedpref', 'cloud_sources_secure.xml'),
             },
           );
         }
