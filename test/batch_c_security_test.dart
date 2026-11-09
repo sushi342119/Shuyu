@@ -8,6 +8,7 @@ import 'package:path_provider_platform_interface/path_provider_platform_interfac
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shuyu/app_typography.dart';
 import 'package:shuyu/filename_tags.dart';
+import 'package:shuyu/lan_bookshelf_server.dart';
 import 'package:shuyu/legacy_cover.dart';
 import 'package:shuyu/legacy_transport.dart';
 import 'package:shuyu/library_backup.dart';
@@ -18,6 +19,7 @@ import 'package:shuyu/local_library.dart';
 import 'package:shuyu/local_platform.dart';
 import 'package:shuyu/local_scan_follow_up.dart';
 import 'package:shuyu/reader_content.dart';
+import 'package:shuyu/webdav_sync.dart';
 import 'package:shuyu/wenku_errors.dart';
 
 import 'support/offline_fixture.dart';
@@ -275,6 +277,8 @@ void main() {
   test('LAN bookshelf server enforces session token and blocks wildcard CORS', () async {
     final root = await Directory.systemTemp.createTemp('batch-c-lan-');
     final previous = PathProviderPlatform.instance;
+    final previousOverrides = HttpOverrides.global;
+    HttpOverrides.global = null;
     PathProviderPlatform.instance = _Paths(root.path);
     SharedPreferences.setMockInitialValues({});
     final state = await LibraryState.load();
@@ -284,58 +288,57 @@ void main() {
       await server.stop();
       server.dispose();
       state.dispose();
+      HttpOverrides.global = previousOverrides;
       PathProviderPlatform.instance = previous;
       if (await root.exists()) await root.delete(recursive: true);
     });
 
-    await HttpOverrides.runWithHttpOverrides(() async {
-      await server.start(
-        preferredPort: 0,
-        bindAddress: InternetAddress.loopbackIPv4,
-      );
-      expect(server.isRunning, isTrue);
-      expect(server.accessCode, hasLength(6));
+    await server.start(
+      preferredPort: 0,
+      bindAddress: InternetAddress.loopbackIPv4,
+    );
+    expect(server.isRunning, isTrue);
+    expect(server.accessCode, hasLength(6));
 
-      final client = HttpClient();
-      addTearDown(() => client.close(force: true));
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
 
-      final unauthReq = await client.getUrl(
-        Uri.parse('http://127.0.0.1:${server.port}/api/books'),
-      );
-      final unauthRes = await unauthReq.close();
-      await unauthRes.drain<void>();
-      expect(unauthRes.statusCode, HttpStatus.unauthorized);
-      expect(
-        unauthRes.headers.value('access-control-allow-origin'),
-        isNull,
-      );
+    final unauthReq = await client.getUrl(
+      Uri.parse('http://127.0.0.1:${server.port}/api/books'),
+    );
+    final unauthRes = await unauthReq.close();
+    await unauthRes.drain<void>();
+    expect(unauthRes.statusCode, HttpStatus.unauthorized);
+    expect(
+      unauthRes.headers.value('access-control-allow-origin'),
+      isNull,
+    );
 
-      final queryOnlyReq = await client.getUrl(
-        Uri.parse(
-          'http://127.0.0.1:${server.port}/api/books?token=${server.accessCode}',
-        ),
-      );
-      final queryOnlyRes = await queryOnlyReq.close();
-      await queryOnlyRes.drain<void>();
-      expect(queryOnlyRes.statusCode, HttpStatus.unauthorized);
+    final queryOnlyReq = await client.getUrl(
+      Uri.parse(
+        'http://127.0.0.1:${server.port}/api/books?token=${server.accessCode}',
+      ),
+    );
+    final queryOnlyRes = await queryOnlyReq.close();
+    await queryOnlyRes.drain<void>();
+    expect(queryOnlyRes.statusCode, HttpStatus.unauthorized);
 
-      final crossSiteReq = await client.getUrl(
-        Uri.parse('http://127.0.0.1:${server.port}/api/books'),
-      );
-      crossSiteReq.headers.set('X-Shuyu-Token', server.accessCode);
-      crossSiteReq.headers.set('Sec-Fetch-Site', 'cross-site');
-      final crossSiteRes = await crossSiteReq.close();
-      await crossSiteRes.drain<void>();
-      expect(crossSiteRes.statusCode, HttpStatus.forbidden);
+    final crossSiteReq = await client.getUrl(
+      Uri.parse('http://127.0.0.1:${server.port}/api/books'),
+    );
+    crossSiteReq.headers.set('X-Shuyu-Token', server.accessCode);
+    crossSiteReq.headers.set('Sec-Fetch-Site', 'cross-site');
+    final crossSiteRes = await crossSiteReq.close();
+    await crossSiteRes.drain<void>();
+    expect(crossSiteRes.statusCode, HttpStatus.forbidden);
 
-      final authReq = await client.getUrl(
-        Uri.parse('http://127.0.0.1:${server.port}/api/books'),
-      );
-      authReq.headers.set('X-Shuyu-Token', server.accessCode);
-      final authRes = await authReq.close();
-      final body = jsonDecode(await utf8.decoder.bind(authRes).join()) as Map;
-      expect(authRes.statusCode, HttpStatus.ok);
-      expect(body['ok'], isTrue);
-    }, null);
+    final authReq = await client.getUrl(
+      Uri.parse('http://127.0.0.1:${server.port}/api/books'),
+    );
+    authReq.headers.set('X-Shuyu-Token', server.accessCode);
+    final authRes = await authReq.close();
+    final body = jsonDecode(await utf8.decoder.bind(authRes).join()) as Map;
+    expect(authRes.statusCode, HttpStatus.ok);
+    expect(body['ok'], isTrue);
   });
 }
