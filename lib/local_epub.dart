@@ -2062,7 +2062,10 @@ List<_SplitEpubChapter>? _splitBlocksByHeadings(
     blockStarts.add(start);
     blockEnds.add(end);
   }
-  final split = splitLocalChapters(buf.toString());
+  final split = splitLocalChapters(
+    buf.toString(),
+    enableChapterExtensions: false,
+  );
   final realHeadings = split
       .where((c) => c.title != '前言' && c.title != '正文')
       .length;

@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+const defaultChapterExtensionsEnabled = true;
+
 /// UTF-16 offsets in the normalized internal text, shared by import and audit.
 class LocalChapterIndex {
   const LocalChapterIndex(
@@ -77,6 +79,19 @@ final _bare = RegExp(
 );
 final _special = RegExp(
   r'^(?:序章|序曲|序言|序幕|自序|代序|总序|序(?=$|[ \t　:：、—\-–）)】\]])|楔子|引子|引言|前言|前传|前傳|前篇|后篇|後篇|续篇|續篇|中篇|终章|終章|终曲|终幕|終幕|终篇|終篇|终卷|終卷|大结局|大結局|结局|結局|完本感言|完结感言|番外(?:篇|章|卷)?(?:[ \t　]*[0-9０-９一二三四五六七八九十百千万零〇两\u2460-\u2473]+)?|后记|後記|后日谈|後日談|跋|尾声|尾聲|外篇|外传|外傳|别传|別傳|正传|正傳|间章|間章|幕间|幕間|[上中下][篇卷部集册冊]|人物(?:介绍|简介)|设定集|背景设定|作品相关|内容简介)',
+);
+const _extendedTailPattern = r'[ \t　]*[：:；;—·｜–.|-][^\r\n。！？!?；;]{0,20}';
+final _extendedSpecial = RegExp(
+  '^(?:扉页|(?:内容|文章|书籍)?简介|文案|作品相关|卷[首尾末](?:语|总结|感言))(?=\$|$_extendedTailPattern\$)',
+  unicode: true,
+  multiLine: false,
+  dotAll: false,
+);
+final _extendedSpecialTail = RegExp(
+  '^$_extendedTailPattern\$',
+  unicode: true,
+  multiLine: false,
+  dotAll: false,
 );
 final _decoration = RegExp(
   r'^[\s\uFEFF\u200B\u200C\u200D\u2060#＃＊*☆★✦✧✩✪✫✬✭✮✯◆◇◈●○◎◯※¤§■□▪▫▲△▼▽◀◁▶▷♥♡♦♢♠♣•·・‣⁃=＝—\-–─━═┄┅┈┉~～∼_＿+＋|｜丨🍎📖📚🔖🌸🌺🌻🌼🌷🌹✨🔥💧🌙⭐🌟💫]+',
@@ -199,6 +214,11 @@ class _Heading {
 /// Leading whitespace is counted separately, so even very long indentation is
 /// accepted without growing the line buffer. All coordinates stay in the source.
 class ChapterTextIndex {
+  ChapterTextIndex({
+    this.enableChapterExtensions = defaultChapterExtensionsEnabled,
+  });
+
+  final bool enableChapterExtensions;
   int length = 0;
   int byteLength = 0;
   int _lineStart = 0, _lineByteStart = 0;
@@ -206,6 +226,7 @@ class ChapterTextIndex {
   String _line = '';
   String _tail = '';
   bool _leading = true;
+  bool _lineTruncated = false;
   final _headings = <_Heading>[];
   final _directoryMarkers = <int>[];
 
@@ -253,6 +274,9 @@ class ChapterTextIndex {
       if (_line.length < 2048) {
         final room = 2048 - _line.length;
         _line += part.length > room ? part.substring(0, room) : part;
+        if (part.length > room) _lineTruncated = true;
+      } else if (part.isNotEmpty) {
+        _lineTruncated = true;
       }
       if (part.isNotEmpty) {
         if (part.length >= 256) {
@@ -302,6 +326,7 @@ class ChapterTextIndex {
     _tail = '';
     _indent = 0;
     _leading = true;
+    _lineTruncated = false;
   }
 
   _Heading? _parseInlineEnd(
@@ -400,11 +425,16 @@ class ChapterTextIndex {
         opening = null;
       }
     }
+    final extended = enableChapterExtensions && !_lineTruncated
+        ? _extendedSpecial.firstMatch(line)
+        : null;
     RegExpMatch? m =
+        extended ??
         _numbered.firstMatch(line) ??
         _volumeNumber.firstMatch(line) ??
         _english.firstMatch(line);
-    if (m != null &&
+    if (extended == null &&
+        m != null &&
         (_volumeSuffix.hasMatch(m.group(0)!) ||
             m.group(0)!.startsWith('卷'))) {
       final rest = line.substring(m.end);
@@ -424,9 +454,9 @@ class ChapterTextIndex {
       }
     }
     var weak = false;
-    String family = '';
+    String family = extended == null ? '' : 'special';
     var strippedPrefix = '';
-    if (m != null) {
+    if (m != null && extended == null) {
       var mValid = true;
       var mWeak = false;
       final token = m.group(0)!;
@@ -588,6 +618,12 @@ class ChapterTextIndex {
         if (_punctuation.hasMatch(tail) && tail.length > 12) return null;
       }
     }
+    if (extended != null) {
+      final tail = line.substring(m.end);
+      if (tail.isNotEmpty && !_extendedSpecialTail.hasMatch(tail)) {
+        return null;
+      }
+    }
     final token = m.group(0)!;
     final isVolume =
         (_volumeSuffix.hasMatch(token) && family != 'special') ||
@@ -604,6 +640,7 @@ class ChapterTextIndex {
     var titleEnd = forum?.start ?? line.length;
     var content = next;
     final glued =
+        extended == null &&
         forum == null &&
         ((!weak &&
                 (suffix.length > 96 ||
@@ -818,8 +855,12 @@ class ChapterTextIndex {
   }
 }
 
-List<LocalChapterIndex> splitLocalChapters(String normalizedText) =>
-    (ChapterTextIndex()..add(normalizedText)).finish();
+List<LocalChapterIndex> splitLocalChapters(
+  String normalizedText, {
+  bool enableChapterExtensions = defaultChapterExtensionsEnabled,
+}) => (ChapterTextIndex(
+  enableChapterExtensions: enableChapterExtensions,
+)..add(normalizedText)).finish();
 
 /// Built-in TXT TOC rule presets inspired by legado-E's `txtTocRule.json`.
 enum TxtTocRulePreset {
@@ -924,6 +965,7 @@ List<LocalChapterIndex> splitLocalChaptersCustom(
   String normalizedText, {
   String? customPattern,
   int maxChapterChars = 0,
+  bool enableChapterExtensions = defaultChapterExtensionsEnabled,
 }) {
   final pattern = customPattern?.trim() ?? '';
   if (pattern == TxtTocRulePreset.fixedLength.pattern) {
@@ -944,7 +986,10 @@ List<LocalChapterIndex> splitLocalChaptersCustom(
     );
   }
   if (pattern.isEmpty) {
-    final base = splitLocalChapters(normalizedText);
+    final base = splitLocalChapters(
+      normalizedText,
+      enableChapterExtensions: enableChapterExtensions,
+    );
     return maxChapterChars > 0
         ? subdivideOversizedChapters(
             normalizedText,

@@ -2,11 +2,17 @@ part of 'local_library.dart';
 
 /// Body strings and chapter analysis stay in the worker isolate.
 class _LocalTextWorker extends LocalTextWorkerClient {
-  _LocalTextWorker({super.readyTimeout, super.replyTimeout})
-    : super(_textWorkerMain);
+  _LocalTextWorker({
+    super.readyTimeout,
+    super.replyTimeout,
+    this.enableChapterExtensions = defaultChapterExtensionsEnabled,
+  }) : super(_textWorkerMain);
+
+  final bool enableChapterExtensions;
 
   Future<_TextMetadata> analyze(
     String path, {
+    bool? enableChapterExtensions,
     String? outputPath,
     bool normalize = false,
     int? maxBytes,
@@ -21,6 +27,8 @@ class _LocalTextWorker extends LocalTextWorkerClient {
             'normalize': normalize,
             'maxBytes': maxBytes,
             'preserveBom': preserveBom,
+            'enableChapterExtensions':
+                enableChapterExtensions ?? this.enableChapterExtensions,
           })
           as _TextMetadata;
 
@@ -100,6 +108,7 @@ void _textWorkerMain(SendPort ready) async {
           normalize: job['normalize'] == true,
           maxBytes: job['maxBytes'] as int?,
           preserveBom: job['preserveBom'] == true,
+          enableChapterExtensions: job['enableChapterExtensions'] == true,
         ),
         _ => throw ArgumentError('未知文本任务：$op'),
       };
@@ -320,6 +329,7 @@ Stream<String> _normalizeText(Stream<String> chunks) async* {
 Future<_TextMetadata> _analyzeTextFile(
   String path, {
   required bool normalize,
+  required bool enableChapterExtensions,
   String? sourceFingerprint,
   String? outputPath,
   int? maxBytes = localTextMaxDecodedBytes,
@@ -341,7 +351,9 @@ Future<_TextMetadata> _analyzeTextFile(
     return chunk;
   });
   if (normalize) chunks = _normalizeText(chunks);
-  final analysis = _StreamingTextIndex();
+  final analysis = _StreamingTextIndex(
+    enableChapterExtensions: enableChapterExtensions,
+  );
   final temporary = outputPath == null ? null : File('$outputPath.importing');
   RandomAccessFile? output;
   try {
@@ -383,7 +395,12 @@ Future<_TextMetadata> _analyzeTextFile(
 }
 
 class _StreamingTextIndex {
-  final _index = ChapterTextIndex();
+  _StreamingTextIndex({required bool enableChapterExtensions})
+    : _index = ChapterTextIndex(
+        enableChapterExtensions: enableChapterExtensions,
+      );
+
+  final ChapterTextIndex _index;
   var _words = 0;
   int? _highSurrogate;
   void add(String chunk) {

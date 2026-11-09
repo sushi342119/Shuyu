@@ -330,7 +330,7 @@ MobiBookData extractMobiBook(
       : pdbTitle.isNotEmpty
       ? pdbTitle
       : fallbackTitle;
-  final chapters = splitLocalChapters(text);
+  final chapters = splitLocalChapters(text, enableChapterExtensions: false);
 
   return MobiBookData(
     title: effectiveTitle,

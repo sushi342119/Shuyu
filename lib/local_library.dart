@@ -6,6 +6,7 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -365,6 +366,7 @@ class LocalChapterRemap {
   });
 
   factory LocalChapterRemap.create({
+    String? migrationId,
     String oldRevision = '',
     String newRevision = '',
     String oldTextPath = '',
@@ -381,6 +383,7 @@ class LocalChapterRemap {
       newTextPath: newTextPath,
       newTitles: newTitles,
       migrationId:
+          migrationId ??
           '${oldRevision.isEmpty ? '' : '$oldRevision-$newRevision-'}${_chapterRemapMigrationId(bookId: bookId, oldChapters: oldChapters, newChapters: newChapters)}',
       bookId: bookId,
       oldChapters: List.unmodifiable(oldChapters),
@@ -564,6 +567,7 @@ ValueNotifier<LocalScanProgress> localScanProgressFor(LocalLibraryStore store) {
 
 /// 章节切分规则版本；与应用版本独立。
 const _chapterSplitVersion = 5;
+const _extendedChapterSplitVersion = 6;
 const _localOperationTimeout = Duration(seconds: 12);
 
 const _shelfPalette = [
@@ -677,6 +681,13 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   final Directory _supportDir;
   final Duration _operationTimeout;
   final _LocalTextWorker _textWorker;
+  int get _activeChapterSplitVersion => _textWorker.enableChapterExtensions
+      ? _extendedChapterSplitVersion
+      : _chapterSplitVersion;
+  int _chapterSplitVersionFor(LocalBook book) =>
+      book.kind == LocalBookKind.txt && !isMobiFileName(book.fileName)
+      ? _activeChapterSplitVersion
+      : _chapterSplitVersion;
   final _LocalTextWorker _readerWorker = _LocalTextWorker();
   final List<LocalBook> _books = [];
   final List<Object?> _unparsedIndexEntries = [];
@@ -761,6 +772,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   }
 
   static Future<LocalLibraryStore> load({
+    bool enableChapterExtensions = defaultChapterExtensionsEnabled,
     Duration operationTimeout = _localOperationTimeout,
     Duration workerReadyTimeout = const Duration(seconds: 3),
     Duration workerReplyTimeout = const Duration(minutes: 2),
@@ -772,6 +784,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       support,
       operationTimeout,
       _LocalTextWorker(
+        enableChapterExtensions: enableChapterExtensions,
         readyTimeout: workerReadyTimeout,
         replyTimeout: workerReplyTimeout,
       ),
@@ -1316,24 +1329,44 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       (_dirtyBookIds.contains(id) && _savedBookRefs.containsKey(id)) ||
       pendingChapterRemaps.any((remap) => remap.bookId == id);
 
-  bool acceptsChapter(int id, NovelChapter chapter) =>
-      !isMigrationPending(id) && bookFor(id)?.revision == chapter.revision;
+  bool acceptsChapter(int id, NovelChapter chapter) {
+    final book = bookFor(id);
+    return book != null &&
+        (book.kind != LocalBookKind.txt || _isBookReadyWithoutLock(book)) &&
+        !isMigrationPending(id) &&
+        book.revision == chapter.revision;
+  }
 
-  LocalChapterRemap _remapFor(LocalBook old, LocalBook next) =>
-      LocalChapterRemap.create(
-        bookId: old.id,
-        oldRevision: old.revision,
-        newRevision: next.revision,
-        oldTextPath: textPathFor(old),
-        newTextPath: textPathFor(next),
-        newTitles: next.chapters.map((c) => c.title).toList(),
-        oldChapters: [
-          for (final c in old.chapters) (offset: c.offset, length: c.length),
-        ],
-        newChapters: [
-          for (final c in next.chapters) (offset: c.offset, length: c.length),
-        ],
-      );
+  static int _remapSequence = 0;
+
+  LocalChapterRemap _remapFor(LocalBook old, LocalBook next) {
+    final queued = _readPendingChapterRemaps()
+        .where((task) => task.bookId == old.id)
+        .lastOrNull;
+    if (queued != null &&
+        queued.oldRevision == old.revision &&
+        queued.newRevision == next.revision) {
+      return queued;
+    }
+    return LocalChapterRemap.create(
+      migrationId:
+          'chremap-${old.id}-${DateTime.now().microsecondsSinceEpoch}-${_remapSequence++}',
+      bookId: old.id,
+      oldRevision: old.revision,
+      newRevision: next.revision,
+      oldTextPath: textPathFor(old),
+      newTextPath: textPathFor(next),
+      newTitles: next.chapters.map((chapter) => chapter.title).toList(),
+      oldChapters: [
+        for (final chapter in old.chapters)
+          (offset: chapter.offset, length: chapter.length),
+      ],
+      newChapters: [
+        for (final chapter in next.chapters)
+          (offset: chapter.offset, length: chapter.length),
+      ],
+    );
+  }
 
   Future<LocalBook> _upgradeEpubChaptersIfNeeded(LocalBook book) async {
     if (book.kind != LocalBookKind.epub ||
@@ -1407,11 +1440,13 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       text,
       customPattern: customPattern,
       maxChapterChars: maxChapterChars,
+      enableChapterExtensions:
+          _chapterSplitVersionFor(book) == _extendedChapterSplitVersion,
     );
     if (nextChapters.isEmpty) return novelWithChapters(book);
     final updated = book.copyWith(
       chapters: nextChapters,
-      chapterSplitVersion: _chapterSplitVersion,
+      chapterSplitVersion: _chapterSplitVersionFor(book),
       customTitle: book.customTitle,
       customAuthor: book.customAuthor,
     );
@@ -1427,7 +1462,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           book.sourceFingerprint.isEmpty ||
           _activeScan != null;
     }
-    return book.chapterSplitVersion == _chapterSplitVersion ||
+    return book.chapterSplitVersion == _chapterSplitVersionFor(book) ||
         (book.chapterSplitVersion >= 3 && _activeScan != null);
   }
 
@@ -1459,7 +1494,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       return;
     }
     if (book.kind != LocalBookKind.txt) return;
-    if (book.chapterSplitVersion != _chapterSplitVersion) {
+    if (book.chapterSplitVersion != _chapterSplitVersionFor(book)) {
       final remaps = <LocalChapterRemap>[];
       final updates = <int, LocalBook>{};
       final outcome = await _refreshBookIfNeeded(
@@ -1468,12 +1503,17 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         chapterUpdates: updates,
         chaptersStale: true,
       );
-      if (outcome.failed) throw StateError('章节重建失败：${book.displayTitle}');
-      await _stageChapterRemaps(remaps);
-      for (final update in updates.values) {
-        _replaceBook(_indexForBook(update.id), update);
+      if (outcome.failed) {
+        if (!outcome.sourceUnavailable || book.chapters.isEmpty) {
+          throw StateError('章节重建失败：${book.displayTitle}');
+        }
+      } else {
+        await _stageChapterRemaps(remaps);
+        for (final update in updates.values) {
+          _replaceBook(_indexForBook(update.id), update);
+        }
+        await _saveIndex();
       }
-      await _saveIndex();
     }
     while (true) {
       final tasks = pendingChapterRemaps.where((r) => r.bookId == id).toList();
@@ -2563,7 +2603,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                   existing.kind == LocalBookKind.txt &&
                   existing.size == size &&
                   existing.modified == modified &&
-                  (existing.chapterSplitVersion == _chapterSplitVersion ||
+                  (existing.chapterSplitVersion ==
+                          _chapterSplitVersionFor(existing) ||
                       (!verifyUnchangedFingerprints &&
                           existing.chapterSplitVersion >= 3 &&
                           existing.chapters.length > 1)) &&
@@ -2954,7 +2995,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
               if (!force &&
                   existing.size == size &&
                   existing.modified == modified &&
-                  existing.chapterSplitVersion == _chapterSplitVersion &&
+                  existing.chapterSplitVersion ==
+                      _chapterSplitVersionFor(existing) &&
                   existing.wordCount != null &&
                   existing.sourceFingerprint.isNotEmpty) {
                 try {
@@ -3199,7 +3241,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       sourceKey: sourceKey,
       customTitle: existing?.customTitle,
       customAuthor: existing?.customAuthor,
-      chapterSplitVersion: _chapterSplitVersion,
+      chapterSplitVersion: _activeChapterSplitVersion,
     );
   }
 
@@ -3969,7 +4011,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       sourceKey: sourceKey,
       customTitle: existing?.customTitle,
       customAuthor: existing?.customAuthor,
-      chapterSplitVersion: _chapterSplitVersion,
+      chapterSplitVersion: _activeChapterSplitVersion,
     );
   }
 
@@ -4312,7 +4354,12 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   final _refreshErrors = <int, String>{};
 
   /// 章节切分规则升级或旧数据缺字数时，一次读取并处理正文，复用结果。
-  Future<({bool wordCountBackfilled, bool chaptersRefreshed, bool failed})>
+  Future<({
+    bool wordCountBackfilled,
+    bool chaptersRefreshed,
+    bool failed,
+    bool sourceUnavailable,
+  })>
   _refreshBookIfNeeded(
     LocalBook existing, {
     required List<LocalChapterRemap> chapterRemaps,
@@ -4326,6 +4373,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         wordCountBackfilled: false,
         chaptersRefreshed: false,
         failed: false,
+        sourceUnavailable: false,
       );
     }
     final index = _indexForBook(existing.id);
@@ -4334,6 +4382,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         wordCountBackfilled: false,
         chaptersRefreshed: false,
         failed: true,
+        sourceUnavailable: false,
       );
     }
     if (existing.kind == LocalBookKind.pdf) {
@@ -4349,16 +4398,21 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         wordCountBackfilled: false,
         chaptersRefreshed: false,
         failed: false,
+        sourceUnavailable: false,
       );
     }
+    var readingSource = true;
     try {
       final current = _books[index];
       final source = await _ensureBookTextPath(current);
       final processed = await _textWorker.analyze(
         source.path,
+        enableChapterExtensions:
+            _chapterSplitVersionFor(current) == _extendedChapterSplitVersion,
         normalize: true,
         outputPath: '${_booksDir.path}/book_${current.id}.upgrading',
       );
+      readingSource = false;
       final normalized = File(
         '${_booksDir.path}/book_${current.id}_${processed.fingerprint}.txt',
       );
@@ -4370,6 +4424,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           wordCountBackfilled: false,
           chaptersRefreshed: false,
           failed: true,
+          sourceUnavailable: false,
         );
       }
       final canSplit = chaptersStale && processed.length > 0;
@@ -4395,7 +4450,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         textFingerprint: processed.fingerprint,
         chapters: chaptersChanged ? processed.chapters : current.chapters,
         chapterSplitVersion: canSplit
-            ? _chapterSplitVersion
+            ? _chapterSplitVersionFor(current)
             : current.chapterSplitVersion,
         customTitle: current.customTitle,
         customAuthor: current.customAuthor,
@@ -4411,6 +4466,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         wordCountBackfilled: needsWordCount,
         chaptersRefreshed: chaptersChanged,
         failed: false,
+        sourceUnavailable: false,
       );
     } catch (error) {
       _refreshErrors[existing.id] = describeSafeError(
@@ -4421,6 +4477,13 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         wordCountBackfilled: false,
         chaptersRefreshed: false,
         failed: true,
+        sourceUnavailable: readingSource &&
+            (error is MissingPluginException ||
+                (error is FileSystemException &&
+                    (error.path == textPathFor(existing) ||
+                        error.path == existing.sourceKey)) ||
+                error is _TextSourceException ||
+                error is TextWorkerUnavailable),
       );
     }
   }
@@ -4543,8 +4606,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         book.chapters.isEmpty) {
       return '';
     }
-    if (isMigrationPending(novelId) ||
-        chapter.revision != book.revision ||
+    if (!acceptsChapter(novelId, chapter) ||
         chapter.id < 0 ||
         chapter.id >= book.chapters.length) {
       throw const StaleLocalChapterException();

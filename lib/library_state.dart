@@ -20,6 +20,7 @@ import 'performance_preferences.dart';
 import 'app_typography.dart';
 import 'local_platform.dart';
 import 'local_library.dart';
+import 'local_annotation_remap.dart';
 import 'recovery_archive.dart';
 import 'reader_underline.dart';
 import 'reader_annotation_range.dart';
@@ -1531,11 +1532,45 @@ class LibraryState extends ChangeNotifier {
           final migratedMarks = <Object>[];
           for (final mark in currentMarks) {
             try {
-                final p = await migrate(mark.position);
-                migratedMarks.add(ReaderBookmark(
-                  id: mark.id,
-                  chapterTitle: chapters[p.chapter].title,
-                  position: p,
+                final sourcePosition = mark.isUnderline
+                    ? ReadingPosition.fromJson({
+                        ...mark.position.toJson(),
+                        'textOffset': null,
+                      })
+                    : mark.position;
+                var mappedPosition = await migrate(
+                  sourcePosition,
+                  withinParagraph: mark.isUnderline
+                      ? mark.underlineRanges.first.startOffset
+                      : 0,
+                );
+                final ranges = await remapLocalUnderlineRanges(
+                  ranges: mark.underlineRanges,
+                  oldText: oldText,
+                  newText: newText,
+                  oldChapters: task.oldChapters,
+                  newChapters: chapters,
+                  oldRevision: task.oldRevision,
+                  newRevision: task.newRevision,
+                );
+                if (ranges.isNotEmpty) {
+                  final first = ranges.first;
+                  mappedPosition = ReadingPosition.fromJson({
+                    ...mappedPosition.toJson(),
+                    'chapter': first.chapterId,
+                    'chapterId': first.chapterId,
+                    'paragraphIndex': first.startParagraph,
+                    'textOffset': first.startOffset,
+                    'revision': first.contentRevision,
+                    'contentRevision': first.contentRevision,
+                  });
+                }
+                migratedMarks.add(mark.withRange(
+                  chapterTitle: chapters[mappedPosition.chapter].title,
+                  position: mappedPosition,
+                  ranges: ranges,
+                  quote: mark.quote,
+                  updatedAt: mark.rangeUpdatedAt,
                 ).toJson());
             } on FormatException {
               quarantined.add({'kind': 'bookmark', 'record': mark.toJson()});

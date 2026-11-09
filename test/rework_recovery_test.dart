@@ -264,6 +264,32 @@ void main() {
   );
 
   test(
+    'unavailable SAF source keeps the old chapter version and retries readiness',
+    () async {
+      final current = book();
+      await seed([current.toJson()]);
+      var attempts = 0;
+      messenger.setMockMethodCallHandler(LocalPlatform.channel, (call) async {
+        if (call.method == 'prepareLocalText') attempts++;
+        throw MissingPluginException();
+      });
+      final store = await load();
+      for (var attempt = 1; attempt <= 2; attempt++) {
+        await store.ensureReady(current.id);
+        expect(attempts, attempt);
+        expect(store.books.single.chapterSplitVersion, current.chapterSplitVersion);
+        expect(store.books.single.revision, current.revision);
+        expect(store.pendingChapterRemaps, isEmpty);
+      }
+      final restored = await load();
+      await restored.ensureReady(current.id);
+      expect(attempts, 3);
+      expect(restored.books.single.chapterSplitVersion, current.chapterSplitVersion);
+      expect(restored.books.single.revision, current.revision);
+    },
+  );
+
+  test(
     'local exports omit invalid covers while external imports remain strict',
     () async {
       await TagStore.load();
