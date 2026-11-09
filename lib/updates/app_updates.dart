@@ -14,13 +14,13 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.9.5',
+  defaultValue: '1.9.6',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 79);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 80);
 const currentReleaseNotes = '''
-1. 分章升级到 v4：扉页、简介、文案、作品相关、卷首语等明确标题现在能识别为章节。
-2. 旧书打开时自动重建章节表，并迁移阅读进度、书签与划线。
-3. 修复旧版章节表在源文本不可读时重建失败、导致阅读进度无法迁移的回归。
+1. 重新设计「正文替换与净化规则」面板：将净化总开关与实时启用计数整合至顶栏，将「新增规则」「链接导入」「剪贴板导入」「导出口令」「段落纠错」收敛为单行等宽工具栏，展开面板支持互斥收折。
+2. 优化净化规则列表与筛选检索：新增「全部 / 本章已命中 / 已启用 / 内置预设 / 自定义与导入」分类筛选与关键词搜索框，升级规则来源圆角胶囊与单行自适应规则卡片排版，解决长标题标签折行截断问题。
+3. 修复伪装为 `.epub` 后缀的 MOBI 与纯文本文件分章版本号不一致、导致二次打开重复触发重分章的问题。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

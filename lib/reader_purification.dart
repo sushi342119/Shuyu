@@ -926,12 +926,15 @@ class _ReaderPurificationSheet extends StatefulWidget {
       _ReaderPurificationSheetState();
 }
 
+enum _PurificationRuleFilter { all, effective, enabled, builtIn, custom }
+
 class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
   final _nameCtrl = TextEditingController();
   final _patternCtrl = TextEditingController();
   final _replacementCtrl = TextEditingController();
   final _editParagraphCtrl = TextEditingController();
   final _urlCtrl = TextEditingController();
+  final _searchCtrl = TextEditingController();
   bool _showUrlImport = false;
   bool _importing = false;
   String? _importError;
@@ -939,7 +942,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
   bool _onlyCurrentBook = false;
   bool _applyToTitle = false;
   bool _adding = false;
-  bool _onlyEffective = false;
+  _PurificationRuleFilter _filter = _PurificationRuleFilter.all;
   bool _editingParagraph = false;
   int _selectedParagraphIndex = 0;
   String? _error;
@@ -990,6 +993,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
     _replacementCtrl.dispose();
     _editParagraphCtrl.dispose();
     _urlCtrl.dispose();
+    _searchCtrl.dispose();
     super.dispose();
   }
 
@@ -1112,13 +1116,236 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
     }
   }
 
+  void _submitUrlField() {
+    try {
+      ReaderPurificationDownload.parseUrl(_urlCtrl.text);
+    } on FormatException catch (error) {
+      setState(() => _importError = error.message);
+      return;
+    }
+    _runImport(_urlCtrl.text);
+  }
+
+  String _ruleSubtitle(ReaderPurificationRule rule) {
+    if (rule.builtIn && rule.pattern.startsWith('__')) {
+      return switch (rule.id) {
+        'builtin_smart_quotes' => '根据标点与对话语境，自动配对直引号与弯引号',
+        'builtin_dialogue_resegment' => '粘连长段落在对话引号与句群边界处智能分段',
+        'builtin_dedup_chapter_title' => '当正文首段重复章节名时自动剔除冗余标题',
+        _ => '内置智能排版算法（阅读渲染时实时处理）',
+      };
+    }
+    final target = rule.replacement.isEmpty ? '（删除）' : rule.replacement;
+    return '${rule.pattern}  →  $target';
+  }
+
+  Widget _buildQuickAction({
+    Key? buttonKey,
+    required IconData icon,
+    required String label,
+    required VoidCallback? onPressed,
+    bool selected = false,
+  }) {
+    return Expanded(
+      child: GlassTextButton(
+        key: buttonKey,
+        compact: true,
+        selected: selected ? true : null,
+        onPressed: onPressed,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 17),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterChip({
+    Key? chipKey,
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Material(
+      color: selected
+          ? scheme.primary.withValues(alpha: dark ? .24 : .12)
+          : scheme.onSurface.withValues(alpha: dark ? .07 : .05),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        key: chipKey,
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              color: selected ? scheme.primary : scheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRuleBadge(
+    BuildContext context,
+    String text, {
+    bool highlight = false,
+    bool warning = false,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = warning
+        ? scheme.error
+        : highlight
+        ? scheme.primary
+        : scheme.onSurfaceVariant;
+    final bg = warning
+        ? scheme.error.withValues(alpha: .12)
+        : highlight
+        ? scheme.primary.withValues(alpha: .14)
+        : scheme.onSurface.withValues(alpha: .07);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(5),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 110),
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 10,
+              height: 1.2,
+              fontWeight: FontWeight.w600,
+              color: fg,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSourceChip({
+    required String source,
+    required int count,
+    required VoidCallback? onDelete,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final host = Uri.tryParse(source)?.host;
+    final displayHost = (host != null && host.isNotEmpty) ? host : source;
+    return Tooltip(
+      message: source,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: scheme.primary.withValues(alpha: dark ? .15 : .08),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: scheme.primary.withValues(alpha: dark ? .28 : .18),
+            width: 0.7,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 4, 6, 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(CupertinoIcons.globe, size: 13, color: scheme.primary),
+              const SizedBox(width: 5),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 210),
+                child: Text(
+                  '$displayHost · $count 条',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w500,
+                    color: scheme.onSurface,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              InkWell(
+                borderRadius: BorderRadius.circular(999),
+                onTap: onDelete,
+                child: Padding(
+                  padding: const EdgeInsets.all(2),
+                  child: Icon(
+                    CupertinoIcons.xmark_circle_fill,
+                    size: 15,
+                    color: scheme.onSurfaceVariant.withValues(
+                      alpha: onDelete == null ? .38 : .75,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCompactSwitchRow({
+    required String label,
+    Key? switchKey,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return SizedBox(
+      height: 38,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 13),
+            ),
+          ),
+          Switch.adaptive(
+            key: switchKey,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            value: value,
+            onChanged: onChanged,
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = ReaderPurificationStore.shared;
+    final scheme = Theme.of(context).colorScheme;
     return ListenableBuilder(
       listenable: store,
       builder: (context, _) {
-        final effectiveRules = widget.chapterParagraphs != null
+        final hasChapter = widget.chapterParagraphs != null;
+        final effectiveRules = hasChapter
             ? store.effectiveRulesForChapter(
                 widget.chapterParagraphs!,
                 bookId: widget.bookId,
@@ -1128,210 +1355,276 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
             : const <ReaderPurificationRule>[];
         final effectiveIds = {for (final r in effectiveRules) r.id};
         final allRules = store.rules;
-        final rules = _onlyEffective
-            ? allRules.where((r) => effectiveIds.contains(r.id)).toList()
-            : allRules;
+        final enabledCount = allRules
+            .where((r) => r.enabled && r.unsupportedReason == null)
+            .length;
+        final builtInCount = allRules.where((r) => r.builtIn).length;
+        final customCount = allRules.length - builtInCount;
+
+        final sourceCounts = <String, int>{};
+        for (final rule in allRules) {
+          final src = rule.sourceUrl;
+          if (src != null && src.isNotEmpty) {
+            sourceCounts[src] = (sourceCounts[src] ?? 0) + 1;
+          }
+        }
+
+        final activeFilter =
+            (_filter == _PurificationRuleFilter.effective && !hasChapter) ||
+                (_filter == _PurificationRuleFilter.custom && customCount == 0)
+            ? _PurificationRuleFilter.all
+            : _filter;
+
+        final query = _searchCtrl.text.trim().toLowerCase();
+        final rules = allRules.where((r) {
+          final matchesFilter = switch (activeFilter) {
+            _PurificationRuleFilter.all => true,
+            _PurificationRuleFilter.effective => effectiveIds.contains(r.id),
+            _PurificationRuleFilter.enabled => r.enabled,
+            _PurificationRuleFilter.builtIn => r.builtIn,
+            _PurificationRuleFilter.custom => !r.builtIn,
+          };
+          if (!matchesFilter) return false;
+          if (query.isEmpty) return true;
+          return r.name.toLowerCase().contains(query) ||
+              r.pattern.toLowerCase().contains(query) ||
+              r.replacement.toLowerCase().contains(query);
+        }).toList();
+
         final canEditChapter =
             widget.bookId != null &&
             widget.chapterIndex != null &&
             widget.chapterParagraphs != null &&
             widget.chapterParagraphs!.isNotEmpty;
 
+        final anyPanelOpen = _showUrlImport || _adding || _editingParagraph;
+        final listMaxHeight = anyPanelOpen
+            ? 240.0
+            : (MediaQuery.sizeOf(context).height * 0.44).clamp(260.0, 420.0);
+
         return Padding(
           padding: EdgeInsets.fromLTRB(
-            24,
-            24,
-            24,
-            MediaQuery.viewInsetsOf(context).bottom + 24,
+            20,
+            14,
+            20,
+            MediaQuery.viewInsetsOf(context).bottom + 20,
           ),
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // ── 1. Header + Master Switch ──
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    const Expanded(
-                      child: Text(
-                        '正文替换与净化规则',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                        ),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            '正文替换与净化规则',
+                            style: TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            store.enabled
+                                ? '已启用 $enabledCount / ${allRules.length} 条 · 仅优化阅读显示，保留原文件'
+                                : '净化规则已暂停 · 原始文本与文件不受影响',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    if (canEditChapter) ...[
-                      GlassTextButton(
-                        key: const ValueKey('purification-toggle-edit'),
-                        onPressed: () => setState(() {
-                          _editingParagraph = !_editingParagraph;
-                          if (_editingParagraph) {
-                            _adding = false;
-                            _syncParagraphEditorText();
-                          }
-                        }),
-                        child: Text(_editingParagraph ? '收起纠错' : '段落纠错'),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                    GlassTextButton(
-                      key: const ValueKey('purification-toggle-add'),
-                      onPressed: () => setState(() {
-                        _adding = !_adding;
-                        if (_adding) _editingParagraph = false;
-                        _error = null;
-                      }),
-                      child: Text(_adding ? '收起新建' : '新增规则'),
+                    const SizedBox(width: 12),
+                    Switch.adaptive(
+                      key: const ValueKey('purification-master-switch'),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      value: store.enabled,
+                      onChanged: store.setEnabled,
                     ),
                   ],
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  '支持通过链接、JSON 或分享口令导入阅读 Legado 净化规则，仅处理阅读显示，保留原始文件。',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                SwitchListTile.adaptive(
-                  key: const ValueKey('purification-master-switch'),
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('启用净化规则'),
-                  value: store.enabled,
-                  onChanged: store.setEnabled,
-                ),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+                const SizedBox(height: 12),
+
+                // ── 2. Unified Action Toolbar ──
+                Row(
                   children: [
-                    GlassTextButton(
-                      key: const ValueKey('purification-import-url'),
+                    _buildQuickAction(
+                      buttonKey: const ValueKey('purification-toggle-add'),
+                      icon: _adding
+                          ? CupertinoIcons.chevron_up_circle
+                          : CupertinoIcons.plus_circle,
+                      label: _adding ? '收起新建' : '新增规则',
+                      selected: _adding,
+                      onPressed: () => setState(() {
+                        _adding = !_adding;
+                        if (_adding) {
+                          _editingParagraph = false;
+                          _showUrlImport = false;
+                        }
+                        _error = null;
+                      }),
+                    ),
+                    const SizedBox(width: 8),
+                    _buildQuickAction(
+                      buttonKey: const ValueKey('purification-import-url'),
+                      icon: CupertinoIcons.link,
+                      label: _importing ? '正在导入…' : '链接导入',
+                      selected: _showUrlImport,
                       onPressed: _importing
                           ? null
                           : () => setState(() {
                               _showUrlImport = !_showUrlImport;
+                              if (_showUrlImport) {
+                                _adding = false;
+                                _editingParagraph = false;
+                              }
                               _importError = null;
                             }),
-                      child: Text(_importing ? '正在导入…' : '链接导入'),
                     ),
-                    for (final source
-                        in allRules
-                            .map((r) => r.sourceUrl)
-                            .whereType<String>()
-                            .toSet())
-                      InputChip(
-                        label: Text(
-                          '规则来源：${Uri.tryParse(source)?.host ?? source}',
-                        ),
-                        tooltip: source,
-                        onDeleted: _importing
-                            ? null
-                            : () => store.removeSource(source),
-                        deleteButtonTooltipMessage: '删除此链接导入的全部规则',
+                    const SizedBox(width: 8),
+                    _buildQuickAction(
+                      buttonKey: const ValueKey(
+                        'purification-import-clipboard',
                       ),
+                      icon: CupertinoIcons.doc_on_clipboard,
+                      label: '剪贴板导入',
+                      onPressed: _importing ? null : _importRules,
+                    ),
+                    const SizedBox(width: 8),
+                    _buildQuickAction(
+                      buttonKey: const ValueKey(
+                        'purification-export-clipboard',
+                      ),
+                      icon: CupertinoIcons.square_arrow_up,
+                      label: '导出口令',
+                      onPressed: _exportRules,
+                    ),
+                    if (canEditChapter) ...[
+                      const SizedBox(width: 8),
+                      _buildQuickAction(
+                        buttonKey: const ValueKey('purification-toggle-edit'),
+                        icon: CupertinoIcons.pencil_outline,
+                        label: _editingParagraph ? '收起纠错' : '段落纠错',
+                        selected: _editingParagraph,
+                        onPressed: () => setState(() {
+                          _editingParagraph = !_editingParagraph;
+                          if (_editingParagraph) {
+                            _adding = false;
+                            _showUrlImport = false;
+                            _syncParagraphEditorText();
+                          }
+                        }),
+                      ),
+                    ],
                   ],
                 ),
+
+                // ── 3. Expandable Panels (URL Import / Paragraph Edit / Add Rule) ──
                 if (_showUrlImport) ...[
-                  const SizedBox(height: 10),
-                  TextField(
-                    key: const ValueKey('purification-url-field'),
-                    controller: _urlCtrl,
-                    enabled: !_importing,
-                    keyboardType: TextInputType.url,
-                    autocorrect: false,
-                    decoration: const InputDecoration(
-                      labelText: '规则链接',
-                      hintText: 'https://…/rules.json',
-                      border: OutlineInputBorder(),
-                    ),
-                    onSubmitted: _importing
-                        ? null
-                        : (value) {
-                            try {
-                              ReaderPurificationDownload.parseUrl(value);
-                            } on FormatException catch (error) {
-                              setState(() => _importError = error.message);
-                              return;
-                            }
-                            _runImport(value);
-                          },
-                  ),
-                  if (_importError != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text(
-                        _importError!,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                          fontSize: 12,
+                  const SizedBox(height: 12),
+                  ContentPanel(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              CupertinoIcons.link,
+                              size: 15,
+                              color: scheme.primary,
+                            ),
+                            const SizedBox(width: 6),
+                            const Expanded(
+                              child: Text(
+                                '从网络链接导入规则',
+                                style: TextStyle(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            Text(
+                              '兼容阅读 Legado JSON',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
                         ),
-                      ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          key: const ValueKey('purification-url-field'),
+                          controller: _urlCtrl,
+                          enabled: !_importing,
+                          keyboardType: TextInputType.url,
+                          autocorrect: false,
+                          decoration: const InputDecoration(
+                            labelText: '规则链接',
+                            hintText: 'https://…/rules.json',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                          ),
+                          onSubmitted: _importing
+                              ? null
+                              : (_) => _submitUrlField(),
+                        ),
+                        if (_importError != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Text(
+                              _importError!,
+                              style: TextStyle(
+                                color: scheme.error,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            GlassTextButton(
+                              compact: true,
+                              onPressed: _importing
+                                  ? null
+                                  : () => setState(() {
+                                      _showUrlImport = false;
+                                      _importError = null;
+                                    }),
+                              child: const Text('取消'),
+                            ),
+                            const SizedBox(width: 8),
+                            GlassTextButton(
+                              key: const ValueKey(
+                                'purification-import-url-submit',
+                              ),
+                              compact: true,
+                              onPressed: _importing ? null : _submitUrlField,
+                              child: Text(
+                                _importing ? '正在下载并导入…' : '导入并使用',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
-                  GlassTextButton(
-                    key: const ValueKey('purification-import-url-submit'),
-                    onPressed: _importing
-                        ? null
-                        : () {
-                            try {
-                              ReaderPurificationDownload.parseUrl(
-                                _urlCtrl.text,
-                              );
-                            } on FormatException catch (error) {
-                              setState(() => _importError = error.message);
-                              return;
-                            }
-                            _runImport(_urlCtrl.text);
-                          },
-                    child: Text(_importing ? '正在下载并导入…' : '导入并使用'),
-                  ),
-                ],
-                if (widget.chapterParagraphs != null) ...[
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      FilterChip(
-                        key: const ValueKey('purification-filter-effective'),
-                        label: Text('本章已命中 (${effectiveRules.length})'),
-                        selected: _onlyEffective,
-                        onSelected: (v) => setState(() => _onlyEffective = v),
-                      ),
-                      GlassTextButton(
-                        key: const ValueKey('purification-import-clipboard'),
-                        onPressed: _importing ? null : _importRules,
-                        child: const Text('剪贴板导入'),
-                      ),
-                      GlassTextButton(
-                        key: const ValueKey('purification-export-clipboard'),
-                        onPressed: _exportRules,
-                        child: const Text('导出分享口令'),
-                      ),
-                    ],
-                  ),
-                ] else ...[
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      GlassTextButton(
-                        key: const ValueKey('purification-import-clipboard'),
-                        onPressed: _importing ? null : _importRules,
-                        child: const Text('从剪贴板导入规则/口令'),
-                      ),
-                      GlassTextButton(
-                        key: const ValueKey('purification-export-clipboard'),
-                        onPressed: _exportRules,
-                        child: const Text('导出规则口令'),
-                      ),
-                    ],
                   ),
                 ],
                 if (_editingParagraph && canEditChapter) ...[
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 12),
                   ContentPanel(
+                    padding: const EdgeInsets.all(14),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
@@ -1341,6 +1634,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                               child: Text(
                                 '段落纠错（第 ${_selectedParagraphIndex + 1} / ${widget.chapterParagraphs!.length} 段）',
                                 style: const TextStyle(
+                                  fontSize: 13.5,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
@@ -1350,6 +1644,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                                 CupertinoIcons.chevron_left,
                                 size: 18,
                               ),
+                              visualDensity: VisualDensity.compact,
                               tooltip: '上一段',
                               onPressed: _selectedParagraphIndex > 0
                                   ? () => setState(() {
@@ -1363,6 +1658,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                                 CupertinoIcons.chevron_right,
                                 size: 18,
                               ),
+                              visualDensity: VisualDensity.compact,
                               tooltip: '下一段',
                               onPressed:
                                   _selectedParagraphIndex + 1 <
@@ -1375,12 +1671,12 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 6),
                         TextField(
                           key: const ValueKey('purification-paragraph-editor'),
                           controller: _editParagraphCtrl,
                           minLines: 3,
-                          maxLines: 6,
+                          maxLines: 5,
                           decoration: const InputDecoration(
                             labelText: '直接修正当前段落错别字或排版',
                             isDense: true,
@@ -1397,6 +1693,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                                 ) !=
                                 null)
                               GlassTextButton(
+                                compact: true,
                                 onPressed: () async {
                                   await store.clearParagraphEdit(
                                     bookId: widget.bookId!,
@@ -1413,6 +1710,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                               key: const ValueKey(
                                 'purification-save-paragraph',
                               ),
+                              compact: true,
                               onPressed: _saveParagraphEdit,
                               child: const Text('保存段落修改'),
                             ),
@@ -1423,11 +1721,20 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                   ),
                 ],
                 if (_adding) ...[
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 12),
                   ContentPanel(
+                    padding: const EdgeInsets.all(14),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
+                        const Text(
+                          '新增自定义规则',
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
                         TextField(
                           controller: _nameCtrl,
                           decoration: const InputDecoration(
@@ -1451,172 +1758,346 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                             isDense: true,
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            const Expanded(child: Text('使用正则表达式')),
-                            Switch.adaptive(
-                              value: _isRegex,
-                              onChanged: (v) => setState(() => _isRegex = v),
-                            ),
-                          ],
+                        const SizedBox(height: 6),
+                        _buildCompactSwitchRow(
+                          label: '使用正则表达式',
+                          value: _isRegex,
+                          onChanged: (v) => setState(() => _isRegex = v),
                         ),
                         if (widget.bookId != null)
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  '仅对《${widget.bookTitle ?? "当前书籍"}》生效',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              Switch.adaptive(
-                                key: const ValueKey(
-                                  'purification-scope-current-book',
-                                ),
-                                value: _onlyCurrentBook,
-                                onChanged: (v) =>
-                                    setState(() => _onlyCurrentBook = v),
-                              ),
-                            ],
-                          ),
-                        Row(
-                          children: [
-                            const Expanded(child: Text('同时净化章节标题')),
-                            Switch.adaptive(
-                              key: const ValueKey('purification-apply-title'),
-                              value: _applyToTitle,
-                              onChanged: (v) =>
-                                  setState(() => _applyToTitle = v),
+                          _buildCompactSwitchRow(
+                            label: '仅对《${widget.bookTitle ?? "当前书籍"}》生效',
+                            switchKey: const ValueKey(
+                              'purification-scope-current-book',
                             ),
-                          ],
+                            value: _onlyCurrentBook,
+                            onChanged: (v) =>
+                                setState(() => _onlyCurrentBook = v),
+                          ),
+                        _buildCompactSwitchRow(
+                          label: '同时净化章节标题',
+                          switchKey: const ValueKey('purification-apply-title'),
+                          value: _applyToTitle,
+                          onChanged: (v) => setState(() => _applyToTitle = v),
                         ),
                         if (_error != null) ...[
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 4),
                           Text(
                             _error!,
                             style: TextStyle(
                               fontSize: 12,
-                              color: Theme.of(context).colorScheme.error,
+                              color: scheme.error,
                             ),
                           ),
                         ],
-                        const SizedBox(height: 8),
-                        GlassTextButton(
-                          key: const ValueKey('purification-save-rule'),
-                          onPressed: _submitCustomRule,
-                          child: const Text('保存并启用规则'),
+                        const SizedBox(height: 6),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: GlassTextButton(
+                            key: const ValueKey('purification-save-rule'),
+                            compact: true,
+                            onPressed: _submitCustomRule,
+                            child: const Text('保存并启用规则'),
+                          ),
                         ),
                       ],
                     ),
                   ),
                 ],
-                const SizedBox(height: 14),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 340),
-                  child: rules.isEmpty
-                      ? Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 24),
-                          child: Center(
-                            child: Text(
-                              _onlyEffective ? '本章正文暂未触发任何净化规则' : '暂无净化规则',
-                              style: TextStyle(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                            ),
+
+                // ── 4. Imported Rule Sources Strip ──
+                if (sourceCounts.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      for (final entry in sourceCounts.entries)
+                        _buildSourceChip(
+                          source: entry.key,
+                          count: entry.value,
+                          onDelete: _importing
+                              ? null
+                              : () => store.removeSource(entry.key),
+                        ),
+                    ],
+                  ),
+                ],
+
+                // ── 5. Category Filters & Search ──
+                const SizedBox(height: 12),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _buildFilterChip(
+                        label: '全部 (${allRules.length})',
+                        selected: activeFilter == _PurificationRuleFilter.all,
+                        onTap: () => setState(
+                          () => _filter = _PurificationRuleFilter.all,
+                        ),
+                      ),
+                      if (hasChapter) ...[
+                        const SizedBox(width: 6),
+                        _buildFilterChip(
+                          chipKey: const ValueKey(
+                            'purification-filter-effective',
                           ),
-                        )
-                      : ListView.separated(
-                          shrinkWrap: true,
-                          itemCount: rules.length,
-                          separatorBuilder: (_, _) => const Divider(height: 16),
-                          itemBuilder: (context, index) {
-                            final rule = rules[index];
-                            final isHit = effectiveIds.contains(rule.id);
-                            return Row(
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
+                          label: '本章已命中 (${effectiveRules.length})',
+                          selected:
+                              activeFilter == _PurificationRuleFilter.effective,
+                          onTap: () => setState(
+                            () => _filter =
+                                activeFilter ==
+                                    _PurificationRuleFilter.effective
+                                ? _PurificationRuleFilter.all
+                                : _PurificationRuleFilter.effective,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(width: 6),
+                      _buildFilterChip(
+                        label: '已启用 ($enabledCount)',
+                        selected:
+                            activeFilter == _PurificationRuleFilter.enabled,
+                        onTap: () => setState(
+                          () => _filter =
+                              activeFilter == _PurificationRuleFilter.enabled
+                              ? _PurificationRuleFilter.all
+                              : _PurificationRuleFilter.enabled,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      _buildFilterChip(
+                        label: '内置预设 ($builtInCount)',
+                        selected:
+                            activeFilter == _PurificationRuleFilter.builtIn,
+                        onTap: () => setState(
+                          () => _filter =
+                              activeFilter == _PurificationRuleFilter.builtIn
+                              ? _PurificationRuleFilter.all
+                              : _PurificationRuleFilter.builtIn,
+                        ),
+                      ),
+                      if (customCount > 0) ...[
+                        const SizedBox(width: 6),
+                        _buildFilterChip(
+                          label: '自定义/导入 ($customCount)',
+                          selected:
+                              activeFilter == _PurificationRuleFilter.custom,
+                          onTap: () => setState(
+                            () => _filter =
+                                activeFilter == _PurificationRuleFilter.custom
+                                ? _PurificationRuleFilter.all
+                                : _PurificationRuleFilter.custom,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (allRules.length >
+                    ReaderPurificationStore.builtInPresets.length) ...[
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _searchCtrl,
+                    onChanged: (_) => setState(() {}),
+                    style: const TextStyle(fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: '搜索规则名称或匹配表达式…',
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 9,
+                      ),
+                      prefixIcon: const Icon(CupertinoIcons.search, size: 16),
+                      prefixIconConstraints: const BoxConstraints(
+                        minWidth: 34,
+                        minHeight: 32,
+                      ),
+                      suffixIcon: query.isEmpty
+                          ? null
+                          : IconButton(
+                              icon: const Icon(
+                                CupertinoIcons.clear_circled_solid,
+                                size: 16,
+                              ),
+                              visualDensity: VisualDensity.compact,
+                              onPressed: () {
+                                _searchCtrl.clear();
+                                setState(() {});
+                              },
+                            ),
+                    ),
+                  ),
+                ],
+
+                // ── 6. Rules List Card ──
+                const SizedBox(height: 10),
+                AnimatedOpacity(
+                  duration: const Duration(milliseconds: 180),
+                  opacity: store.enabled ? 1.0 : 0.55,
+                  child: ContentPanel(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 6,
+                    ),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxHeight: listMaxHeight),
+                      child: rules.isEmpty
+                          ? Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 28),
+                              child: Center(
+                                child: Text(
+                                  query.isNotEmpty
+                                      ? '未找到匹配的净化规则'
+                                      : activeFilter ==
+                                            _PurificationRuleFilter.effective
+                                      ? '本章正文暂未触发任何净化规则'
+                                      : '暂无符合条件的净化规则',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                            )
+                          : ListView.separated(
+                              shrinkWrap: true,
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              itemCount: rules.length,
+                              separatorBuilder: (_, _) =>
+                                  const Divider(height: 10, thickness: 0.5),
+                              itemBuilder: (context, index) {
+                                final rule = rules[index];
+                                final isHit = effectiveIds.contains(rule.id);
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 2,
+                                  ),
+                                  child: Row(
                                     children: [
-                                      Wrap(
-                                        spacing: 6,
-                                        runSpacing: 4,
-                                        crossAxisAlignment:
-                                            WrapCrossAlignment.center,
-                                        children: [
-                                          Text(
-                                            rule.name,
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w600,
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Flexible(
+                                                  child: Text(
+                                                    rule.name,
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      fontSize: 13.5,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 6),
+                                                _buildRuleBadge(
+                                                  context,
+                                                  rule.builtIn
+                                                      ? '内置'
+                                                      : rule.isRegex
+                                                      ? '正则'
+                                                      : '文本',
+                                                ),
+                                                if (isHit) ...[
+                                                  const SizedBox(width: 4),
+                                                  _buildRuleBadge(
+                                                    context,
+                                                    '本章命中',
+                                                    highlight: true,
+                                                  ),
+                                                ],
+                                                if (rule.scopeBookId !=
+                                                    null) ...[
+                                                  const SizedBox(width: 4),
+                                                  _buildRuleBadge(
+                                                    context,
+                                                    '仅《${rule.scopeBookTitle ?? rule.scopeBookId}》',
+                                                  ),
+                                                ],
+                                                if (rule
+                                                    .importScope
+                                                    .isNotEmpty) ...[
+                                                  const SizedBox(width: 4),
+                                                  Tooltip(
+                                                    message: rule.importScope,
+                                                    child: _buildRuleBadge(
+                                                      context,
+                                                      '限定范围',
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
                                             ),
-                                          ),
-                                          ArchiveCode(
-                                            rule.builtIn
-                                                ? 'PRESET'
-                                                : rule.isRegex
-                                                ? 'REGEX'
-                                                : 'TEXT',
-                                          ),
-                                          if (rule.scopeBookId != null)
-                                            ArchiveCode(
-                                              '仅《${rule.scopeBookTitle ?? rule.scopeBookId}》',
-                                            ),
-                                          if (rule.importScope.isNotEmpty)
-                                            Tooltip(
-                                              message: rule.importScope,
-                                              child: const ArchiveCode(
-                                                '限定书籍/来源',
+                                            const SizedBox(height: 3),
+                                            Text(
+                                              rule.unsupportedReason != null
+                                                  ? '${rule.unsupportedReason!} · ${_ruleSubtitle(rule)}'
+                                                  : _ruleSubtitle(rule),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 11.5,
+                                                fontFamily:
+                                                    rule.builtIn &&
+                                                        rule.pattern.startsWith(
+                                                          '__',
+                                                        )
+                                                    ? null
+                                                    : 'monospace',
+                                                color:
+                                                    rule.unsupportedReason !=
+                                                        null
+                                                    ? scheme.error
+                                                    : scheme.onSurfaceVariant,
                                               ),
                                             ),
-                                          if (rule.unsupportedReason != null)
-                                            ArchiveCode(
-                                              rule.unsupportedReason!,
-                                            ),
-                                          if (isHit) const ArchiveCode('本章命中'),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        rule.builtIn &&
-                                                rule.pattern.startsWith('__')
-                                            ? '内置智能排版算法（阅读渲染时实时处理）'
-                                            : '${rule.pattern} → ${rule.replacement.isEmpty ? "（删除）" : rule.replacement}',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Theme.of(
-                                            context,
-                                          ).colorScheme.onSurfaceVariant,
+                                          ],
                                         ),
+                                      ),
+                                      if (!rule.builtIn)
+                                        SizedBox(
+                                          width: 32,
+                                          height: 32,
+                                          child: IconButton(
+                                            padding: EdgeInsets.zero,
+                                            icon: Icon(
+                                              CupertinoIcons.delete,
+                                              size: 16,
+                                              color: scheme.onSurfaceVariant,
+                                            ),
+                                            tooltip: '删除规则',
+                                            onPressed: () =>
+                                                store.removeRule(rule.id),
+                                          ),
+                                        ),
+                                      Switch.adaptive(
+                                        materialTapTargetSize:
+                                            MaterialTapTargetSize.shrinkWrap,
+                                        value: rule.enabled,
+                                        onChanged:
+                                            rule.unsupportedReason != null
+                                            ? null
+                                            : (v) => store.toggleRule(
+                                                rule.id,
+                                                v,
+                                              ),
                                       ),
                                     ],
                                   ),
-                                ),
-                                if (!rule.builtIn)
-                                  IconButton(
-                                    icon: const Icon(
-                                      CupertinoIcons.delete,
-                                      size: 18,
-                                    ),
-                                    tooltip: '删除规则',
-                                    onPressed: () => store.removeRule(rule.id),
-                                  ),
-                                Switch.adaptive(
-                                  value: rule.enabled,
-                                  onChanged: rule.unsupportedReason != null
-                                      ? null
-                                      : (v) => store.toggleRule(rule.id, v),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
+                                );
+                              },
+                            ),
+                    ),
+                  ),
                 ),
               ],
             ),
