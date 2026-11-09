@@ -642,8 +642,16 @@ class ReaderPurificationStore extends ChangeNotifier {
     final added = <ReaderPurificationRule>[];
     var seq = 0;
     for (final item in items) {
+      final normalized = sourcePack != null && item is Map
+          ? <String, Object?>{
+              for (final entry in item.entries)
+                if (entry.key is String) entry.key as String: entry.value,
+              // Legado replacement rules default to regular expressions.
+              if (!item.containsKey('isRegex')) 'isRegex': true,
+            }
+          : item;
       final parsed = ReaderPurificationRule.fromJson(
-        item,
+        normalized,
         defaultBookId: defaultBookId,
         defaultBookTitle: defaultBookTitle,
       );
@@ -666,7 +674,7 @@ class ReaderPurificationStore extends ChangeNotifier {
           pattern: parsed.pattern,
           replacement: parsed.replacement,
           isRegex: parsed.isRegex,
-          enabled: parsed.enabled,
+          enabled: sourcePack != null ? true : parsed.enabled,
           scopeBookId: parsed.scopeBookId,
           scopeBookTitle: parsed.scopeBookTitle,
           applyToTitle: parsed.applyToTitle,
