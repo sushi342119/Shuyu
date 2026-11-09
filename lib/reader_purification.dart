@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -138,6 +139,8 @@ class ReaderPurificationRule {
     this.scopeBookId,
     this.scopeBookTitle,
     this.applyToTitle = false,
+    this.applyToContent = true,
+    this.sourcePack,
   });
 
   final String id;
@@ -150,6 +153,8 @@ class ReaderPurificationRule {
   final int? scopeBookId;
   final String? scopeBookTitle;
   final bool applyToTitle;
+  final bool applyToContent;
+  final String? sourcePack;
 
   bool appliesToBook(int? bookId) =>
       scopeBookId == null || (bookId != null && scopeBookId == bookId);
@@ -164,6 +169,7 @@ class ReaderPurificationRule {
     bool clearScopeBook = false,
     String? scopeBookTitle,
     bool? applyToTitle,
+    bool? applyToContent,
   }) => ReaderPurificationRule(
     id: id,
     name: name ?? this.name,
@@ -177,6 +183,8 @@ class ReaderPurificationRule {
         ? null
         : (scopeBookTitle ?? this.scopeBookTitle),
     applyToTitle: applyToTitle ?? this.applyToTitle,
+    applyToContent: applyToContent ?? this.applyToContent,
+    sourcePack: sourcePack,
   );
 
   static final Map<String, RegExp> _regExpCache = {};
@@ -224,7 +232,16 @@ class ReaderPurificationRule {
     }
     final regExp = _compile(pattern);
     if (regExp == null) return input;
-    return input.replaceAll(regExp, replacement);
+    return input.replaceAllMapped(regExp, (match) {
+      // Legado/Java JSON rules use $1, $2... for capture groups.
+      return replacement.replaceAllMapped(RegExp(r'\$(\d+)'), (token) {
+        final index = int.tryParse(token.group(1)!);
+        if (index == null || index > match.groupCount) {
+          return token.group(0)!;
+        }
+        return match.group(index) ?? '';
+      });
+    });
   }
 
   Map<String, Object?> toJson() => {
@@ -239,6 +256,8 @@ class ReaderPurificationRule {
     if (scopeBookTitle != null && scopeBookTitle!.isNotEmpty)
       'scopeBookTitle': scopeBookTitle,
     if (applyToTitle) 'applyToTitle': true,
+    if (!applyToContent) 'applyToContent': false,
+    if (sourcePack != null) 'sourcePack': sourcePack,
   };
 
   static ReaderPurificationRule? fromJson(
@@ -279,6 +298,8 @@ class ReaderPurificationRule {
       scopeBookId: scopeId,
       scopeBookTitle: scopeTitle,
       applyToTitle: applyTitle,
+      applyToContent: raw['applyToContent'] != false && raw['scopeContent'] != false,
+      sourcePack: raw['sourcePack'] is String ? raw['sourcePack'] as String : null,
     );
   }
 }
@@ -289,6 +310,10 @@ class ReaderPurificationStore extends ChangeNotifier {
   static final ReaderPurificationStore shared = ReaderPurificationStore._();
   static const String preferenceKey = 'reader_purification_rules_v1';
   static const String editsPreferenceKey = 'reader_paragraph_edits_v1';
+  static const String nyaRulePackId = 'nyasama-purification-v1';
+  static const String nyaRulePackUrl =
+      'https://shuyuan.nyasama.net/shuyuan/faf2657b557cd2cc126cabda466c0c06.json';
+  static const String _nyaEnabledKey = 'reader_nyasama_pack_enabled_v1';
 
   static const List<ReaderPurificationRule> builtInPresets = [
     ReaderPurificationRule(
@@ -359,16 +384,26 @@ class ReaderPurificationStore extends ChangeNotifier {
   List<ReaderPurificationRule> _rules = [...builtInPresets];
   Map<String, String> _paragraphEdits = {};
   bool _loaded = false;
+  bool _nyaRulePackEnabled = false;
+
+  bool get nyaRulePackEnabled => _nyaRulePackEnabled;
+  int get nyaRulePackRuleCount =>
+      _rules.where((rule) => rule.sourcePack == nyaRulePackId).length;
+  bool _isRuleActive(ReaderPurificationRule rule) =>
+      rule.enabled &&
+      (rule.sourcePack != nyaRulePackId || _nyaRulePackEnabled);
 
   List<ReaderPurificationRule> get rules => List.unmodifiable(_rules);
 
   bool get hasEnabledRules =>
-      _rules.any((rule) => rule.enabled) || _paragraphEdits.isNotEmpty;
+      _rules.any((rule) => _isRuleActive(rule) && rule.applyToContent) ||
+      _paragraphEdits.isNotEmpty;
 
   @visibleForTesting
   void resetForTesting() {
     _rules = [...builtInPresets];
     _paragraphEdits = {};
+    _nyaRulePackEnabled = false;
     _loaded = false;
   }
 
@@ -377,6 +412,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     _loaded = true;
     try {
       final prefs = await SharedPreferences.getInstance();
+      _nyaRulePackEnabled = prefs.getBool(_nyaEnabledKey) ?? false;
       final rawEdits = prefs.getString(editsPreferenceKey);
       if (rawEdits != null && rawEdits.isNotEmpty) {
         final decodedEdits = jsonDecode(rawEdits);
@@ -512,6 +548,58 @@ class ReaderPurificationStore extends ChangeNotifier {
     await _persist();
   }
 
+  Future<void> setNyaRulePackEnabled(bool enabled) async {
+    await ensureLoaded();
+    if (nyaRulePackRuleCount == 0 || _nyaRulePackEnabled == enabled) return;
+    _nyaRulePackEnabled = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_nyaEnabledKey, enabled);
+  }
+
+  Future<void> removeNyaRulePack() async {
+    await ensureLoaded();
+    _rules = [
+      for (final rule in _rules)
+        if (rule.sourcePack != nyaRulePackId) rule,
+    ];
+    _nyaRulePackEnabled = false;
+    notifyListeners();
+    await _persist();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_nyaEnabledKey);
+  }
+
+  /// Downloads the optional pack only when requested by the reader. The local
+  /// copy remains available offline until explicitly deleted.
+  Future<int> installNyaRulePack() async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 12);
+    try {
+      final request = await client
+          .getUrl(Uri.parse(nyaRulePackUrl))
+          .timeout(const Duration(seconds: 15));
+      request.followRedirects = false;
+      final response = await request.close().timeout(const Duration(seconds: 15));
+      if (response.statusCode != HttpStatus.ok) {
+        throw const FormatException('规则源不可用');
+      }
+      final bytes = <int>[];
+      await for (final chunk in response.timeout(const Duration(seconds: 20))) {
+        if (bytes.length + chunk.length > 3 * 1024 * 1024) {
+          throw const FormatException('规则包超过大小限制');
+        }
+        bytes.addAll(chunk);
+      }
+      return importRulesFromText(
+        utf8.decode(bytes),
+        sourcePack: nyaRulePackId,
+      );
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   /// Exports custom rules as a shareable token (`shuyu://purification?data=...`)
   /// or JSON array compatible with Legado's `replaceRule`.
   String exportRulesShareToken({int? bookId}) {
@@ -531,6 +619,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     String rawText, {
     int? defaultBookId,
     String? defaultBookTitle,
+    String? sourcePack,
   }) async {
     await ensureLoaded();
     var payload = rawText.trim();
@@ -559,6 +648,13 @@ class ReaderPurificationStore extends ChangeNotifier {
         defaultBookTitle: defaultBookTitle,
       );
       if (parsed == null || parsed.builtIn) continue;
+      if (sourcePack != null) {
+        if (seq >= 1000) break;
+        if (parsed.name.length > 200 || parsed.pattern.length > 4096 ||
+            parsed.replacement.length > 4096) continue;
+        if (parsed.isRegex &&
+            ReaderPurificationRule._compile(parsed.pattern) == null) continue;
+      }
       final sig =
           '${parsed.pattern}|${parsed.replacement}|${parsed.scopeBookId}';
       if (!existingPatterns.add(sig)) continue;
@@ -574,6 +670,8 @@ class ReaderPurificationStore extends ChangeNotifier {
           scopeBookId: parsed.scopeBookId,
           scopeBookTitle: parsed.scopeBookTitle,
           applyToTitle: parsed.applyToTitle,
+          applyToContent: parsed.applyToContent,
+          sourcePack: sourcePack,
         ),
       );
     }
@@ -595,7 +693,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     final active = <ReaderPurificationRule>[];
     final paragraphList = paragraphs.toList(growable: false);
     for (final rule in _rules) {
-      if (!rule.enabled || !rule.appliesToBook(bookId)) continue;
+      if (!_isRuleActive(rule) || !rule.appliesToBook(bookId)) continue;
       if (rule.id == 'builtin_dedup_chapter_title') {
         if (paragraphList.isNotEmpty &&
             dedupLeadingChapterTitle(paragraphList.first, chapterTitle) !=
@@ -641,7 +739,8 @@ class ReaderPurificationStore extends ChangeNotifier {
     }
     var current = text;
     for (final rule in _rules) {
-      if (!rule.enabled || !rule.appliesToBook(bookId)) continue;
+      if (!_isRuleActive(rule) || !rule.appliesToBook(bookId) ||
+          !rule.applyToContent) continue;
       if (rule.id == 'builtin_dedup_chapter_title') {
         if (isFirstParagraph && chapterTitle != null) {
           current = dedupLeadingChapterTitle(current, chapterTitle);
