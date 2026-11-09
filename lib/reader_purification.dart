@@ -819,6 +819,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
   bool _adding = false;
   bool _onlyEffective = false;
   bool _editingParagraph = false;
+  bool _packBusy = false;
   int _selectedParagraphIndex = 0;
   String? _error;
 
@@ -937,6 +938,40 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
     showNovelFeedback(context, '已保存本段纠错修改');
   }
 
+  Future<void> _installNyaPack() async {
+    if (_packBusy) return;
+    setState(() => _packBusy = true);
+    try {
+      final count = await ReaderPurificationStore.shared.installNyaRulePack();
+      if (!mounted) return;
+      showNovelFeedback(context,
+          count > 0 ? '已安装 $count 条规则，默认关闭，可手动启用' : '未发现新的可导入规则');
+    } catch (_) {
+      if (mounted) showNovelFeedback(context, '安装失败，请检查网络或规则格式');
+    } finally {
+      if (mounted) setState(() => _packBusy = false);
+    }
+  }
+
+  Future<void> _removeNyaPack() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('删除净化规则包？'),
+        content: const Text('将删除这个规则包中的全部规则，不影响个人规则和小说原文。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('删除')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await ReaderPurificationStore.shared.removeNyaRulePack();
+    if (mounted) showNovelFeedback(context, '规则包已删除');
+  }
+
   Future<void> _exportRules() async {
     final token = ReaderPurificationStore.shared.exportRulesShareToken();
     await Clipboard.setData(ClipboardData(text: token));
@@ -984,9 +1019,11 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
             : const <ReaderPurificationRule>[];
         final effectiveIds = {for (final r in effectiveRules) r.id};
         final allRules = store.rules;
+        // Keep imported pack rules out of the main list; the group has its own
+        // controls, so installing hundreds of rules does not flood the sheet.
         final rules = _onlyEffective
             ? allRules.where((r) => effectiveIds.contains(r.id)).toList()
-            : allRules;
+            : allRules.where((r) => r.sourcePack != ReaderPurificationStore.nyaRulePackId).toList();
         final canEditChapter =
             widget.bookId != null &&
             widget.chapterIndex != null &&
@@ -1047,6 +1084,41 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                   style: TextStyle(
                     fontSize: 12,
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ContentPanel(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text('书源站正文净化规则包',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 4),
+                      Text('来自 shuyuan.nyasama.net · 安装后默认关闭 · 仅修改阅读显示',
+                        style: TextStyle(fontSize: 12,
+                            color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                      const SizedBox(height: 8),
+                      if (store.nyaRulePackRuleCount > 0) ...[
+                        Row(children: [
+                          Expanded(child: Text('已安装 ${store.nyaRulePackRuleCount} 条规则')),
+                          Switch.adaptive(
+                            key: const ValueKey('purification-pack-enabled'),
+                            value: store.nyaRulePackEnabled,
+                            onChanged: (v) => store.setNyaRulePackEnabled(v),
+                          ),
+                        ]),
+                        GlassTextButton(
+                          key: const ValueKey('purification-pack-delete'),
+                          onPressed: _packBusy ? null : _removeNyaPack,
+                          child: const Text('删除整个规则包'),
+                        ),
+                      ] else
+                        GlassTextButton(
+                          key: const ValueKey('purification-pack-install'),
+                          onPressed: _packBusy ? null : _installNyaPack,
+                          child: Text(_packBusy ? '正在安装…' : '安装此规则包'),
+                        ),
+                    ],
                   ),
                 ),
                 if (widget.chapterParagraphs != null) ...[
