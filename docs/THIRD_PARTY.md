@@ -6,14 +6,15 @@
 
 ## 原版 API 运行库：libcpp.so
 
-- 路径：`android/app/src/main/jniLibs/<abi>/libcpp.so`。
+- 路径：`android/app/src/main/jniLibs/<abi>/libcpp.so`（公开 Git 仓库默认不跟踪该二进制文件）。
 - 用途：现有文库联网接口的 JNI 运行库。
 - 本分支不修改、不解包、不重新实现该二进制。
-- 继承的说明记载维护者于 2026-10-15 确认可原样再分发；本分支尚未取得并核对对应授权凭据，不能将该记载当作已独立验证的授权结论。正式分发前应由维护者留存权利人授权及适用范围。
+- 继承的说明记载原维护者于 2026-10-15 确认可原样再分发；由于本分支尚未独立取得并核对对应书面授权凭据，公开源码检出默认不包含该文件，也不能将该记载当作已独立验证的授权结论。正式分发包含该运行库的 APK 前，应由维护者核实并留存权利人授权及适用范围。
+- 核实授权后，可通过本地放置 `android/app/src/main/jniLibs/arm64-v8a/libcpp.so` 或在 CI 中配置 `ANDROID_API_RUNTIME_ARM64_BASE64` Secret（由 `tools/verify_apk_runtime.py --provision` 注入，并在构建后由 `tools/verify_apk_runtime.py` 校验 APK 内嵌文件未被剥离符号）。
 - 该组件的源码不在本工程中；不能将应用源码的 GPL 许可视为对该组件源码、修改权或其他用途的授权。需要超出原样再分发条件时，应联系原版权方。
 - 原项目当前公开构建使用 [api-stub](https://github.com/MewX/light-novel-library_Wenku8_Android/blob/master/studio-android/LightNovelLibrary/settings.gradle)，因此本工程源码归档不应被描述为该二进制的完整对应源码。
 
-如只需审阅可编辑源码，导出时增加 `--source-only`。缺少这个运行库的构建不能使用现有文库联网接口。
+如只需审阅可编辑源码，直接检出公开仓库或导出时增加 `--source-only`。缺少这个运行库的干净构建仅可使用本地书库、WebDAV、Wi-Fi 传书、正文净化与在线听书，不能使用现有文库联网接口。
 
 ## 内置字体：Adobe 思源宋体 CN
 

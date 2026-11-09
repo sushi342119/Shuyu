@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 import 'package:shared_preferences_platform_interface/types.dart';
 import 'package:shuyu/book_tags.dart';
+import 'package:shuyu/catalog.dart';
 import 'package:shuyu/library_backup.dart';
 import 'package:shuyu/library_state.dart';
 import 'package:shuyu/local_library.dart';
@@ -627,6 +628,113 @@ void main() {
       const error = FormatException('TXT 解码失败 /local/private.txt');
       expect(describeLocalScanError(error), contains('解码失败'));
       expect(describeSafeError(error), isNot(contains('/local/private.txt')));
+    },
+  );
+
+  test(
+    'restoreBackup remaps local book IDs by title/author and skips colliding unmatched IDs',
+    () async {
+      const oldId = localNovelIdBase + 1;
+      const newId = localNovelIdBase + 9;
+      const unrelatedOldId = localNovelIdBase + 2;
+      final state = LibraryState(prefs);
+      addTearDown(state.dispose);
+
+      // Target device scanned '罗生门' at oldId (collision), '雪国' at newId,
+      // and '人间失格' at unrelatedOldId.
+      await state.addShelfBooks(const [
+        Novel(
+          id: oldId,
+          title: '罗生门',
+          author: '芥川龙之介',
+          genre: '本地 TXT',
+          summary: '',
+          colors: [],
+        ),
+        Novel(
+          id: newId,
+          title: '雪国',
+          author: '川端康成',
+          genre: '本地 TXT',
+          summary: '',
+          colors: [],
+        ),
+        Novel(
+          id: unrelatedOldId,
+          title: '人间失格',
+          author: '太宰治',
+          genre: '本地 TXT',
+          summary: '',
+          colors: [],
+        ),
+      ]);
+
+      final tag = await TagStore.shared.createTag('经典');
+      final backup = await LibraryBackup.fromRecords({
+        'shelf': ['$oldId', '$unrelatedOldId'],
+        'novel_meta_$oldId': jsonEncode(
+          const Novel(
+            id: oldId,
+            title: '雪国',
+            author: '川端康成',
+            genre: '本地 TXT',
+            summary: '',
+            colors: [],
+          ).toSnapshot(),
+        ),
+        'novel_meta_$unrelatedOldId': jsonEncode(
+          const Novel(
+            id: unrelatedOldId,
+            title: '不存在的旧书',
+            author: '其他作者',
+            genre: '本地 TXT',
+            summary: '',
+            colors: [],
+          ).toSnapshot(),
+        ),
+        'reading_position_$oldId': jsonEncode(
+          const ReadingPosition(
+            chapter: 1,
+            chapterId: 0,
+            offset: 24,
+            fraction: .5,
+            fontSize: 19,
+            width: 390,
+            updatedAt: 500,
+          ).toJson(),
+        ),
+        'reading_position_$unrelatedOldId': jsonEncode(
+          const ReadingPosition(
+            chapter: 3,
+            chapterId: 0,
+            offset: 80,
+            fraction: .8,
+            fontSize: 19,
+            width: 390,
+            updatedAt: 600,
+          ).toJson(),
+        ),
+        'tag_defs': jsonEncode([tag.toJson()]),
+        'tag_map': jsonEncode({
+          '$oldId': [tag.id],
+          '$unrelatedOldId': [tag.id],
+        }),
+      });
+
+      await state.restoreBackup(backup);
+
+      // '雪国' at newId receives the progress and tag from oldId in the backup.
+      expect(state.positionFor(newId)?.chapter, 1);
+      expect(state.positionFor(newId)?.fraction, .5);
+      expect(TagStore.shared.tagsForBook(newId).map((item) => item.id), [
+        tag.id,
+      ]);
+
+      // '罗生门' at oldId and '人间失格' at unrelatedOldId are not polluted.
+      expect(state.positionFor(oldId), isNull);
+      expect(state.positionFor(unrelatedOldId), isNull);
+      expect(TagStore.shared.tagsForBook(oldId), isEmpty);
+      expect(TagStore.shared.tagsForBook(unrelatedOldId), isEmpty);
     },
   );
 }

@@ -65,9 +65,18 @@ extension LibraryBackupMerge on LibraryState {
         _recordOmittedCovers(previous);
         await writeLibraryPreference(_prefs, 'library_pre_restore_snapshot_v1', await previous.encode());
         final records = backup.records;
+        final (:remap, :collidingUnmatched) = _resolveLocalBookIdMap(
+          _known,
+          records,
+        );
+        int? mapBookId(int rawId) => collidingUnmatched.contains(rawId)
+            ? null
+            : (remap[rawId] ?? rawId);
         final shelf = {
           ..._shelf,
-          ...(records['shelf'] as List<String>? ?? const []).map(int.parse),
+          for (final rawId
+              in (records['shelf'] as List<String>? ?? const []).map(int.parse))
+            if (mapBookId(rawId) case final int mappedId) mappedId,
         };
         final added = {..._added};
         final known = {..._known};
@@ -82,25 +91,38 @@ extension LibraryBackupMerge on LibraryState {
         for (final entry in records.entries) {
           final key = entry.key;
           if (key.startsWith('novel_meta_')) {
-            final id = int.parse(key.substring('novel_meta_'.length));
+            final rawId = int.parse(key.substring('novel_meta_'.length));
+            final id = mapBookId(rawId);
+            if (id == null) continue;
             if (!known.containsKey(id)) {
-              known[id] = Novel.fromSnapshot(jsonDecode(entry.value as String));
-              changed[key] = entry.value;
+              final snapshot = Map<String, dynamic>.from(
+                jsonDecode(entry.value as String) as Map,
+              )..['id'] = id;
+              known[id] = Novel.fromSnapshot(snapshot);
+              changed['novel_meta_$id'] = id == rawId
+                  ? entry.value
+                  : jsonEncode(snapshot);
             }
           } else if (key.startsWith('shelf_added_')) {
-            final id = int.parse(key.substring('shelf_added_'.length));
+            final rawId = int.parse(key.substring('shelf_added_'.length));
+            final id = mapBookId(rawId);
+            if (id == null) continue;
             if (!added.containsKey(id)) {
               added[id] = entry.value as int;
-              changed[key] = entry.value;
+              changed['shelf_added_$id'] = entry.value;
             }
           } else if (key.startsWith('chapter_')) {
-            final id = int.parse(key.substring('chapter_'.length));
+            final rawId = int.parse(key.substring('chapter_'.length));
+            final id = mapBookId(rawId);
+            if (id == null) continue;
             if (!chapters.containsKey(id) && !positions.containsKey(id)) {
               chapters[id] = entry.value as int;
-              changed[key] = entry.value;
+              changed['chapter_$id'] = entry.value;
             }
           } else if (key.startsWith('reading_position_')) {
-            final id = int.parse(key.substring('reading_position_'.length));
+            final rawId = int.parse(key.substring('reading_position_'.length));
+            final id = mapBookId(rawId);
+            if (id == null) continue;
             final incoming = ReadingPosition.fromJson(
               jsonDecode(entry.value as String),
             );
@@ -108,11 +130,13 @@ extension LibraryBackupMerge on LibraryState {
                 positions[id]!.updatedAt < incoming.updatedAt) {
               positions[id] = incoming;
               chapters[id] = incoming.chapter;
-              changed[key] = jsonEncode(incoming.toJson());
+              changed['reading_position_$id'] = jsonEncode(incoming.toJson());
               changed['chapter_$id'] = incoming.chapter;
             }
           } else if (key.startsWith('reader_bookmarks_')) {
-            final id = int.parse(key.substring('reader_bookmarks_'.length));
+            final rawId = int.parse(key.substring('reader_bookmarks_'.length));
+            final id = mapBookId(rawId);
+            if (id == null) continue;
             final current = marks.putIfAbsent(id, () => []);
             final fingerprints = current.map(_bookmarkFingerprint).toSet();
             final ids = current.map((mark) => mark.id).toSet();
@@ -141,7 +165,7 @@ extension LibraryBackupMerge on LibraryState {
             current.sort(
               (a, b) => b.position.updatedAt.compareTo(a.position.updatedAt),
             );
-            changed[key] = jsonEncode(
+            changed['reader_bookmarks_$id'] = jsonEncode(
               current.map((mark) => mark.toJson()).toList(),
             );
           }
@@ -150,10 +174,12 @@ extension LibraryBackupMerge on LibraryState {
           added.putIfAbsent(id, () => backup.createdAt);
           if (!_added.containsKey(id)) changed['shelf_added_$id'] = added[id]!;
         }
-        for (final id
+        for (final rawId
             in (records['reading_history_hidden'] as List<String>? ?? const [])
                 .map(int.parse)) {
-          if (!oldRead.contains(id) &&
+          final id = mapBookId(rawId);
+          if (id != null &&
+              !oldRead.contains(id) &&
               (positions.containsKey(id) || chapters.containsKey(id))) {
             hidden.add(id);
           }
@@ -170,7 +196,11 @@ extension LibraryBackupMerge on LibraryState {
         changed['shelf'] = shelf.map((id) => '$id').toList();
         changed['local_shelf_removed'] = {
           ...?_prefs.getStringList('local_shelf_removed'),
-          ...(records['local_shelf_removed'] as List<String>? ?? const []),
+          for (final raw
+              in records['local_shelf_removed'] as List<String>? ??
+                  const <String>[])
+            if (int.tryParse(raw) case final int rawId)
+              if (mapBookId(rawId) case final int mappedId) '$mappedId',
         }.where((id) => !shelf.contains(int.tryParse(id))).toList();
         changed['reading_history_hidden'] = hidden.map((id) => '$id').toList();
         changed['recentSearches'] = searches;
@@ -190,8 +220,28 @@ extension LibraryBackupMerge on LibraryState {
         await _commitLibraryRecords(changed);
         // 标签是独立存储，合并语义与书架一致（只增不减）。
         final tagRecords = <String, Object>{};
-        for (final key in const ['tag_defs', 'tag_map']) {
-          if (records[key] case final String value) tagRecords[key] = value;
+        if (records['tag_defs'] case final String defs) {
+          tagRecords['tag_defs'] = defs;
+        }
+        if (records['tag_map'] case final String rawMap) {
+          if (remap.entries.any((e) => e.key != e.value) ||
+              collidingUnmatched.isNotEmpty) {
+            final decoded = jsonDecode(rawMap) as Map<String, dynamic>;
+            final remapped = <String, List<String>>{};
+            for (final entry in decoded.entries) {
+              final rawId = int.tryParse(entry.key);
+              final mappedId = rawId == null ? null : mapBookId(rawId);
+              if (rawId != null && mappedId == null) continue;
+              final targetKey = mappedId != null ? '$mappedId' : entry.key;
+              final bucket = remapped.putIfAbsent(targetKey, () => <String>[]);
+              for (final tag in (entry.value as List).cast<String>()) {
+                if (!bucket.contains(tag)) bucket.add(tag);
+              }
+            }
+            tagRecords['tag_map'] = jsonEncode(remapped);
+          } else {
+            tagRecords['tag_map'] = rawMap;
+          }
         }
         if (tagRecords.isNotEmpty) {
           await TagStore.shared.importTagRecords(tagRecords);
@@ -260,6 +310,73 @@ extension LibraryBackupMerge on LibraryState {
       _restoreBarrier = null;
       barrier.complete();
     }
+  }
+
+  static (String, String) _localBookIdentity(Novel novel) => (
+    novel.title.trim().toLowerCase(),
+    novel.author.trim().toLowerCase(),
+  );
+
+  static bool _isPlaceholderLocalAuthor(String author) =>
+      author.isEmpty || author == '本地导入' || author == '未知' || author == '佚名';
+
+  static ({Map<int, int> remap, Set<int> collidingUnmatched})
+  _resolveLocalBookIdMap(
+    Map<int, Novel> known,
+    Map<String, Object> records,
+  ) {
+    final incomingMeta = <int, Novel>{};
+    for (final entry in records.entries) {
+      if (!entry.key.startsWith('novel_meta_')) continue;
+      final id = int.parse(entry.key.substring('novel_meta_'.length));
+      if (!isLocalNovelId(id)) continue;
+      incomingMeta[id] = Novel.fromSnapshot(jsonDecode(entry.value as String));
+    }
+    if (incomingMeta.isEmpty) {
+      return (remap: const <int, int>{}, collidingUnmatched: const <int>{});
+    }
+    final byIdentity = <(String, String), List<int>>{};
+    final byTitle = <String, List<int>>{};
+    for (final entry in known.entries) {
+      if (!isLocalNovelId(entry.key)) continue;
+      final identity = _localBookIdentity(entry.value);
+      if (identity.$1.isEmpty) continue;
+      (byIdentity[identity] ??= []).add(entry.key);
+      (byTitle[identity.$1] ??= []).add(entry.key);
+    }
+    final remap = <int, int>{};
+    final collidingUnmatched = <int>{};
+    for (final entry in incomingMeta.entries) {
+      final oldId = entry.key;
+      final identity = _localBookIdentity(entry.value);
+      final currentAtOldId = known[oldId];
+      if (currentAtOldId != null &&
+          _localBookIdentity(currentAtOldId) == identity) {
+        remap[oldId] = oldId;
+        continue;
+      }
+      final exact = byIdentity[identity];
+      if (exact != null && exact.length == 1) {
+        remap[oldId] = exact.single;
+        continue;
+      }
+      final titleMatches = byTitle[identity.$1];
+      if (titleMatches != null && titleMatches.length == 1) {
+        final candidate = known[titleMatches.single]!;
+        final candidateAuthor = _localBookIdentity(candidate).$2;
+        if (_isPlaceholderLocalAuthor(identity.$2) ||
+            _isPlaceholderLocalAuthor(candidateAuthor)) {
+          remap[oldId] = titleMatches.single;
+          continue;
+        }
+      }
+      if (currentAtOldId != null) {
+        collidingUnmatched.add(oldId);
+      } else {
+        remap[oldId] = oldId;
+      }
+    }
+    return (remap: remap, collidingUnmatched: collidingUnmatched);
   }
 
   static String _bookmarkFingerprint(ReaderBookmark bookmark) {

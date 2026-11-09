@@ -14,10 +14,11 @@ listening implementation. Modified on 2026-10-15 to retire vendor-specific
 speech integration, add configurable low-performance rendering, remove runtime
 diagnostic entries and keep chapter-level listening progress/media metadata.
 
-The original Android app's embedded JNI API runtime (libcpp.so) is retained
-without modification to preserve network functionality. The project maintainer
-confirmed on 2026-10-15 that unchanged redistribution is permitted. Its source
-is not present here; it is a separately authorized third-party binary, not
+The original Android app's embedded JNI API runtime (libcpp.so) is required
+only for legacy network API requests and is omitted from the public git
+checkout by default. An inherited note states that the upstream maintainer
+confirmed on 2026-10-15 that unchanged redistribution is permitted; its source
+is not present here, and it is a separately authorized third-party binary not
 covered by this project's source license. Do not modify it or infer additional
 rights from the GPL notice for the application.
 
@@ -37,6 +38,7 @@ Source and license: third_party/liquid_glass_easy/. Modified 2026-10-15 to
 bound unnecessary single-lens shader output; see its PATCHES.md.
 
 Release maintenance, November 2026: Shuyu branding, release signing checks,
-release automation and privacy disclosure. The binary redistribution statement
-above is an inherited maintainer assertion; supporting authorization has not
-been independently verified by this fork.
+release automation and privacy disclosure. Because the binary redistribution
+statement above is an inherited assertion whose supporting authorization has
+not been independently verified by this fork, clean source checkouts build
+without libcpp.so unless explicitly provisioned and verified in CI.

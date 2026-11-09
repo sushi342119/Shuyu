@@ -67,7 +67,7 @@ def main():
         for source in sorted((ROOT / directory).rglob("*")):
             copy(source.relative_to(ROOT))
     print(f"Exported {copied} source files to {destination}")
-    if args.source_only:
+    if args.source_only or not any(destination.rglob("libcpp.so")):
         print("Network API runtime excluded. See docs/RELEASING.md before distributing a working network build.")
     else:
         print("Embedded network runtime retained unchanged under its separate redistribution conditions. See docs/THIRD_PARTY.md.")

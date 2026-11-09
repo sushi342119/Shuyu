@@ -219,7 +219,7 @@ class ReleasePublicationTest(unittest.TestCase):
             )
             return result, json.loads(state_file.read_text())
 
-    def test_all_triggers_create_published_release(self):
+    def test_all_triggers_create_only_a_draft(self):
         for event in (
             {'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF_TYPE': 'tag',
              'GITHUB_REF': 'refs/tags/v1.8.2+49'},
@@ -232,7 +232,7 @@ class ReleasePublicationTest(unittest.TestCase):
                 result, state = self.run_release_step(**event)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(state['release'], {
-                    'tag': 'v1.8.2+49', 'draft': False, 'latest': True,
+                    'tag': 'v1.8.2+49', 'draft': True, 'latest': False,
                     'target': 'candidate-commit',
                     'assets': ['build/shuyu-v1.8.2+49-arm64-v8a.apk',
                                'build/shuyu-source.zip'],
@@ -264,9 +264,10 @@ class ReleasePublicationTest(unittest.TestCase):
 
 
 class UpdateIdentityValidationTest(unittest.TestCase):
-    def check_candidate(self, *, package='app.shuyu.reader', build=50,
-                        version='1.8.3', certificate='ab' * 32, invalid_signature=False,
-                        labels=('Signer #1', 'Signer #1'), extra_report=''):
+    def check_candidate(self, *, old_package='app.shuyu.reader', package='app.shuyu.reader',
+                        build=62, version='1.8.15', certificate='ab' * 32,
+                        invalid_signature=False, labels=('Signer #1', 'Signer #1'),
+                        extra_report=''):
         workflow = (Path(__file__).resolve().parents[1] /
                     '.github/workflows/android-release.yml').read_text()
         step = re.search(
@@ -279,7 +280,7 @@ class UpdateIdentityValidationTest(unittest.TestCase):
         def inspect_command(command, *, text):
             old = command[-1] == 'old.apk'
             if 'badging' in command:
-                identity = ('org.mewx.wenku8_flutter', 49, '1.8.2') if old else (package, build, version)
+                identity = (old_package, 61, '1.8.14') if old else (package, build, version)
                 return "package: name='%s' versionCode='%s' versionName='%s'\n" % identity
             if invalid_signature and not old:
                 raise subprocess.CalledProcessError(1, command)
@@ -287,8 +288,8 @@ class UpdateIdentityValidationTest(unittest.TestCase):
             label = labels[0] if old else labels[1]
             return (f'{label} certificate SHA-256 digest: {digest}\n' if digest else '') + extra_report
 
-        with mock.patch.dict(os.environ, {'ANDROID_HOME': '/sdk', 'APP_BUILD': '50',
-                                         'APP_VERSION': '1.8.3'}), \
+        with mock.patch.dict(os.environ, {'ANDROID_HOME': '/sdk', 'APP_BUILD': '62',
+                                         'APP_VERSION': '1.8.15'}), \
                 mock.patch.object(sys, 'argv', ['verify', 'old.apk']), \
                 mock.patch.object(Path, 'glob', return_value=iter([Path('/sdk/build-tools/36.0.0/apksigner')])), \
                 mock.patch.object(subprocess, 'check_output', side_effect=inspect_command), \
@@ -300,14 +301,15 @@ class UpdateIdentityValidationTest(unittest.TestCase):
 
     def test_incompatible_packages_certificates_and_versions_are_rejected(self):
         for candidate in (
+            {'old_package': 'org.mewx.wenku8_flutter'},
             {'package': 'org.mewx.wenku8_flutter'},
             {'package': 'com.github.sushi342119.wenku8local'},
             {'certificate': 'cd' * 32},
             {'certificate': 'ab'},
             {'certificate': ''},
-            {'build': 49},
-            {'build': 51},
-            {'version': '1.8.2'},
+            {'build': 61},
+            {'build': 63},
+            {'version': '1.8.14'},
         ):
             with self.subTest(candidate=candidate), self.assertRaises(SystemExit):
                 self.check_candidate(**candidate)
@@ -317,7 +319,7 @@ class UpdateIdentityValidationTest(unittest.TestCase):
             self.check_candidate(invalid_signature=True)
 
     def test_build_tools_37_scheme_labels_and_older_labels_are_accepted(self):
-        # Actual Build Tools 37 output from the published v1.8.2+49 APK.
+        # Actual Build Tools 37 output from the published APK.
         for label in ('V2 Signer:', 'V3.0 Signer:',
                       'Signer (minSdkVersion=33, maxSdkVersion=2147483647)'):
             with self.subTest(label=label):
