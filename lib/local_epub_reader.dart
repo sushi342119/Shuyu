@@ -1099,6 +1099,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     final purified = ReaderPurificationStore.shared.purifyParagraph(
       block.text ?? '',
       bookId: _novel.id,
+      bookTitle: _novel.title,
       chapterIndex: _chapter,
     );
     final chapterId = _total > 0 ? _novel.chapters[_chapter].id : null;
