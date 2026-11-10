@@ -15,13 +15,13 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.9.7',
+  defaultValue: '1.9.8',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 81);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 82);
 const currentReleaseNotes = '''
-1. 局域网 Wi-Fi 传书安全加固：每次启动生成 6 位随机访问码（支持扫码/链接携带或手动输入），移除通配符跨域头（`Access-Control-Allow-Origin: *`），并将上传改为流式分块落盘、拒绝超限请求。
-2. 备份与网络传输安全升级：WebDAV 备份密码迁移至 Android Keystore 加密存储并清理旧明文记录；WebDAV 备份与外部净化规则链接默认强制 HTTPS（提供显式允许 HTTP 开关）；外部导入净化规则默认停用，正则匹配增加超时熔断保护，禁用系统云自动备份以防本地书库外泄。
-3. 备份恢复与精简重构：修复跨设备/重扫后恢复备份时本地书籍阅读进度、书签、划线与标签按书名和作者自动重映射的问题，并将备份上限提升至 32 MiB；合并字体存储、WebDAV 传输层与 HTTP 流式下载器，移除冗余依赖。
+1. 新增「本地书库 → 重复小说清理」：按源文件或正文指纹查找内容相同的小说，并单独列出疑似同名作品，支持核对文件位置、字数、阅读进度与书签批注数量。
+2. 内容重复分组支持一键选择多余副本，优先建议保留有阅读进度、最近读过的版本；疑似同名作品需逐本手动选择，每组至少保留一本。
+3. 批量删除需要两次确认，删除前再次校验源文件与保留副本；文件变化、保留副本失效或多个记录指向同一源文件时跳过，并逐本报告失败。被删副本的进度、书签及标签不会自动合并。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

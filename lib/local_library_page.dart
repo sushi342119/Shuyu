@@ -13,6 +13,7 @@ import 'feature_pages.dart';
 import 'lan_bookshelf_server.dart';
 import 'library_state.dart';
 import 'local_library.dart';
+import 'local_duplicates_page.dart';
 import 'local_scan_follow_up.dart';
 import 'wenku_errors.dart';
 
@@ -306,6 +307,22 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             subtitle: '自动导入新增，移除已删除的（共 ${books.length} 本）',
             icon: CupertinoIcons.doc_text_search,
             onTap: isScanning || _picking ? () {} : _scan,
+          ),
+          const SizedBox(height: 14),
+          FeatureEntry(
+            key: const ValueKey('local-library-duplicates'),
+            title: '重复小说清理',
+            subtitle: '查找内容相同或疑似同名的小说，保留副本后批量删除',
+            icon: CupertinoIcons.doc_on_doc,
+            onTap: () async {
+              if (isScanning || _picking) return;
+              await pushNovelPage<void>(
+                context,
+                LocalDuplicatesPage(local: widget.local, state: widget.state),
+                reduceMotion: widget.state.reduceMotion,
+              );
+              if (mounted) setState(() {});
+            },
           ),
           const SizedBox(height: 14),
           FeatureEntry(
