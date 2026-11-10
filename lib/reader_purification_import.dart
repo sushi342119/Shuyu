@@ -83,22 +83,39 @@ class ReaderPurificationDownload {
   }
 }
 
+class ReaderPurificationSaveException implements Exception {
+  const ReaderPurificationSaveException();
+
+  @override
+  String toString() => '规则保存失败，请重试';
+}
+
 class ReaderPurificationImportResult {
-  const ReaderPurificationImportResult({
+  ReaderPurificationImportResult({
     required this.imported,
     required this.disabled,
     required this.duplicates,
     required this.invalid,
-  });
+    this.enabledCount = 0,
+    Iterable<String> importedRuleIds = const [],
+    Iterable<String> enableableRuleIds = const [],
+  }) : importedRuleIds = List.unmodifiable(importedRuleIds),
+       enableableRuleIds = List.unmodifiable(enableableRuleIds);
 
   final int imported;
+  // Incompatible/unsafe rules, distinct from compatible rules awaiting consent.
   final int disabled;
   final int duplicates;
   final int invalid;
+  final int enabledCount;
+  final List<String> importedRuleIds;
+  final List<String> enableableRuleIds;
 
   String get message => [
-    imported > 0 ? '已导入 $imported 条规则（外部规则默认关闭，请确认后开启）' : '没有可导入的新规则',
-    if (disabled > 0) '其中 $disabled 条暂不兼容或存在风险，已停用',
+    imported > 0
+        ? '已保存 $imported 条规则（${enabledCount == 0 ? "尚未启用" : "已启用 $enabledCount 条"}）'
+        : '没有新增规则',
+    if (disabled > 0) '其中 $disabled 条暂不兼容或存在风险，强制停用',
     if (duplicates > 0) '跳过 $duplicates 条重复规则',
     if (invalid > 0) '跳过 $invalid 条无效数据',
   ].join('；');

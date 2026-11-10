@@ -532,6 +532,7 @@ class ReaderPurificationStore extends ChangeNotifier {
   final Map<String, List<ReaderPurificationRule>> _chapterEffectiveCache =
       <String, List<ReaderPurificationRule>>{};
   Map<String, String> _paragraphEdits = {};
+  Future<void>? _ruleWriteQueue;
   bool _loaded = false;
   bool _enabled = true;
   bool get enabled => _enabled;
@@ -558,6 +559,7 @@ class ReaderPurificationStore extends ChangeNotifier {
 
   @visibleForTesting
   void resetForTesting() {
+    _ruleWriteQueue = null;
     _rules = [...builtInPresets];
     _paragraphEdits = {};
     _loaded = false;
@@ -605,6 +607,78 @@ class ReaderPurificationStore extends ChangeNotifier {
     } catch (e) {
       if (kDebugMode) debugPrint('ReaderPurificationStore.ensureLoaded failed: $e');
     }
+  }
+
+  // Serialize rule edits so a checked import write cannot overwrite an edit
+  // made while its platform write is in flight. A failed edit must not block
+  // subsequent edits or retries.
+  Future<T> _withRuleEdits<T>(Future<T> Function() action) {
+    final previous = _ruleWriteQueue;
+    final result = previous == null ? action() : previous.then((_) => action());
+    final tail = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    _ruleWriteQueue = tail;
+    unawaited(
+      tail.then((_) {
+        if (identical(_ruleWriteQueue, tail)) _ruleWriteQueue = null;
+      }),
+    );
+    return result;
+  }
+
+  // Imports and explicit batch activation report success only after storage
+  // accepts the new rules. Neither path changes the master switch.
+  Future<void> _commitImportedRules(List<ReaderPurificationRule> next) async {
+    final prefs = await SharedPreferences.getInstance();
+    try {
+      final saved = await prefs.setString(
+        preferenceKey,
+        jsonEncode([for (final rule in next) rule.toJson()]),
+      );
+      if (!saved) throw const ReaderPurificationSaveException();
+    } catch (_) {
+      // Legacy SharedPreferences updates its cache before the platform write.
+      // Discard that optimistic cache after a rejected/failed write.
+      try {
+        await prefs.reload();
+      } catch (_) {
+        // Preserve the original save failure for the UI.
+      }
+      throw const ReaderPurificationSaveException();
+    }
+    _rules = next;
+    _invalidateCaches();
+    notifyListeners();
+  }
+
+  bool _canEnableImportedRule(ReaderPurificationRule rule) =>
+      !rule.builtIn &&
+      rule.unsupportedReason == null &&
+      !rule.replacement.trimLeft().startsWith('@js:') &&
+      !ReaderPurificationRule._trippedRuleIds.contains(rule.id) &&
+      (!rule.isRegex || ReaderPurificationRule._compile(rule.pattern) != null);
+
+  /// Only IDs returned by the current import are supplied by the confirmation
+  /// UI. Never use source URL or enableAllCustomRules for this operation.
+  Future<int> enableImportedRules(Iterable<String> ruleIds) {
+    final ids = ruleIds.toSet();
+    return _withRuleEdits(() async {
+      await ensureLoaded();
+      var changed = 0;
+      final next = _rules.map((rule) {
+        if (ids.contains(rule.id) &&
+            !rule.enabled &&
+            _canEnableImportedRule(rule)) {
+          changed++;
+          return rule.copyWith(enabled: true);
+        }
+        return rule;
+      }).toList();
+      if (changed > 0) await _commitImportedRules(next);
+      return changed;
+    });
   }
 
   Future<void> _persist() async {
@@ -666,15 +740,15 @@ class ReaderPurificationStore extends ChangeNotifier {
     await _persistEdits();
   }
 
-  Future<void> setEnabled(bool value) async {
+  Future<void> setEnabled(bool value) => _withRuleEdits(() async {
     await ensureLoaded();
     _enabled = value;
     _invalidateCaches();
     notifyListeners();
     await _persist();
-  }
+  });
 
-  Future<void> removeSource(String sourceUrl) async {
+  Future<void> removeSource(String sourceUrl) => _withRuleEdits(() async {
     await ensureLoaded();
     _rules = _rules
         .where((r) => r.builtIn || r.sourceUrl != sourceUrl)
@@ -682,9 +756,9 @@ class ReaderPurificationStore extends ChangeNotifier {
     _invalidateCaches();
     notifyListeners();
     await _persist();
-  }
+  });
 
-  Future<void> toggleRule(String id, bool enabled) async {
+  Future<void> toggleRule(String id, bool enabled) => _withRuleEdits(() async {
     await ensureLoaded();
     _rules = [
       for (final rule in _rules)
@@ -696,21 +770,22 @@ class ReaderPurificationStore extends ChangeNotifier {
     _invalidateCaches();
     notifyListeners();
     await _persist();
-  }
+  });
 
-  Future<void> enableAllCustomRules([bool enabled = true]) async {
-    await ensureLoaded();
-    _rules = [
-      for (final rule in _rules)
-        if (!rule.builtIn && rule.unsupportedReason == null)
-          rule.copyWith(enabled: enabled)
-        else
-          rule,
-    ];
-    _invalidateCaches();
-    notifyListeners();
-    await _persist();
-  }
+  Future<void> enableAllCustomRules([bool enabled = true]) =>
+      _withRuleEdits(() async {
+        await ensureLoaded();
+        _rules = [
+          for (final rule in _rules)
+            if (!rule.builtIn && rule.unsupportedReason == null)
+              rule.copyWith(enabled: enabled)
+            else
+              rule,
+        ];
+        _invalidateCaches();
+        notifyListeners();
+        await _persist();
+      });
 
   Future<void> addCustomRule({
     required String name,
@@ -720,7 +795,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     int? scopeBookId,
     String? scopeBookTitle,
     bool applyToTitle = false,
-  }) async {
+  }) => _withRuleEdits(() async {
     await ensureLoaded();
     final trimmedName = name.trim();
     if (trimmedName.isEmpty || pattern.isEmpty) return;
@@ -746,9 +821,9 @@ class ReaderPurificationStore extends ChangeNotifier {
     _invalidateCaches();
     notifyListeners();
     await _persist();
-  }
+  });
 
-  Future<void> removeRule(String id) async {
+  Future<void> removeRule(String id) => _withRuleEdits(() async {
     await ensureLoaded();
     _rules = [
       for (final rule in _rules)
@@ -757,7 +832,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     _invalidateCaches();
     notifyListeners();
     await _persist();
-  }
+  });
 
   /// Exports custom rules as a shareable token (`shuyu://purification?data=...`)
   /// or JSON array compatible with Legado's `replaceRule`.
@@ -823,7 +898,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     int? defaultBookId,
     String? defaultBookTitle,
     bool enableImported = false,
-  }) async {
+  }) => _withRuleEdits(() async {
     await ensureLoaded();
     var payload = rawText.trim().replaceFirst(RegExp(r'^\uFEFF'), '');
     final tokenMatch = RegExp(
@@ -899,18 +974,20 @@ class ReaderPurificationStore extends ChangeNotifier {
       );
     }
     if (added.isNotEmpty) {
-      _rules = [..._rules, ...added];
-      _invalidateCaches();
-      notifyListeners();
-      await _persist();
+      await _commitImportedRules([..._rules, ...added]);
     }
     return ReaderPurificationImportResult(
       imported: added.length,
       disabled: disabled,
       duplicates: duplicates,
       invalid: invalid,
+      enabledCount: added.where((rule) => rule.enabled).length,
+      importedRuleIds: added.map((rule) => rule.id),
+      enableableRuleIds: added
+          .where(_canEnableImportedRule)
+          .map((rule) => rule.id),
     );
-  }
+  });
 
   /// Returns the enabled rules that actually match the given chapter content
   /// or chapter title, allowing the reader to inspect and toggle active rules.
@@ -1246,11 +1323,22 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
         allowHttp: _allowHttpUrl,
       );
       if (!mounted) return;
-      showNovelFeedback(context, result.message);
       if (result.imported > 0) setState(() => _showUrlImport = false);
+      final activated = result.enableableRuleIds.isEmpty
+          ? null
+          : await _confirmImportedRules(result, input);
+      if (!mounted) return;
+      showNovelFeedback(
+        context,
+        activated == null
+            ? result.message
+            : '已启用本次 $activated 条规则'
+                  '${ReaderPurificationStore.shared.enabled ? "" : "；正文净化总开关关闭，暂不生效"}',
+      );
     } catch (error) {
       if (!mounted) return;
       final message = switch (error) {
+        ReaderPurificationSaveException() => '规则保存失败，请重试',
         TimeoutException() => '下载超时，请检查网络后重试',
         SocketException() => '无法连接规则链接，请检查网络或链接地址',
         HttpException() => error.message,
@@ -1265,6 +1353,97 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
     } finally {
       if (mounted) setState(() => _importing = false);
     }
+  }
+
+  Future<int?> _confirmImportedRules(
+    ReaderPurificationImportResult result,
+    String input,
+  ) {
+    final uri = Uri.tryParse(input.trim());
+    final source =
+        uri != null && (uri.isScheme('https') || uri.isScheme('http'))
+        ? uri.host
+        : '剪贴板 JSON／分享口令';
+    var saving = false;
+    String? saveError;
+    return showDialog<int>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, updateDialog) => PopScope(
+          canPop: !saving,
+          child: AlertDialog(
+            key: const ValueKey('purification-import-confirm'),
+            title: const Text('规则已保存，尚未启用'),
+            scrollable: true,
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('来源：$source'),
+                const SizedBox(height: 8),
+                Text(result.message),
+                const SizedBox(height: 12),
+                Text(
+                  '是否启用本次新增的全部 ${result.enableableRuleIds.length} 条兼容规则？请确认信任此来源。',
+                ),
+                if (!ReaderPurificationStore.shared.enabled) ...[
+                  const SizedBox(height: 8),
+                  const Text('正文净化总开关关闭，启用规则后仍需手动打开总开关。'),
+                ],
+                if (saveError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    saveError!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                key: const ValueKey('purification-import-save-only'),
+                onPressed: saving
+                    ? null
+                    : () => Navigator.of(dialogContext).pop(),
+                child: const Text('仅保存'),
+              ),
+              TextButton(
+                key: const ValueKey('purification-import-enable-batch'),
+                onPressed: saving
+                    ? null
+                    : () async {
+                        if (saving) return;
+                        updateDialog(() {
+                          saving = true;
+                          saveError = null;
+                        });
+                        try {
+                          final count = await ReaderPurificationStore.shared
+                              .enableImportedRules(result.enableableRuleIds);
+                          if (dialogContext.mounted) {
+                            Navigator.of(dialogContext).pop(count);
+                          }
+                        } catch (_) {
+                          if (!dialogContext.mounted) return;
+                          updateDialog(() {
+                            saving = false;
+                            saveError = '启用保存失败，规则仍未启用，请重试';
+                          });
+                        }
+                      },
+                child: Text(
+                  saving
+                      ? '正在保存…'
+                      : '启用本次 ${result.enableableRuleIds.length} 条',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _submitUrlField() {
@@ -1732,6 +1911,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                               : (_) => _submitUrlField(),
                         ),
                         const SizedBox(height: 6),
+                        const Text('导入后保存到本机，确认后启用'),
                         Row(
                           children: [
                             Expanded(
@@ -1789,9 +1969,7 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
                               ),
                               compact: true,
                               onPressed: _importing ? null : _submitUrlField,
-                              child: Text(
-                                _importing ? '正在下载并导入…' : '导入并使用',
-                              ),
+                              child: Text(_importing ? '正在下载并导入…' : '导入规则'),
                             ),
                           ],
                         ),
