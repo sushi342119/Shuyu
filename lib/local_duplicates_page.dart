@@ -51,7 +51,16 @@ class _LocalDuplicatesPageState extends State<LocalDuplicatesPage> {
     });
     try {
       final report = await compute(findLocalDuplicates, widget.local.books);
-      if (mounted) setState(() => _report = report);
+      if (mounted) {
+        setState(() {
+          _report = report;
+          if (report.content.isEmpty && report.title.isNotEmpty) {
+            _kind = LocalDuplicateKind.title;
+          } else if (report.title.isEmpty && report.content.isNotEmpty) {
+            _kind = LocalDuplicateKind.content;
+          }
+        });
+      }
     } catch (_) {
       if (mounted) setState(() => _error = '查重失败，请重试');
     }
@@ -228,112 +237,164 @@ class _LocalDuplicatesPageState extends State<LocalDuplicatesPage> {
                 : _refresh,
           ),
         ],
-        child: _report == null
-            ? Center(
-                child: _error == null
-                    ? const CircularProgressIndicator()
-                    : TextButton(onPressed: _refresh, child: Text(_error!)),
-              )
-            : Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 8,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Wrap(
-                          spacing: 8,
-                          children: [
-                            for (final kind in LocalDuplicateKind.values)
-                              ChoiceChip(
-                                label: Text(
-                                  kind == LocalDuplicateKind.content
-                                      ? '内容相同（${_report!.content.length} 组）'
-                                      : '疑似同名（${_report!.title.length} 组）',
+        child: Padding(
+          key: const ValueKey('duplicate-page-content'),
+          padding: EdgeInsets.only(
+            top:
+                MediaQuery.paddingOf(context).top +
+                FrostedHeader.toolbarHeight +
+                12,
+          ),
+          child: _report == null
+              ? Center(
+                  child: _error == null
+                      ? const CircularProgressIndicator()
+                      : TextButton(onPressed: _refresh, child: Text(_error!)),
+                )
+              : Column(
+                  children: [
+                    Expanded(
+                      child: CustomScrollView(
+                        key: const ValueKey('duplicate-results-scroll'),
+                        slivers: [
+                          SliverToBoxAdapter(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 8,
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Text('已检查 ${widget.local.books.length} 本小说'),
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    key: const ValueKey('duplicate-filters'),
+                                    spacing: 8,
+                                    children: [
+                                      for (final kind
+                                          in LocalDuplicateKind.values)
+                                        ChoiceChip(
+                                          label: Text(
+                                            kind == LocalDuplicateKind.content
+                                                ? '内容相同（${_report!.content.length} 组）'
+                                                : '疑似同名（${_report!.title.length} 组）',
+                                          ),
+                                          selected: _kind == kind,
+                                          onSelected: _busy
+                                              ? null
+                                              : (_) => setState(() {
+                                                  _kind = kind;
+                                                  _selected.clear();
+                                                }),
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    _kind == LocalDuplicateKind.content
+                                        ? '按最近扫描的源文件或正文指纹匹配。文件有变动时，请先回本地书库扫描。'
+                                        : '按书名、作者后缀和末尾编号查找疑似重复；可能包含不同版本，请逐本核对。',
+                                  ),
+                                  if (withoutFingerprint > 0)
+                                    Text(
+                                      '$withoutFingerprint 本缺少内容指纹，仅参与同名检测；旧 TXT / EPUB 可先重新扫描。',
+                                    ),
+                                  Wrap(
+                                    spacing: 12,
+                                    children: [
+                                      if (_kind == LocalDuplicateKind.content)
+                                        TextButton(
+                                          onPressed: _busy || groups.isEmpty
+                                              ? null
+                                              : _selectCopies,
+                                          child: const Text('每组保留一本，选择其余副本'),
+                                        ),
+                                      TextButton(
+                                        onPressed: _busy || _selected.isEmpty
+                                            ? null
+                                            : () => setState(_selected.clear),
+                                        child: const Text('取消选择'),
+                                      ),
+                                    ],
+                                  ),
+                                  if (_busy && _total > 0) ...[
+                                    LinearProgressIndicator(
+                                      value: _processed / _total,
+                                    ),
+                                    Text('正在处理 $_processed / $_total，请勿关闭应用'),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                          if (groups.isEmpty)
+                            SliverFillRemaining(
+                              hasScrollBody: false,
+                              child: Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(20),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        _kind == LocalDuplicateKind.content
+                                            ? '没有找到内容完全相同的小说'
+                                            : '没有找到疑似同名小说',
+                                      ),
+                                      if (_kind == LocalDuplicateKind.content &&
+                                          _report!.title.isNotEmpty)
+                                        TextButton(
+                                          onPressed: _busy
+                                              ? null
+                                              : () => setState(() {
+                                                  _kind =
+                                                      LocalDuplicateKind.title;
+                                                  _selected.clear();
+                                                }),
+                                          child: Text(
+                                            '查看 ${_report!.title.length} 组疑似重复',
+                                          ),
+                                        ),
+                                    ],
+                                  ),
                                 ),
-                                selected: _kind == kind,
-                                onSelected: _busy
-                                    ? null
-                                    : (_) => setState(() {
-                                        _kind = kind;
-                                        _selected.clear();
-                                      }),
                               ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _kind == LocalDuplicateKind.content
-                              ? '按最近扫描的源文件或正文指纹匹配。文件有变动时，请先回本地书库扫描。'
-                              : '书名相近不代表内容相同，可能是不同版本或同名作品，请逐本核对。',
-                        ),
-                        if (withoutFingerprint > 0)
-                          Text(
-                            '$withoutFingerprint 本缺少内容指纹，仅参与同名检测；旧 TXT / EPUB 可先重新扫描。',
-                          ),
-                        Wrap(
-                          spacing: 12,
-                          children: [
-                            if (_kind == LocalDuplicateKind.content)
-                              TextButton(
-                                onPressed: _busy || groups.isEmpty
-                                    ? null
-                                    : _selectCopies,
-                                child: const Text('每组保留一本，选择其余副本'),
+                            )
+                          else
+                            SliverPadding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
                               ),
-                            TextButton(
-                              onPressed: _busy || _selected.isEmpty
-                                  ? null
-                                  : () => setState(_selected.clear),
-                              child: const Text('取消选择'),
+                              sliver: SliverList.builder(
+                                itemCount: groups.length,
+                                itemBuilder: (context, index) =>
+                                    _groupCard(groups[index]),
+                              ),
                             ),
-                          ],
-                        ),
-                        if (_busy && _total > 0) ...[
-                          LinearProgressIndicator(value: _processed / _total),
-                          Text('正在处理 $_processed / $_total，请勿关闭应用'),
                         ],
-                      ],
+                      ),
                     ),
-                  ),
-                  Expanded(
-                    child: groups.isEmpty
-                        ? Center(
+                    SafeArea(
+                      top: false,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: FilledButton(
+                            onPressed: _busy || _selected.isEmpty
+                                ? null
+                                : _deleteSelected,
                             child: Text(
-                              _kind == LocalDuplicateKind.content
-                                  ? '没有找到内容相同的小说'
-                                  : '没有找到疑似同名小说',
+                              '删除选中 ${_selected.length} 本 · 文件共 ${formatLocalSize(selectedBytes)}',
                             ),
-                          )
-                        : ListView.builder(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            itemCount: groups.length,
-                            itemBuilder: (context, index) =>
-                                _groupCard(groups[index]),
-                          ),
-                  ),
-                  SafeArea(
-                    top: false,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: FilledButton(
-                          onPressed: _busy || _selected.isEmpty
-                              ? null
-                              : _deleteSelected,
-                          child: Text(
-                            '删除选中 ${_selected.length} 本 · 文件共 ${formatLocalSize(selectedBytes)}',
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                ),
+        ),
       ),
     );
   }

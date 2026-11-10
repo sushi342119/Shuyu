@@ -15,13 +15,13 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.9.8',
+  defaultValue: '1.9.9',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 82);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 83);
 const currentReleaseNotes = '''
-1. 新增「本地书库 → 重复小说清理」：按源文件或正文指纹查找内容相同的小说，并单独列出疑似同名作品，支持核对文件位置、字数、阅读进度与书签批注数量。
-2. 内容重复分组支持一键选择多余副本，优先建议保留有阅读进度、最近读过的版本；疑似同名作品需逐本手动选择，每组至少保留一本。
-3. 批量删除需要两次确认，删除前再次校验源文件与保留副本；文件变化、保留副本失效或多个记录指向同一源文件时跳过，并逐本报告失败。被删副本的进度、书签及标签不会自动合并。
+1. 修复重复小说漏检：扩展疑似同名匹配，支持书名后附作者名、作者标记、裸数字与括号编号，并结合原始文件名查找候选；明确分卷、番外及版本标记不直接归一，所有名称推测仅列为疑似重复，需人工核对。
+2. 修复重复清理页内容被顶栏遮挡的问题，补齐状态栏与导航栏留白，让筛选和结果一起滚动，适配窄屏、横屏及大字体。
+3. 没有内容完全相同的结果、但存在疑似重复时自动显示疑似列表，新增已检查书籍数量，并提供空结果切换入口。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
