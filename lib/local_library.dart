@@ -2739,6 +2739,65 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   Future<void> deleteBookFile(int id) => _synchronized(() async {
     final book = bookFor(id);
     if (book == null) return;
+    await _deleteBookFileUnlocked(book);
+  });
+
+  /// Duplicate cleanup uses the reviewed snapshots and rechecks source bytes
+  /// while holding the same mutation lock as scanning/importing/renaming.
+  /// No fallback to record-only removal: a failure must not be called deleted.
+  Future<void> deleteDuplicateBookFile(
+    LocalBook expected, {
+    required LocalBook keeper,
+  }) => _synchronized(() async {
+    if (expected.id == keeper.id ||
+        !identical(bookFor(expected.id), expected) ||
+        !identical(bookFor(keeper.id), keeper)) {
+      throw StateError('书库已变化，请重新查重后再删除');
+    }
+    if (expected.sourceFingerprint.isEmpty ||
+        keeper.sourceFingerprint.isEmpty) {
+      throw StateError('缺少源文件指纹，请先扫描文件夹后再清理');
+    }
+    final source = await _duplicateSourceIdentity(expected);
+    for (final other in _books) {
+      if (other.id != expected.id &&
+          await _duplicateSourceIdentity(other) == source) {
+        throw StateError('多个记录指向同一源文件，已跳过以保护保留的书籍');
+      }
+    }
+    // Also verify the retained source is accessible and unchanged. Otherwise
+    // an externally deleted/modified keeper could leave no valid copy.
+    for (final book in [keeper, expected]) {
+      final actual = book.fileUri.startsWith('content:')
+          ? await LocalPlatform.fingerprintLocalText(book.fileUri)
+          : await _textWorker.fingerprint(_sourceFile(book).path);
+      if (actual != book.sourceFingerprint) {
+        throw StateError('源文件已变化，请重新扫描后再清理');
+      }
+    }
+    await _deleteBookFileUnlocked(expected);
+  });
+
+  Future<String> _duplicateSourceIdentity(LocalBook book) async {
+    final locator = book.sourceKey.isNotEmpty ? book.sourceKey : book.fileUri;
+    final uri = Uri.tryParse(locator);
+    if (uri?.scheme == 'content') {
+      final segments = uri!.pathSegments;
+      final document = segments.lastIndexOf('document');
+      if (document >= 0 && document + 1 < segments.length) {
+        return 'content:${uri.authority}:${segments[document + 1]}';
+      }
+      return locator;
+    }
+    final file = _sourceFile(book);
+    try {
+      return await file.resolveSymbolicLinks();
+    } on FileSystemException {
+      return file.absolute.uri.normalizePath().toFilePath();
+    }
+  }
+
+  Future<void> _deleteBookFileUnlocked(LocalBook book) async {
     await _queueDataCleanup([book], clearStash: true);
     if (book.fileUri.startsWith('content:')) {
       await LocalPlatform.deleteLocalDocument(book.fileUri);
@@ -2763,7 +2822,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     } catch (_) {
       throw const BookCleanupFailed('书籍关联记录尚未清理完成');
     }
-  });
+  }
 
   /// 仅移出书库：删除内部副本与书籍记录，源文件保留在手机存储中。
   /// 记录加入忽略名单，后续扫描不会把同一源文件重新导入（扫描侧另有对账，
