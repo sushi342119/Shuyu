@@ -15,13 +15,12 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.9.9',
+  defaultValue: '1.9.10',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 83);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 84);
 const currentReleaseNotes = '''
-1. 修复重复小说漏检：扩展疑似同名匹配，支持书名后附作者名、作者标记、裸数字与括号编号，并结合原始文件名查找候选；明确分卷、番外及版本标记不直接归一，所有名称推测仅列为疑似重复，需人工核对。
-2. 修复重复清理页内容被顶栏遮挡的问题，补齐状态栏与导航栏留白，让筛选和结果一起滚动，适配窄屏、横屏及大字体。
-3. 没有内容完全相同的结果、但存在疑似重复时自动显示疑似列表，新增已检查书籍数量，并提供空结果切换入口。
+1. 修复设置页、功能菜单与正文替换等界面中 `CupertinoIcons` 图标显示为缺字方框（叉号）的问题：恢复 `cupertino_icons` 字体资源依赖，确保未经过自绘矢量映射的普通 `Icon(CupertinoIcons.*)` 正常渲染。
+2. 新增图标字体资源清单与设置图标像素级渲染回归测试，防止字体资源缺失再次导致图标回退为缺字符号。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
