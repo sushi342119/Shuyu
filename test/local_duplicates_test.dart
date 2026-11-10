@@ -5,6 +5,8 @@ import 'package:shuyu/local_library.dart';
 LocalBook book(
   int id, {
   String title = '小说',
+  String author = '',
+  String? filename,
   String source = '',
   String text = '',
   int size = 100,
@@ -13,9 +15,9 @@ LocalBook book(
 }) => LocalBook(
   id: localNovelIdBase + id,
   title: title,
-  author: '',
+  author: author,
   fileUri: '/books/$id.txt',
-  fileName: '$id.txt',
+  fileName: filename ?? '$id.txt',
   kind: kind,
   size: size,
   modified: 1,
@@ -96,6 +98,91 @@ void main() {
     );
     final same = book(1, source: 'same');
     expect(findLocalDuplicates([same, same]).content, isEmpty);
+  });
+
+  for (final variant in [
+    '长风集张三',
+    '长风集我吃西红柿',
+    '长风集1',
+    '长风集 1',
+    '长风集_1',
+    '长风集１',
+    '长风集（1）',
+    '长风集[1]',
+    '长风集 张三',
+    '长风集 - 张三',
+    '长风集_张三',
+    '长风集（张三）',
+    '长风集 作者：张三',
+    '长风集作者张三',
+    '长风集 by Zhang',
+    '《长风集》张三',
+    '长风集1 张三',
+    '长风集 张三 (1)',
+    '长风集 副本 (1)',
+  ]) {
+    test('flags author/copy suffix as suspected: $variant', () {
+      final report = findLocalDuplicates([
+        book(1, title: '长风集', source: 'a'),
+        book(2, title: variant, source: 'b'),
+      ]);
+      expect(report.content, isEmpty);
+      expect(report.title.single.books, hasLength(2));
+    });
+  }
+
+  test('known author matches an unseparated suffix on another record', () {
+    final report = findLocalDuplicates([
+      book(1, title: '长风集', author: '张三'),
+      book(2, title: '长风集张三'),
+    ]);
+    expect(report.title.single.books, hasLength(2));
+  });
+
+  test(
+    'uses original filename alongside embedded metadata and ignores filename tags',
+    () {
+      final report = findLocalDuplicates([
+        book(1, title: '长风集'),
+        book(2, title: '某网站下载版', filename: '长风集1 - 张三 ✦收藏.EPUB'),
+      ]);
+      expect(report.title.single.books, hasLength(2));
+    },
+  );
+
+  test('does not merge numbered volumes without an unnumbered counterpart', () {
+    final report = findLocalDuplicates([
+      book(1, title: '长风集1'),
+      book(2, title: '长风集2'),
+      book(3, title: '长风集 - 第一卷'),
+      book(4, title: '长风集 - 第二卷'),
+      book(5, title: '长风集 番外'),
+      book(6, title: '长风集 外传'),
+    ]);
+    expect(report.title, isEmpty);
+  });
+
+  test(
+    'keeps explicit volume/edition markers separate from the bare title',
+    () {
+      final report = findLocalDuplicates([
+        book(1, title: '长风集'),
+        book(2, title: '长风集 - 第二卷'),
+        book(3, title: '《长风集》番外'),
+        book(4, title: '长风集 修订版'),
+      ]);
+      expect(report.title, isEmpty);
+    },
+  );
+
+  test('generic numbered filenames do not group different metadata titles', () {
+    expect(
+      findLocalDuplicates([
+        book(1, title: '长风集', filename: '1.txt'),
+        book(2, title: '孤岛', filename: '1.txt'),
+      ]).title,
+      isEmpty,
+    );
   });
 
   test(

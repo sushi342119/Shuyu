@@ -74,7 +74,11 @@ void main() {
         home: LocalDuplicatesPage(local: store, state: state),
       ),
     );
-    await pumpUntil(tester, () => find.text('内容相同（1 组）').evaluate().isNotEmpty);
+    await pumpUntil(
+      tester,
+      () =>
+          find.byKey(const ValueKey('duplicate-filters')).evaluate().isNotEmpty,
+    );
     await tester.pumpAndSettle();
   }
 
@@ -176,4 +180,97 @@ void main() {
     );
     expect(store.deleted, isEmpty);
   });
+  testWidgets(
+    'opens suspected matches when exact hashes differ and keeps filters below header',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(349, 768);
+      addTearDown(tester.view.reset);
+      store.items
+        ..clear()
+        ..addAll([
+          _book(1, 'a').copyWith(title: '长风集'),
+          _book(2, 'b').copyWith(title: '长风集 张三'),
+          _book(3, 'c').copyWith(title: '长风集1'),
+        ]);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: novelTheme(Brightness.light),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              padding: const EdgeInsets.only(top: 24, bottom: 16),
+              textScaler: TextScaler.linear(1.2),
+            ),
+            child: child!,
+          ),
+          home: LocalDuplicatesPage(local: store, state: state),
+        ),
+      );
+      await pumpUntil(
+        tester,
+        () => find
+            .byKey(const ValueKey('duplicate-filters'))
+            .evaluate()
+            .isNotEmpty,
+      );
+      await tester.pumpAndSettle();
+      final filters = tester.getRect(
+        find.byKey(const ValueKey('duplicate-filters')),
+      );
+      expect(
+        filters.top,
+        greaterThanOrEqualTo(24 + FrostedHeader.toolbarHeight),
+      );
+      final suspected = find.widgetWithText(ChoiceChip, '疑似同名（1 组）');
+      expect(tester.widget<ChoiceChip>(suspected).selected, isTrue);
+      expect(
+        tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
+        isNull,
+      );
+      expect(find.text('每组保留一本，选择其余副本'), findsNothing);
+      await tester.drag(
+        find.byKey(const ValueKey('duplicate-results-scroll')),
+        const Offset(0, -250),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('长风集'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'controls scroll without overflow with large text in short landscape window',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(780, 260);
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: novelTheme(Brightness.light),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: LocalDuplicatesPage(local: store, state: state),
+        ),
+      );
+      await pumpUntil(
+        tester,
+        () => find
+            .byKey(const ValueKey('duplicate-filters'))
+            .evaluate()
+            .isNotEmpty,
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.drag(
+        find.byKey(const ValueKey('duplicate-results-scroll')),
+        const Offset(0, -300),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
