@@ -15,13 +15,13 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.9.6',
+  defaultValue: '1.9.7',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 80);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 81);
 const currentReleaseNotes = '''
-1. 重新设计「正文替换与净化规则」面板：将净化总开关与实时启用计数整合至顶栏，将「新增规则」「链接导入」「剪贴板导入」「导出口令」「段落纠错」收敛为单行等宽工具栏，展开面板支持互斥收折。
-2. 优化净化规则列表与筛选检索：新增「全部 / 本章已命中 / 已启用 / 内置预设 / 自定义与导入」分类筛选与关键词搜索框，升级规则来源圆角胶囊与单行自适应规则卡片排版，解决长标题标签折行截断问题。
-3. 修复伪装为 `.epub` 后缀的 MOBI 与纯文本文件分章版本号不一致、导致二次打开重复触发重分章的问题。
+1. 局域网 Wi-Fi 传书安全加固：每次启动生成 6 位随机访问码（支持扫码/链接携带或手动输入），移除通配符跨域头（`Access-Control-Allow-Origin: *`），并将上传改为流式分块落盘、拒绝超限请求。
+2. 备份与网络传输安全升级：WebDAV 备份密码迁移至 Android Keystore 加密存储并清理旧明文记录；WebDAV 备份与外部净化规则链接默认强制 HTTPS（提供显式允许 HTTP 开关）；外部导入净化规则默认停用，正则匹配增加超时熔断保护，禁用系统云自动备份以防本地书库外泄。
+3. 备份恢复与精简重构：修复跨设备/重扫后恢复备份时本地书籍阅读进度、书签、划线与标签按书名和作者自动重映射的问题，并将备份上限提升至 32 MiB；合并字体存储、WebDAV 传输层与 HTTP 流式下载器，移除冗余依赖。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
