@@ -130,6 +130,13 @@ String _mobiHtmlToText(String rawMarkup) {
       )
       .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
       .replaceAll(
+        RegExp(
+          r'<(?:p|div|h[1-6]|li|tr|blockquote|section|article)\b[^>]*>',
+          caseSensitive: false,
+        ),
+        '\n\n',
+      )
+      .replaceAll(
         RegExp(r'</(p|div|h[1-6]|li|tr|blockquote|section|article)>',
             caseSensitive: false),
         '\n\n',

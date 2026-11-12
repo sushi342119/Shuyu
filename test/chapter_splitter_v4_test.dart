@@ -299,4 +299,98 @@ void main() {
       _checkCoordinates(text, expected);
     },
   );
+
+  test(
+    'mid-line and end-of-line glued strong headings split cleanly without breaking dialogue',
+    () {
+      const text =
+          '第一章 开端\n'
+          '前文结束，他说“第二章写得真好”随后合上书卷缓步离开。第二章 夜雨　　'
+          '夜雨淅沥落下，打湿了长街尽头的青石板路！”第三章 破晓\n'
+          '东方天色微亮，晨风吹散了整夜未歇的浓雾……第四章 远行\n'
+          '旅途继续向前延伸，远山在朝阳下格外清晰。\n';
+      final expected = splitLocalChapters(text);
+      expect(expected.map((c) => c.title), [
+        '第一章 开端',
+        '第二章 夜雨',
+        '第三章 破晓',
+        '第四章 远行',
+      ]);
+      expect(_bodyOf(text, expected[0]), '前文结束，他说“第二章写得真好”随后合上书卷缓步离开。');
+      expect(_bodyOf(text, expected[1]).trim(), '夜雨淅沥落下，打湿了长街尽头的青石板路！”');
+      expect(_bodyOf(text, expected[2]), '东方天色微亮，晨风吹散了整夜未歇的浓雾……');
+      expect(_bodyOf(text, expected[3]), '旅途继续向前延伸，远山在朝阳下格外清晰。\n');
+      _checkCoordinates(text, expected);
+      for (final size in [1, 2, 3, 7, 64]) {
+        final index = ChapterTextIndex();
+        for (var offset = 0; offset < text.length; offset += size) {
+          index.add(
+            text.substring(offset, (offset + size).clamp(0, text.length)),
+          );
+        }
+        expect(
+          index.finish().map((c) => c.toJson()),
+          expected.map((c) => c.toJson()),
+          reason: 'chunk=$size',
+        );
+      }
+    },
+  );
+
+  test(
+    'split-volume markers, middle-dot specials, combined volume headings and single strong chapters work',
+    () {
+      const splitVolumeText = '分卷阅读1\n$_body\n分卷阅读 2\n$_body\n分节阅读3\n$_body\n';
+      final splitVolumeChapters = splitLocalChapters(splitVolumeText);
+      expect(splitVolumeChapters.map((c) => c.title), [
+        '分卷阅读1',
+        '分卷阅读 2',
+        '分节阅读3',
+      ]);
+      _checkCoordinates(splitVolumeText, splitVolumeChapters);
+
+      const specialDotText =
+          '楔子·风起\n$_body\n第一章 启程\n$_body\n番外·故人归\n$_body\n尾声・灯火\n$_body\n';
+      final specialDotChapters = splitLocalChapters(specialDotText);
+      expect(specialDotChapters.map((c) => c.title), [
+        '楔子·风起',
+        '第一章 启程',
+        '番外·故人归',
+        '尾声・灯火',
+      ]);
+      _checkCoordinates(specialDotText, specialDotChapters);
+
+      const combinedVolText =
+          '第一卷 风起 第一章 初见\n$_body\n第二章 同行\n$_body\n第二卷 云涌 第三章 转折\n$_body\n';
+      final combinedVolChapters = splitLocalChapters(combinedVolText);
+      expect(combinedVolChapters.map((c) => c.title), [
+        '第一卷 风起 第一章 初见',
+        '第二章 同行',
+        '第二卷 云涌 第三章 转折',
+      ]);
+      expect(combinedVolChapters.map((c) => c.volume), [
+        '第一卷 风起',
+        '第一卷 风起',
+        '第二卷 云涌',
+      ]);
+      _checkCoordinates(combinedVolText, combinedVolChapters);
+
+      const singleStrongText = '第一章 独篇故事\n$_body\n';
+      final singleStrong = splitLocalChapters(singleStrongText);
+      expect(singleStrong.single.title, '第一章 独篇故事');
+      _checkCoordinates(singleStrongText, singleStrong);
+
+      const unmarkedTocText =
+          '第一章 起点\n第二章 夜雨\n第三章 晨光\n'
+          '第一章 起点\n$_body\n第二章 夜雨\n$_body\n第三章 晨光\n$_body\n';
+      final unmarkedToc = splitLocalChapters(unmarkedTocText);
+      expect(unmarkedToc.map((c) => c.title), [
+        '前言',
+        '第一章 起点',
+        '第二章 夜雨',
+        '第三章 晨光',
+      ]);
+      _checkCoordinates(unmarkedTocText, unmarkedToc);
+    },
+  );
 }

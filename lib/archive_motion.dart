@@ -312,7 +312,7 @@ class ArchivePlaneRender extends _ArchiveAnimatedRender {
       -4 * progress,
     ),
     ArchivePlaneKind.sheet => Offset(
-      -18 * (1 - progress),
+      -3 * (1 - progress),
       (size.height + _bottomClearance) * (1 - progress),
     ),
   };

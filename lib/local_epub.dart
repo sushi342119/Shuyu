@@ -619,6 +619,7 @@ class EpubPackage {
       spineHrefs.addAll(nonLinearSpineHrefs);
     }
     if (spineHrefs.isEmpty && lenient && !opfText.contains('>test-uid<')) {
+      final manifestFallbackHrefs = <String>[];
       for (final item in manifestOrder) {
         if (item.properties.contains('nav') ||
             item.mediaType == 'application/x-dtbncx+xml') {
@@ -633,10 +634,12 @@ class EpubPackage {
         );
         if (href != null &&
             !_rasterImageEntryPattern.hasMatch(href) &&
-            !spineHrefs.contains(href)) {
-          spineHrefs.add(href);
+            !manifestFallbackHrefs.contains(href)) {
+          manifestFallbackHrefs.add(href);
         }
       }
+      manifestFallbackHrefs.sort(_naturalPathCompare);
+      spineHrefs.addAll(manifestFallbackHrefs);
       if (spineHrefs.isEmpty) {
         spineHrefs.addAll(_discoverFallbackChapterEntries(entries));
       }
@@ -807,7 +810,7 @@ class EpubPackage {
           textSpineCount <= 3 ||
           (textSpineCount <= 12 && entrySize >= 512) ||
           (textSpineCount <= 40 && entrySize >= 4 * 1024) ||
-          entrySize >= 24 * 1024 ||
+          entrySize >= 8 * 1024 ||
           (medianSpineSize > 0 &&
               entrySize >= medianSpineSize * 3 &&
               entrySize >= 6 * 1024);
@@ -1384,11 +1387,16 @@ int _naturalPathCompare(String a, String b) {
     final aDigits = aMatches[i].group(1);
     final bDigits = bMatches[i].group(1);
     if (aDigits != null && bDigits != null) {
+      final aNorm = aDigits.replaceFirst(RegExp(r'^0+(?=\d)'), '');
+      final bNorm = bDigits.replaceFirst(RegExp(r'^0+(?=\d)'), '');
+      if (aNorm.length != bNorm.length) {
+        return aNorm.length.compareTo(bNorm.length);
+      }
+      final cmp = aNorm.compareTo(bNorm);
+      if (cmp != 0) return cmp;
       if (aDigits.length != bDigits.length) {
         return aDigits.length.compareTo(bDigits.length);
       }
-      final cmp = aDigits.compareTo(bDigits);
-      if (cmp != 0) return cmp;
     } else {
       final cmp = aMatches[i].group(0)!.compareTo(bMatches[i].group(0)!);
       if (cmp != 0) return cmp;
@@ -1441,7 +1449,7 @@ Future<EpubPackage> _parseArchiveWithoutOpf(
     final source = await _decodeText(_extract(file));
     final parsed = _extractDocument(href, source, entries);
     if (parsed.blocks.isEmpty) continue;
-    final split = fallbackHrefs.length <= 3
+    final split = (fallbackHrefs.length <= 3 || file.size >= 4 * 1024)
         ? _splitBlocksByHeadings(href, parsed.blocks)
         : null;
     if (split != null && split.length >= 2) {
@@ -1869,28 +1877,48 @@ List<_TocEntry> _parseNcxEntries(
 ) {
   final doc = _parseXml(source);
   final points = _elements(doc, 'navpoint').toList();
-  final order = <XmlElement, int>{};
-  for (var i = 0; i < points.length; i++) {
-    order[points[i]] = i;
+  final parsedPlayOrders = <XmlElement, int>{};
+  final seenPlayOrders = <int>{};
+  var validUniquePlayOrder = points.isNotEmpty;
+  for (final p in points) {
+    final value = int.tryParse((_attr(p, 'playOrder') ?? '').trim());
+    if (value == null || value <= 0 || !seenPlayOrders.add(value)) {
+      validUniquePlayOrder = false;
+      break;
+    }
+    parsedPlayOrders[p] = value;
   }
-  int playOrder(XmlElement e) =>
-      int.tryParse((_attr(e, 'playOrder') ?? '').trim()) ?? 1 << 30;
-  points.sort((a, b) {
-    final c = playOrder(a).compareTo(playOrder(b));
-    return c != 0 ? c : order[a]!.compareTo(order[b]!);
-  });
+  if (validUniquePlayOrder) {
+    points.sort(
+      (a, b) => parsedPlayOrders[a]!.compareTo(parsedPlayOrders[b]!),
+    );
+  }
 
   final result = <_TocEntry>[];
   for (final point in points) {
     XmlElement? label;
     XmlElement? content;
+    final childPoints = <XmlElement>[];
     for (final child in point.childElements) {
       final name = child.name.local.toLowerCase();
       if (name == 'navlabel') label ??= child;
       if (name == 'content') content ??= child;
+      if (name == 'navpoint') childPoints.add(child);
     }
     final src = content == null ? null : _attr(content, 'src');
     if (label == null || src == null) continue;
+    if (childPoints.isNotEmpty) {
+      final trimmedSrc = src.trim();
+      final sharesChildSrc = childPoints.any((cp) {
+        for (final gc in cp.childElements) {
+          if (gc.name.local.toLowerCase() == 'content') {
+            return (_attr(gc, 'src') ?? '').trim() == trimmedSrc;
+          }
+        }
+        return false;
+      });
+      if (sharesChildSrc) continue;
+    }
     final text = (_firstText(label, 'text') ?? '').trim();
     if (text.isEmpty) continue;
 
@@ -1972,8 +2000,14 @@ List<_SplitEpubChapter>? _splitBlocksByToc(
   List<_TocEntry> tocEntries,
 ) {
   if (doc.blocks.isEmpty || tocEntries.length < 2) return null;
-  final resolved = <({int startBlock, String title, String? fragment})>[];
-  for (final entry in tocEntries) {
+  final rawResolved = <({
+    int startBlock,
+    int order,
+    String title,
+    String? fragment,
+  })>[];
+  for (var idx = 0; idx < tocEntries.length; idx++) {
+    final entry = tocEntries[idx];
     int? startBlock;
     if (entry.fragment == null || entry.fragment!.isEmpty) {
       startBlock = 0;
@@ -1983,19 +2017,33 @@ List<_SplitEpubChapter>? _splitBlocksByToc(
     if (startBlock == null || startBlock < 0 || startBlock >= doc.blocks.length) {
       continue;
     }
-    if (resolved.isEmpty || startBlock > resolved.last.startBlock) {
+    rawResolved.add((
+      startBlock: startBlock,
+      order: idx,
+      title: entry.title,
+      fragment: entry.fragment,
+    ));
+  }
+  if (rawResolved.length < 2) return null;
+  rawResolved.sort((a, b) {
+    final cmp = a.startBlock.compareTo(b.startBlock);
+    return cmp != 0 ? cmp : a.order.compareTo(b.order);
+  });
+  final resolved = <({int startBlock, String title, String? fragment})>[];
+  for (final item in rawResolved) {
+    if (resolved.isEmpty || item.startBlock > resolved.last.startBlock) {
       resolved.add((
-        startBlock: startBlock,
-        title: entry.title,
-        fragment: entry.fragment,
+        startBlock: item.startBlock,
+        title: item.title,
+        fragment: item.fragment,
       ));
-    } else if (startBlock == resolved.last.startBlock &&
+    } else if (item.startBlock == resolved.last.startBlock &&
         resolved.last.fragment == null &&
-        entry.fragment != null) {
+        item.fragment != null) {
       resolved[resolved.length - 1] = (
-        startBlock: startBlock,
-        title: entry.title,
-        fragment: entry.fragment,
+        startBlock: item.startBlock,
+        title: item.title,
+        fragment: item.fragment,
       );
     }
   }

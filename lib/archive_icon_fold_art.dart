@@ -8,22 +8,22 @@ _Art _foldDrawing(_IconPose pose, ArchiveIconGesture gesture) {
   final active = pose.active.clamp(0.0, 1.0), v = pose.variant;
   switch (pose.symbol) {
     case ArchiveSymbol.discover:
-      a.card(3.6, 3.1, 16.8, 17.8, fold: 3.6, shade: .09 + active * .10);
-      a.rotate(p * .80, () {
-        a.poly([15.9, 7.8, 13.6, 13.6, 7.5, 16.7, 10.5, 10.5], close: true);
+      a.circle(12, 12, 8.6, fill: true, opacity: .07 + active * .11);
+      a.circle(12, 12, 8.6);
+      a.rotate(p * .55, () {
+        a.poly([15.8, 8.2, 13.5, 13.5, 8.2, 15.8, 10.5, 10.5], close: true);
         a.poly(
-          [15.9, 7.8, 13.6, 13.6, 10.5, 10.5],
+          [15.8, 8.2, 13.5, 13.5, 10.5, 10.5],
           close: true,
           fill: true,
-          opacity: .65,
+          opacity: .72,
         );
       });
-      a.mark(6.6, 17.8, 1.15);
     case ArchiveSymbol.shelf:
       a.poly([2.5, 19.6, 2.5, 21, 21.5, 21]);
       a.move(0, -1.7 * p, () {
         a.card(3.6, 6, 4.8, 13.6, fold: 1.5, shade: .19);
-        a.mark(5.2, 9, 1.3);
+        a.line(5.2, 9.2, 6.8, 9.2);
       });
       a.move(0, -2.4 * q, () {
         a.card(10, 3.9, 4.5, 15.7, fold: 1.5, shade: .09 + active * .15);
@@ -103,50 +103,50 @@ _Art _foldDrawing(_IconPose pose, ArchiveIconGesture gesture) {
         a.line(10, 15.4, 15, 15.4);
         a.line(12.5, 12.9, 12.5, 17.9);
       } else {
-        a.mark(6.2, 16.7, 1.5);
-        a.line(9.2, 17.4, 12.5, 17.4);
+        a.line(7.2, 17.2, 12.6, 17.2);
       }
     case ArchiveSymbol.profile:
-      a.card(4, 3, 16, 18, fold: 3.5, shade: .07 + active * .12);
-      a.circle(10.9 + p * .6, 8.4 - p * 1.5, 2.35, fill: true, opacity: .17);
-      a.circle(10.9 + p * .6, 8.4 - p * 1.5, 2.35);
-      a.path((s) => s.m(6.5, 16.2).q(10.8, 10.3 - q, 15.4, 16.2));
-      a.line(7, 18.2, 12.2, 18.2);
-      a.mark(16.1, 17.4, 1.25);
+      a.circle(
+        12,
+        8.4 - p * .9,
+        3.3,
+        fill: true,
+        opacity: .11 + active * .12,
+      );
+      a.circle(12, 8.4 - p * .9, 3.3);
+      a.path(
+        (s) => s
+            .m(5.2, 19.4)
+            .c(5.8, 13.9 - .7 * q, 18.2, 13.9 - .7 * q, 18.8, 19.4),
+      );
     case ArchiveSymbol.forward:
       a.rotate(v, () {
-        a.poly([8.4 + 1.3 * q, 5.6, 15.4 + 1.5 * p, 12, 8.4 + 1.3 * q, 18.4]);
-        a.mark(5.4 + 1.2 * r, 11.4, 1.25);
+        a.poly([9.2 + 1.0 * q, 5.8, 15.4 + 1.3 * p, 12, 9.2 + 1.0 * q, 18.2]);
       });
     case ArchiveSymbol.arrowRight:
       a.rotate(v, () {
-        a.line(3.8 - .5 * r, 12, 19 + 1.5 * p, 12);
-        a.poly([13 + 1.2 * q, 5.8, 19 + 1.5 * p, 12, 13 + 1.2 * q, 18.2]);
+        a.line(4.2 - .4 * r, 12, 19 + 1.2 * p, 12);
+        a.poly([13.2 + 1.0 * q, 6.0, 19 + 1.2 * p, 12, 13.2 + 1.0 * q, 18.0]);
       });
     case ArchiveSymbol.close:
     case ArchiveSymbol.closeCircle:
       if (pose.symbol == ArchiveSymbol.closeCircle) a.ring();
       final d = pose.symbol == ArchiveSymbol.closeCircle ? 3.0 : 5.4;
-      a.rotate(p * .70, () {
+      a.rotate(p * .45, () {
         a.line(12 - d, 12 - d, 12 + d, 12 + d);
         a.line(12 + d, 12 - d, 12 - d, 12 + d);
       });
     case ArchiveSymbol.more:
       for (var i = 0; i < 3; i++) {
         final bounce = [p, q, r][i];
-        a.mark(
-          4.3 + i * 6.7,
-          11 - bounce * 3.1,
-          1.8,
-          angle: i == 1 ? math.pi / 4 : 0,
-        );
+        a.dot(5.5 + i * 6.5, 12 - bounce * 2.2, 1.35);
       }
     case ArchiveSymbol.contents:
       for (var i = 0; i < 3; i++) {
-        final x = [p, q, r][i] * 2.2;
-        final y = 5.3 + i * 6.5;
-        a.mark(3.4 + x, y, 1.8);
-        a.line(8.2 + x, y + .9, 20.3 - (i == 1 ? 3.3 : 0), y + .9);
+        final x = [p, q, r][i] * 1.6;
+        final y = 6.2 + i * 5.8;
+        a.dot(4.6 + x, y, 1.15);
+        a.line(8.2 + x, y, 20.0 - (i == 1 ? 2.8 : 0), y);
       }
     case ArchiveSymbol.bookmark:
       final top = 3.2 + 1.8 * q, bottom = 21 - 1.1 * r;
@@ -393,69 +393,85 @@ _Art _foldDrawing(_IconPose pose, ArchiveIconGesture gesture) {
     case ArchiveSymbol.headphones:
       a.path(
         (s) => s
-            .m(4.2, 14)
-            .l(4.2, 10.3)
-            .c(4.2, 1 + p * 2, 19.8, 1 + q * 2, 19.8, 10.3)
-            .l(19.8, 14),
+            .m(4.4, 14)
+            .l(4.4, 10.4)
+            .c(4.4, 1.8 + p * 1.4, 19.6, 1.8 + q * 1.4, 19.6, 10.4)
+            .l(19.6, 14),
       );
-      a.card(3.2, 12 - 1.6 * p, 4.6, 8, fold: 1.3, shade: .20);
-      a.card(16.2, 12 - 1.6 * q, 4.6, 8, fold: 1.3, shade: .20);
+      a.rect(
+        3.2,
+        12 - 1.2 * p,
+        4.4,
+        7.6,
+        radius: 1.9,
+        fill: true,
+        opacity: .16 + active * .12,
+      );
+      a.rect(3.2, 12 - 1.2 * p, 4.4, 7.6, radius: 1.9);
+      a.rect(
+        16.4,
+        12 - 1.2 * q,
+        4.4,
+        7.6,
+        radius: 1.9,
+        fill: true,
+        opacity: .16 + active * .12,
+      );
+      a.rect(16.4, 12 - 1.2 * q, 4.4, 7.6, radius: 1.9);
     case ArchiveSymbol.play:
       final t = v.clamp(0.0, 1.0);
       double mix(double x, double y) => x + (y - x) * t;
       a.path(
         (s) => s
-            .m(mix(7.2, 6.5), 4.7)
-            .l(mix(7.2, 6.5), 19.3)
-            .l(mix(12.3, 10.3) + .9 * p, mix(16.3, 18.1))
-            .l(mix(12.3, 10.3) - .7 * p, mix(7.7, 4.7))
+            .m(mix(7.0, 6.4), 4.7)
+            .l(mix(7.0, 6.4), 19.3)
+            .l(mix(13.2, 10.2) + .7 * p, mix(15.6, 19.3))
+            .l(mix(13.2, 10.2) - .5 * p, mix(8.4, 4.7))
             .z(),
         fill: true,
       );
       a.path(
         (s) => s
-            .m(mix(12.3, 14) - .7 * p, mix(7.7, 4.7))
-            .l(mix(12.3, 14) + .9 * p, mix(16.3, 19.3))
-            .l(mix(19.4, 18.2) + .7 * q, mix(12, 18.1))
-            .l(mix(19.4, 18.2) - .5 * q, mix(12, 4.7))
+            .m(mix(13.0, 13.8) - .5 * p, mix(8.3, 4.7))
+            .l(mix(13.0, 13.8) + .7 * p, mix(15.7, 19.3))
+            .l(mix(19.5, 17.6) + .6 * q, mix(12, 19.3))
+            .l(mix(19.5, 17.6) - .4 * q, mix(12, 4.7))
             .z(),
         fill: true,
-        opacity: .69,
       );
     case ArchiveSymbol.stop:
-      a.card(
-        5.3 + p * .4,
-        5.3 + q * .4,
-        13.4 - p * .8,
-        13.4 - q * .8,
-        fold: 3 + r,
-        shade: 1,
-        outline: false,
+      a.rect(
+        5.5 + p * .4,
+        5.5 + q * .4,
+        13.0 - p * .8,
+        13.0 - q * .8,
+        radius: 2.2,
+        fill: true,
       );
     case ArchiveSymbol.previous:
     case ArchiveSymbol.next:
       a.rotate(pose.symbol == ArchiveSymbol.previous ? math.pi : 0, () {
         a.poly(
-          [4.8 + 2 * p, 5.6, 4.8 + 2 * p, 18.4, 14.6 + 2 * q, 12],
+          [4.8 + 1.6 * p, 5.6, 4.8 + 1.6 * p, 18.4, 14.8 + 1.6 * q, 12],
           close: true,
           fill: true,
           opacity: .17,
         );
         a.poly([
-          4.8 + 2 * p,
+          4.8 + 1.6 * p,
           5.6,
-          4.8 + 2 * p,
+          4.8 + 1.6 * p,
           18.4,
-          14.6 + 2 * q,
+          14.8 + 1.6 * q,
           12,
         ], close: true);
-        a.line(19.5, 5, 19.5 - .5 * r, 19);
+        a.line(19.2, 5.4, 19.2 - .4 * r, 18.6);
       });
     case ArchiveSymbol.waveform:
       for (var i = 0; i < 5; i++) {
         final h =
             ([3.2, 5.8, 8.5, 5.8, 3.2][i] +
-                    [p, q, r, p, q][i] * (i.isEven ? -2.2 : 2.6))
+                    [p, q, r, p, q][i] * (i.isEven ? -2.0 : 2.2))
                 .clamp(1.2, 10.1);
         a.path(
           (s) => s.m(4 + i * 4, 12 - h).l(4 + i * 4, 12 + h),
@@ -463,17 +479,25 @@ _Art _foldDrawing(_IconPose pose, ArchiveIconGesture gesture) {
         );
       }
     case ArchiveSymbol.voice:
-      a.card(9, 3.1, 6, 11, fold: 2, shade: .15);
+      a.rect(
+        9,
+        3.2,
+        6,
+        10.8,
+        radius: 3,
+        fill: true,
+        opacity: .14 + active * .12,
+      );
+      a.rect(9, 3.2, 6, 10.8, radius: 3);
       a.path(
         (s) => s
-            .m(5.7, 10.5)
-            .l(5.7, 12 - p)
-            .c(5.7, 20 + 1.6 * q, 18.3, 20 + 1.6 * r, 18.3, 12 - p)
-            .l(18.3, 10.5),
+            .m(5.8, 10.8)
+            .l(5.8, 12 - .8 * p)
+            .c(5.8, 19.8 + 1.2 * q, 18.2, 19.8 + 1.2 * r, 18.2, 12 - .8 * p)
+            .l(18.2, 10.8),
       );
-      a.line(12, 18, 12, 21.2);
-      a.line(9, 21.2, 15, 21.2);
-      a.line(11.2, 6.2, 12.8, 6.2);
+      a.line(12, 17.9, 12, 21.0);
+      a.line(9.2, 21.0, 14.8, 21.0);
     case ArchiveSymbol.volume:
       a.poly(
         [3.2, 9.3, 7, 9.3, 12, 4.8, 12, 19.2, 7, 14.7, 3.2, 14.7],
@@ -508,37 +532,33 @@ _Art _foldDrawing(_IconPose pose, ArchiveIconGesture gesture) {
     case ArchiveSymbol.speed:
       a.arc(12, 13.2, 8.4, 8.4, math.pi * .85, math.pi * 1.3);
       a.rotate(
-        p * .85,
+        p * .75,
         () => a.poly([10.9, 13, 15.7, 6.9, 13, 14.4], close: true, fill: true),
       );
-      a.mark(11.1, 12.3, 1.8);
+      a.dot(12, 13.2, 1.2);
       a.line(8, 20.6, 16, 20.6);
       a.line(6, 7.9, 7.1, 9);
       a.line(12, 4.8, 12, 6.1);
       a.line(18, 7.9, 16.9, 9);
     case ArchiveSymbol.timer:
       a.ring();
-      a.rotate(p * .50, () {
-        a.poly([12, 6.5, 12, 12, 16.3, 14.7]);
+      a.rotate(p * .45, () {
+        a.poly([12, 6.5, 12, 12, 16.1, 14.5]);
       });
-      a.mark(11.3, 11.3, 1.4);
+      a.dot(12, 12, 1.0);
     case ArchiveSymbol.search:
-      a.move(.7 * p, -.7 * p, () {
-        a.arc(10.3, 10.3, 6.5 - .75 * q, 6.5 + .35 * q, -.65, math.pi * 1.83);
-        a.mark(13.8, 4.1, 1.3, angle: math.pi / 4);
-        a.poly(
-          [
-            14.8,
-            16,
-            16,
-            14.8,
-            21 + .5 * r,
-            19.8 + .5 * r,
-            19.8 + .5 * r,
-            21 + .5 * r,
-          ],
-          close: true,
+      a.move(.5 * p, -.5 * p, () {
+        a.circle(
+          10.5,
+          10.5,
+          6.4 - .3 * q,
           fill: true,
+          opacity: .06 + active * .10,
+        );
+        a.circle(10.5, 10.5, 6.4 - .3 * q);
+        a.path(
+          (s) => s.m(15.1, 15.1).l(20.2 + .4 * r, 20.2 + .4 * r),
+          width: 1.25,
         );
       });
     case ArchiveSymbol.filter:
@@ -546,10 +566,10 @@ _Art _foldDrawing(_IconPose pose, ArchiveIconGesture gesture) {
       // fixed rails retain a clear filter silhouette throughout the gesture.
       for (var i = 0; i < 3; i++) {
         final y = 5.5 + i * 6.5;
-        final x = [8.0 + 5 * p, 16.0 - 5 * q, 10.0 + 4 * r][i];
-        a.path((s) => s.m(3.5, y).l(x - 2.5, y), width: .82);
-        a.path((s) => s.m(x + 2.5, y).l(20.5, y), width: .82);
-        a.rect(x - 1.3, y - 2, 2.6, 4, fill: true);
+        final x = [8.0 + 4 * p, 16.0 - 4 * q, 10.0 + 3.5 * r][i];
+        a.path((s) => s.m(3.5, y).l(x - 2.5, y), width: .88);
+        a.path((s) => s.m(x + 2.5, y).l(20.5, y), width: .88);
+        a.rect(x - 1.4, y - 2, 2.8, 4, radius: .8, fill: true);
       }
     case ArchiveSymbol.layout:
       // The same three units reflow from a sidebar into a header + two cells.
@@ -557,12 +577,13 @@ _Art _foldDrawing(_IconPose pose, ArchiveIconGesture gesture) {
       final lead = p.clamp(-.12, 1.0);
       final follow = q.clamp(-.12, 1.0);
       final trail = r.clamp(-.12, 1.0);
-      a.rect(3.5, 4, 5.5 + 11.5 * lead, 16 - 10.5 * lead);
+      a.rect(3.5, 4, 5.5 + 11.5 * lead, 16 - 10.5 * lead, radius: 1.2);
       a.rect(
         3.5,
         4,
         5.5 + 11.5 * lead,
         16 - 10.5 * lead,
+        radius: 1.2,
         fill: true,
         opacity: .08 + active * .13,
       );
@@ -571,40 +592,51 @@ _Art _foldDrawing(_IconPose pose, ArchiveIconGesture gesture) {
         4 + 8.5 * follow,
         8.5 - 1.5 * follow,
         6.5 + follow,
+        radius: 1.2,
       );
-      a.rect(12 + 1.5 * trail, 13.5 - trail, 8.5 - 1.5 * trail, 6.5 + trail);
+      a.rect(
+        12 + 1.5 * trail,
+        13.5 - trail,
+        8.5 - 1.5 * trail,
+        6.5 + trail,
+        radius: 1.2,
+      );
     case ArchiveSymbol.grid:
       for (var i = 0; i < 4; i++) {
         final d = [p, q, r, q][i];
         final x = 4.0 + i % 2 * 10;
-        final y = 4.0 + i ~/ 2 * 10 - d * 1.3;
-        a.rect(x, y, 6, 6);
-        if (i == 0) a.rect(x, y, 6, 6, fill: true, opacity: .14 + active * .12);
+        final y = 4.0 + i ~/ 2 * 10 - d * 1.1;
+        a.rect(x, y, 6, 6, radius: 1.2);
+        if (i == 0) {
+          a.rect(
+            x,
+            y,
+            6,
+            6,
+            radius: 1.2,
+            fill: true,
+            opacity: .14 + active * .12,
+          );
+        }
       }
     case ArchiveSymbol.dotsGrid:
       for (var i = 0; i < 9; i++) {
         final d = [p, q, r][i ~/ 3];
-        a.mark(
-          4.2 + i % 3 * 7,
-          4.2 + i ~/ 3 * 7 - d * 1.8,
-          1.7,
-          angle: i == 4 ? .785 + p * .785 : 0,
-        );
+        a.dot(5.0 + i % 3 * 7, 5.0 + i ~/ 3 * 7 - d * 1.4, 1.2);
       }
     case ArchiveSymbol.add:
     case ArchiveSymbol.addCircle:
     case ArchiveSymbol.removeCircle:
       if (pose.symbol != ArchiveSymbol.add) a.ring();
       final length = pose.symbol == ArchiveSymbol.add ? 6.4 : 3.7;
-      a.rotate(p * .35, () {
+      a.rotate(p * .30, () {
         a.line(12 - length, 12, 12 + length, 12);
         if (pose.symbol != ArchiveSymbol.removeCircle) {
-          a.path((s) => s.m(12, 12 - length).l(12, 12 + length), width: 1.13);
+          a.path((s) => s.m(12, 12 - length).l(12, 12 + length), width: 1.1);
         }
       });
     case ArchiveSymbol.check:
-      a.poly([4.4, 12.5, 9.4, 17.4 + .7 * q, 20.2, 6.3 - 1.2 * p]);
-      a.mark(18.9, 5.8 - p, 1.2, angle: .785);
+      a.poly([4.6, 12.6, 9.6, 17.5 + .6 * q, 19.8, 6.6 - .9 * p]);
     case ArchiveSymbol.circle:
       a.circle(12, 12, 8.4, fill: true, opacity: (v - 1).clamp(0, 1) * .21);
       a.ring();
@@ -627,47 +659,46 @@ _Art _foldDrawing(_IconPose pose, ArchiveIconGesture gesture) {
         });
       }
     case ArchiveSymbol.edit:
-      a.move(.9 * p, -.9 * p, () {
+      a.move(.7 * p, -.7 * p, () {
         a.poly([
-          3.6,
-          20.3,
-          6.1,
-          12.2,
-          16,
+          3.8,
+          20.2,
+          5.8,
+          13.2,
+          15.8,
           3.2,
-          20.7,
-          7.9,
-          11.7,
-          17.8,
+          20.6,
+          8.0,
+          10.6,
+          18.0,
         ], close: true);
         a.poly(
-          [3.6, 20.3, 6.1, 12.2, 11.7, 17.8],
+          [3.8, 20.2, 5.8, 13.2, 10.6, 18.0],
           close: true,
           fill: true,
-          opacity: .17,
+          opacity: .16,
         );
-        a.line(6.8, 16.8, 9.4, 14.2);
-        a.mark(8.9, 13.5, 1.1, angle: .785);
-        a.line(13.2, 5.8, 18, 10.6);
+        a.line(13.2, 5.8, 18.0, 10.6);
       });
     case ArchiveSymbol.delete:
       a.path(
-        (s) => s.m(5.5, 9).l(6.2, 20).l(15.6, 20).l(17.7, 17.8).l(18.5, 9),
+        (s) => s
+            .m(5.8, 8.8)
+            .l(6.6, 18.7)
+            .q(6.7, 20.2, 8.2, 20.2)
+            .l(15.8, 20.2)
+            .q(17.3, 20.2, 17.4, 18.7)
+            .l(18.2, 8.8),
       );
-      a.poly(
-        [14.6, 10.7, 14.2, 17.4, 16.4, 17.4],
-        close: true,
-        fill: true,
-        opacity: .15,
-      );
-      a.line(9.3, 11.2, 9.7, 17.1);
+      a.line(10.0, 11.2, 10.2, 17.2);
+      a.line(14.0, 11.2, 13.8, 17.2);
       a.transform(
-        y: -1.65 * p,
-        angle: -.09 * q,
+        y: -1.3 * p,
+        angle: -.07 * q,
         pivot: const Offset(5, 7),
         draw: () {
-          a.line(3.7, 6.7, 20.3, 6.7);
-          a.poly([9, 6.7, 9, 4.1, 15, 4.1, 15, 6.7]);
+          a.line(4.0, 6.7, 20.0, 6.7);
+          a.poly([9.2, 6.7, 9.2, 4.2, 14.8, 4.2, 14.8, 6.7]);
         },
       );
     case ArchiveSymbol.copy:
@@ -784,33 +815,39 @@ _Art _foldDrawing(_IconPose pose, ArchiveIconGesture gesture) {
     case ArchiveSymbol.help:
       a.ring();
       if (pose.symbol == ArchiveSymbol.info) {
-        a.mark(11.3, 6.9 - 1.4 * p, 1.4);
-        a.poly([10.8, 11, 12.2, 11, 12.2, 17, 14, 17]);
+        a.dot(12, 7.6 - 1.0 * p, 1.1);
+        a.poly([10.8, 11.2, 12.2, 11.2, 12.2, 16.8, 13.8, 16.8]);
       } else {
         a.path(
           (s) => s
-              .m(9.1, 8.2 - p)
-              .c(9.1, 4.6 - p, 16, 4.6 - q, 15.1, 9.3)
-              .c(14.8, 10.8, 12, 11.1, 12, 13.8),
+              .m(9.3, 8.5 - .8 * p)
+              .c(9.3, 5.0 - .8 * p, 15.8, 5.0 - .8 * q, 14.9, 9.4)
+              .c(14.6, 10.8, 12, 11.2, 12, 13.7),
         );
-        a.mark(11.3, 17, 1.4);
+        a.dot(12, 17.2, 1.1);
       }
     case ArchiveSymbol.warning:
-      a.poly([12, 3.2, 21.9, 20.5, 4.2, 20.5, 2.2, 18.6], close: true);
-      a.path((s) => s.m(12, 8.4 - p).l(12, 13.4 - p), width: 1.15);
-      a.mark(11.2, 16.6 - .5 * q, 1.6);
+      a.poly(
+        [12, 3.6, 21.1, 19.8, 2.9, 19.8],
+        close: true,
+        fill: true,
+        opacity: .08 + active * .10,
+      );
+      a.poly([12, 3.6, 21.1, 19.8, 2.9, 19.8], close: true);
+      a.path((s) => s.m(12, 9.0 - .7 * p).l(12, 14.0 - .7 * p), width: 1.15);
+      a.dot(12, 17.0 - .4 * q, 1.05);
     case ArchiveSymbol.wifi:
     case ArchiveSymbol.wifiOff:
     case ArchiveSymbol.wifiWarning:
       for (var i = 0; i < 3; i++) {
-        final x = 3.1 + 3 * i, y = 8 + i * 3.8 - [p, q, r][i] * 1.5;
+        final x = 3.1 + 3 * i, y = 8 + i * 3.8 - [p, q, r][i] * 1.3;
         a.path((s) => s.m(x, y).q(12, y - (6.4 - i * 2.1), 24 - x, y));
       }
-      a.mark(11.15, 18.5, 1.7, angle: .785);
+      a.dot(12, 18.8, 1.3);
       if (pose.symbol == ArchiveSymbol.wifiOff) a.line(3.2, 3.5, 20.8, 21.1);
       if (pose.symbol == ArchiveSymbol.wifiWarning) {
         a.line(21.2, 12.4, 21.2, 16.3);
-        a.mark(20.6, 18.8, 1.2);
+        a.dot(21.2, 19.1, .9);
       }
     case ArchiveSymbol.cloud:
       a.path(
@@ -926,6 +963,103 @@ _Art _foldDrawing(_IconPose pose, ArchiveIconGesture gesture) {
             .z(),
       );
       a.poly([8, 11.7 + q, 10.8, 14.4 + .5 * q, 16, 9.2 - p]);
+    case ArchiveSymbol.tag:
+      a.transform(
+        angle: -.08 * p,
+        pivot: const Offset(8, 8),
+        draw: () {
+          void tagContour(_Trace s) => s
+              .m(4.2, 4.2)
+              .l(11.6, 4.2)
+              .l(20.1, 12.7)
+              .l(12.7, 20.1)
+              .l(4.2, 11.6)
+              .z();
+          a.path(tagContour, fill: true, opacity: .10 + active * .12);
+          a.path(tagContour);
+          a.circle(8.2, 8.2, 1.45, fill: true);
+        },
+      );
+    case ArchiveSymbol.chart:
+      final heights = [8.0 + 1.8 * p, 14.5 + 1.6 * q, 11.2 + 1.8 * r];
+      for (var i = 0; i < 3; i++) {
+        final x = 4.2 + i * 6.0;
+        final h = heights[i].clamp(4.0, 16.8);
+        a.rect(
+          x,
+          20.0 - h,
+          3.6,
+          h,
+          radius: 1.0,
+          fill: true,
+          opacity: i == 1 ? .22 + active * .14 : .11 + active * .08,
+        );
+        a.rect(x, 20.0 - h, 3.6, h, radius: 1.0);
+      }
+      a.line(3.2, 20.0, 20.8, 20.0);
+    case ArchiveSymbol.palette:
+      a.rotate(p * .18, () {
+        void paletteContour(_Trace s) => s
+            .m(12, 3.4)
+            .c(17.4, 3.4, 21.0, 7.2, 20.8, 11.8)
+            .c(20.6, 14.4, 18.4, 15.6, 16.4, 15.2)
+            .c(14.7, 14.9, 13.8, 16.0, 14.2, 17.5)
+            .c(14.6, 19.3, 13.2, 20.6, 11.2, 20.6)
+            .c(6.4, 20.6, 3.2, 16.8, 3.2, 12.0)
+            .c(3.2, 7.0, 7.1, 3.4, 12, 3.4)
+            .z();
+        a.path(paletteContour, fill: true, opacity: .10 + active * .12);
+        a.path(paletteContour);
+        a.dot(8.0, 9.6 - .4 * q, 1.25);
+        a.dot(11.6, 7.6 - .5 * p, 1.25);
+        a.dot(15.4, 9.4 - .4 * r, 1.25);
+        a.dot(8.2, 14.2, 1.15);
+      });
+    case ArchiveSymbol.dot:
+      a.circle(12, 12, 4.4 + .6 * p, fill: true);
+    case ArchiveSymbol.shuffle:
+      a.path(
+        (s) => s
+            .m(3.6, 7.5)
+            .l(7.6, 7.5)
+            .c(10.8, 7.5, 12.8, 16.5, 16.2, 16.5)
+            .l(20.0 + .8 * p, 16.5),
+      );
+      a.poly([
+        17.4 + .6 * p,
+        14.0,
+        20.2 + .8 * p,
+        16.5,
+        17.4 + .6 * p,
+        19.0,
+      ]);
+      a.path(
+        (s) => s
+            .m(3.6, 16.5)
+            .l(7.6, 16.5)
+            .c(10.8, 16.5, 12.8, 7.5, 16.2, 7.5)
+            .l(20.0 + .8 * q, 7.5),
+      );
+      a.poly([
+        17.4 + .6 * q,
+        5.0,
+        20.2 + .8 * q,
+        7.5,
+        17.4 + .6 * q,
+        10.0,
+      ]);
+    case ArchiveSymbol.sort:
+      a.line(8.0, 4.8 - .9 * p, 8.0, 19.2);
+      a.poly([5.0, 7.8 - .9 * p, 8.0, 4.8 - .9 * p, 11.0, 7.8 - .9 * p]);
+      a.line(16.0, 4.8, 16.0, 19.2 + .9 * q);
+      a.poly([
+        13.0,
+        16.2 + .9 * q,
+        16.0,
+        19.2 + .9 * q,
+        19.0,
+        16.2 + .9 * q,
+      ]);
     case ArchiveSymbol.back:
     case ArchiveSymbol.up:
     case ArchiveSymbol.down:

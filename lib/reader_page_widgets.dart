@@ -373,6 +373,35 @@ class _AppearancePerformancePanelState
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Row(
                   children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: scheme.primary.withValues(
+                          alpha:
+                              Theme.of(context).brightness == Brightness.dark
+                              ? 0.16
+                              : 0.10,
+                        ),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: scheme.primary.withValues(
+                            alpha:
+                                Theme.of(context).brightness == Brightness.dark
+                                ? 0.28
+                                : 0.16,
+                          ),
+                          width: 0.8,
+                        ),
+                      ),
+                      alignment: Alignment.center,
+                      child: ArchiveIcon(
+                        CupertinoIcons.slider_horizontal_3,
+                        size: 18,
+                        color: scheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -396,11 +425,11 @@ class _AppearancePerformancePanelState
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Icon(
+                    ArchiveIcon(
                       _expanded
                           ? CupertinoIcons.chevron_up
                           : CupertinoIcons.chevron_down,
-                      size: 18,
+                      size: 16,
                       color: scheme.onSurfaceVariant,
                     ),
                   ],

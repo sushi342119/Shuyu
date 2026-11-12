@@ -76,6 +76,37 @@ LocalBookKind? localBookKindForFileName(String name) {
 }
 
 final _bookRevisionCache = Expando<String>();
+final _bookChaptersCache = Expando<List<NovelChapter>>();
+final _bookNovelCache = Expando<Novel>();
+final _bookValidByteSizeCache = Expando<int>();
+
+class _CachedEpubSession {
+  _CachedEpubSession({
+    required this.localPath,
+    required this.fileSize,
+    required this.fileModifiedMicros,
+    required this.bookRevision,
+    required this.sourceFingerprint,
+    required this.package,
+  });
+
+  final String localPath;
+  final int fileSize;
+  final int fileModifiedMicros;
+  final String bookRevision;
+  final String sourceFingerprint;
+  final EpubPackage package;
+  int activeReaders = 0;
+  bool evicted = false;
+
+  Future<void> releaseIfIdle() async {
+    if (evicted && activeReaders <= 0) {
+      try {
+        await package.close();
+      } catch (_) {}
+    }
+  }
+}
 
 /// 是否为 Unicode 空白字符。
 bool _isUnicodeWhitespace(int rune) {
@@ -529,6 +560,17 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   static const _epubImageCacheBudget = 64 * 1024 * 1024;
   var _epubImageCacheBytes = 0;
 
+  /// 已切片的 TXT 单章正文缓存，键为“书 id + 修订 + 章序号”，避免 1~8 MB 小说首次开章或大书切章重复解码。
+  final LinkedHashMap<String, String> _chapterSliceCache = LinkedHashMap();
+  static const _chapterSliceCacheBudget = 4 * 1024 * 1024;
+  static const _chapterSliceCacheMaxEntries = 48;
+  var _chapterSliceCacheBytes = 0;
+
+  /// 已打开的 EPUB 会话缓存（LRU 最多保留 3 本），避免每次切章重复哈希、解压中央目录与解析 OPF/NCX。
+  final LinkedHashMap<int, _CachedEpubSession> _epubSessionCache =
+      LinkedHashMap();
+  static const _epubSessionCacheMaxEntries = 3;
+
   /// 串行化所有变更操作，防止扫描/删除/编辑竞态（修复#4）。
   Future<void> _mutationLock = Future.value();
 
@@ -745,13 +787,43 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     final old = _textCache.remove(id);
     if (old != null) _textCacheBytes -= old.length * 2;
     _textReads.remove(id);
+    final slicePrefix = '$id\u0000';
+    final staleSlices = [
+      for (final key in _chapterSliceCache.keys)
+        if (key.startsWith(slicePrefix)) key,
+    ];
+    for (final key in staleSlices) {
+      _chapterSliceCacheBytes -= _chapterSliceCache.remove(key)!.length * 2;
+    }
     _invalidateEpubCaches(id);
+  }
+
+  void _cacheChapterSlice(String key, String text) {
+    final size = text.length * 2;
+    if (size > _chapterSliceCacheBudget) return;
+    final old = _chapterSliceCache.remove(key);
+    if (old != null) _chapterSliceCacheBytes -= old.length * 2;
+    while (_chapterSliceCache.isNotEmpty &&
+        (_chapterSliceCache.length >= _chapterSliceCacheMaxEntries ||
+            _chapterSliceCacheBytes + size > _chapterSliceCacheBudget)) {
+      final oldest = _chapterSliceCache.keys.first;
+      _chapterSliceCacheBytes -= _chapterSliceCache.remove(oldest)!.length * 2;
+    }
+    _chapterSliceCache[key] = text;
+    _chapterSliceCacheBytes += size;
+  }
+
+  void _evictEpubSession(_CachedEpubSession session) {
+    session.evicted = true;
+    unawaited(session.releaseIfIdle());
   }
 
   /// 书修订变化、删除或重扫时调用：清掉该书的图片字节缓存，
   /// 指纹缓存按路径存放，无法可靠映射到书，直接整体清空（代价只是下次重算一次）。
   void _invalidateEpubCaches(int id) {
     _epubFingerprintCache.clear();
+    final session = _epubSessionCache.remove(id);
+    if (session != null) _evictEpubSession(session);
     final prefix = '$id\u0000';
     final stale = [
       for (final key in _epubImageCache.keys)
@@ -764,6 +836,10 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
 
   void _clearEpubCaches() {
     _epubFingerprintCache.clear();
+    for (final session in _epubSessionCache.values) {
+      _evictEpubSession(session);
+    }
+    _epubSessionCache.clear();
     _epubImageCache.clear();
     _epubImageCacheBytes = 0;
   }
@@ -820,6 +896,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
 
   Future<LocalBook> _renameSourceFile(LocalBook book, String targetName) async {
     if (targetName == book.fileName) return book;
+    final openEpub = _epubSessionCache.remove(book.id);
+    if (openEpub != null) {
+      openEpub.evicted = true;
+      await openEpub.releaseIfIdle();
+    }
     if (utf8.encode(targetName).length > 255) {
       throw ArgumentError('文件名超过 255 字节，请缩短书名或标签');
     }
@@ -3888,6 +3969,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       _readerWorker.dispose();
       _textCache.clear();
       _textCacheBytes = 0;
+      _chapterSliceCache.clear();
+      _chapterSliceCacheBytes = 0;
       _clearEpubCaches();
     });
     super.dispose();
@@ -4031,6 +4114,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   }
 
   Novel toNovel(LocalBook book) {
+    final cached = _bookNovelCache[book];
+    if (cached != null) return cached;
     final kindLabel = book.kind == LocalBookKind.pdf
         ? 'PDF'
         : book.kind == LocalBookKind.epub
@@ -4050,7 +4135,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         _formatWordCount(book.wordCount!),
       formatLocalSize(book.size),
     ];
-    return Novel(
+    final novel = Novel(
       id: book.id,
       title: book.displayTitle,
       author: book.displayAuthor,
@@ -4062,6 +4147,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           ? book.pageCount
           : book.chapters.length,
     );
+    _bookNovelCache[book] = novel;
+    return novel;
   }
 
   // ---- NovelRepository ----
@@ -4103,8 +4190,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     return _books
         .where(
           (b) =>
+              b.displayTitle.toLowerCase().contains(q) ||
+              b.displayAuthor.toLowerCase().contains(q) ||
               b.title.toLowerCase().contains(q) ||
-              b.author.toLowerCase().contains(q),
+              b.author.toLowerCase().contains(q) ||
+              b.fileName.toLowerCase().contains(q),
         )
         .map(toNovel)
         .toList();
@@ -4122,22 +4212,92 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     await ensureReady(id);
     final book = bookFor(id);
     if (book == null) return const [];
+    final cached = _bookChaptersCache[book];
+    if (cached != null) return cached;
+    final List<NovelChapter> built;
     if (book.kind == LocalBookKind.pdf) {
-      return List.generate(
-        book.pageCount,
-        (i) => NovelChapter('第 ${i + 1} 页', '', id: i),
-      );
-    }
-    return [
-      for (var i = 0; i < book.chapters.length; i++)
-        NovelChapter(
-          book.chapters[i].title,
-          '',
-          id: i,
-          revision: book.revision,
-          volume: book.chapters[i].volume,
+      built = List.unmodifiable(
+        List.generate(
+          book.pageCount,
+          (i) => NovelChapter('第 ${i + 1} 页', '', id: i),
         ),
-    ];
+      );
+    } else {
+      final revision = book.revision;
+      built = List.unmodifiable([
+        for (var i = 0; i < book.chapters.length; i++)
+          NovelChapter(
+            book.chapters[i].title,
+            '',
+            id: i,
+            revision: revision,
+            volume: book.chapters[i].volume,
+          ),
+      ]);
+    }
+    _bookChaptersCache[book] = built;
+    return built;
+  }
+
+  bool _validByteChapterRangesForBook(LocalBook book, int fileByteSize) {
+    if (_bookValidByteSizeCache[book] == fileByteSize) return true;
+    if (book.chapters.isEmpty) return false;
+    var charEnd = 0;
+    var byteEnd = 0;
+    for (final c in book.chapters) {
+      if (c.offset < charEnd || c.length < 0) return false;
+      if (c.byteOffset < byteEnd ||
+          c.byteLength < c.length ||
+          c.byteLength > c.length * 3) {
+        return false;
+      }
+      if (c.byteOffset + c.byteLength > fileByteSize) return false;
+      charEnd = c.offset + c.length;
+      byteEnd = c.byteOffset + c.byteLength;
+    }
+    if (byteEnd != fileByteSize) return false;
+    _bookValidByteSizeCache[book] = fileByteSize;
+    return true;
+  }
+
+  Future<String?> _readDirectUtf8ChapterSlice(
+    String path,
+    LocalChapterIndex ref,
+  ) async {
+    if (ref.length > localTextMaxReadCodeUnits ||
+        ref.byteOffset < 0 ||
+        ref.byteLength < 0) {
+      return null;
+    }
+    if (ref.length == 0) return ref.byteLength == 0 ? '' : null;
+    final raf = await File(path).open();
+    final Uint8List buffer;
+    try {
+      await raf.setPosition(ref.byteOffset);
+      buffer = Uint8List(ref.byteLength);
+      var filled = 0;
+      while (filled < ref.byteLength) {
+        final n = await raf.readInto(buffer, filled, ref.byteLength);
+        if (n <= 0) return null;
+        filled += n;
+      }
+    } finally {
+      await raf.close();
+    }
+    final String decoded;
+    try {
+      decoded = utf8.decode(buffer, allowMalformed: false);
+    } on FormatException {
+      return null;
+    }
+    if (decoded.length != ref.length ||
+        decoded.startsWith('\uFEFF') ||
+        decoded.contains('\r') ||
+        decoded.contains('\u2028') ||
+        decoded.contains('\u2029')) {
+      return null;
+    }
+    return decoded;
   }
 
   @override
@@ -4155,30 +4315,124 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
     final index = chapter.id;
     final ref = book.chapters[index];
-    final String content;
-    if (_textCache.containsKey(book.id) ||
-        await File(await _readableTextPath(book)).length() <=
-            _textCacheBudget ~/ 2) {
+    if (_textCache.containsKey(book.id)) {
+      final text = await _readBookText(book);
+      if (!validChapterRanges(book.chapters, text.length)) {
+        throw StateError('章节范围损坏，请重新扫描');
+      }
+      if (bookFor(novelId)?.revision != chapter.revision ||
+          isMigrationPending(novelId)) {
+        throw const StaleLocalChapterException();
+      }
+      return text.substring(ref.offset, ref.offset + ref.length).trim();
+    }
+    final path = await _readableTextPath(book);
+    final file = File(path);
+    final stat = await file.stat();
+    if (stat.type != FileSystemEntityType.file) {
+      await file.length();
+    }
+    final sliceKey =
+        '${book.id}\u0000${chapter.revision}\u0000${stat.size}\u0000'
+        '${stat.modified.microsecondsSinceEpoch}\u0000$index';
+    final cachedSlice = _chapterSliceCache.remove(sliceKey);
+    if (cachedSlice != null) {
+      _chapterSliceCache[sliceKey] = cachedSlice;
+      if (bookFor(novelId)?.revision != chapter.revision ||
+          isMigrationPending(novelId)) {
+        throw const StaleLocalChapterException();
+      }
+      return cachedSlice;
+    }
+
+    String content;
+    if (stat.size <= 64 * 1024 && ref.length <= localTextMaxReadCodeUnits) {
       final text = await _readBookText(book);
       if (!validChapterRanges(book.chapters, text.length)) {
         throw StateError('章节范围损坏，请重新扫描');
       }
       content = text.substring(ref.offset, ref.offset + ref.length);
     } else {
-      final path = await _readableTextPath(book);
-      content = await _readerWorker.readRange(
-        path,
-        ref.offset,
-        ref.length,
-        byteOffset: ref.byteOffset >= 0 ? ref.byteOffset : null,
-        byteLength: ref.byteLength >= 0 ? ref.byteLength : null,
-      );
+      String? directSlice;
+      if (stat.size <= localTextMaxDecodedBytes &&
+          ref.length <= localTextMaxReadCodeUnits &&
+          _validByteChapterRangesForBook(book, stat.size)) {
+        directSlice = await _readDirectUtf8ChapterSlice(path, ref);
+      }
+      if (directSlice != null) {
+        content = directSlice;
+      } else if (stat.size <= _textCacheBudget ~/ 2 &&
+          ref.length <= localTextMaxReadCodeUnits) {
+        final text = await _readBookText(book);
+        if (!validChapterRanges(book.chapters, text.length)) {
+          throw StateError('章节范围损坏，请重新扫描');
+        }
+        content = text.substring(ref.offset, ref.offset + ref.length);
+      } else {
+        content = await _readerWorker.readRange(
+          path,
+          ref.offset,
+          ref.length,
+          byteOffset: ref.byteOffset >= 0 ? ref.byteOffset : null,
+          byteLength: ref.byteLength >= 0 ? ref.byteLength : null,
+        );
+      }
     }
     if (bookFor(novelId)?.revision != chapter.revision ||
         isMigrationPending(novelId)) {
       throw const StaleLocalChapterException();
     }
-    return content.trim();
+    final trimmed = content.trim();
+    if (!_disposed && !_textCache.containsKey(book.id)) {
+      _cacheChapterSlice(sliceKey, trimmed);
+    }
+    return trimmed;
+  }
+
+  Future<({EpubPackage package, _CachedEpubSession? session})>
+  _acquireEpubSession(LocalBook book, String localPath) async {
+    if (_disposed || book.sourceFingerprint.isEmpty) {
+      return (
+        package: await EpubPackage.open(localPath, lenient: true),
+        session: null,
+      );
+    }
+    final stat = await File(localPath).stat();
+    final modifiedMicros = stat.modified.microsecondsSinceEpoch;
+    final existing = _epubSessionCache.remove(book.id);
+    if (existing != null) {
+      if (!existing.evicted &&
+          stat.type == FileSystemEntityType.file &&
+          existing.localPath == localPath &&
+          existing.fileSize == stat.size &&
+          existing.fileModifiedMicros == modifiedMicros &&
+          existing.bookRevision == book.revision &&
+          existing.sourceFingerprint == book.sourceFingerprint) {
+        existing.activeReaders++;
+        _epubSessionCache[book.id] = existing;
+        return (package: existing.package, session: existing);
+      }
+      _evictEpubSession(existing);
+    }
+    final package = await EpubPackage.open(localPath, lenient: true);
+    if (_disposed || bookFor(book.id)?.revision != book.revision) {
+      return (package: package, session: null);
+    }
+    final session = _CachedEpubSession(
+      localPath: localPath,
+      fileSize: stat.size,
+      fileModifiedMicros: modifiedMicros,
+      bookRevision: book.revision,
+      sourceFingerprint: book.sourceFingerprint,
+      package: package,
+    )..activeReaders = 1;
+    while (_epubSessionCache.length >= _epubSessionCacheMaxEntries) {
+      final oldestKey = _epubSessionCache.keys.first;
+      final oldest = _epubSessionCache.remove(oldestKey);
+      if (oldest != null) _evictEpubSession(oldest);
+    }
+    _epubSessionCache[book.id] = session;
+    return (package: package, session: session);
   }
 
   Future<({List<EpubBlock> blocks, Map<String, Uint8List> images})> epubChapter(
@@ -4209,13 +4463,21 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     );
     if (book.sourceFingerprint.isNotEmpty &&
         await _epubSourceFingerprint(localPath) != book.sourceFingerprint) {
+      final stale = _epubSessionCache.remove(book.id);
+      if (stale != null) _evictEpubSession(stale);
       throw StateError('EPUB 源文件已变化，请重新扫描');
     }
-    final package = await EpubPackage.open(localPath, lenient: true);
+    final acquired = await _acquireEpubSession(book, localPath);
+    final package = acquired.package;
+    final session = acquired.session;
     try {
       if (package.chapters.length != book.chapters.length ||
           package.chapters[chapterIndex].href !=
               book.epubChapterHrefs[chapterIndex]) {
+        if (session != null && identical(_epubSessionCache[book.id], session)) {
+          _epubSessionCache.remove(book.id);
+          session.evicted = true;
+        }
         throw StateError('EPUB 章节对应关系已变化，请重新扫描');
       }
       final source = await package.chapterBlocks(chapterIndex);
@@ -4261,7 +4523,12 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       ];
       return (blocks: blocks, images: images);
     } finally {
-      await package.close();
+      if (session == null) {
+        await package.close();
+      } else {
+        session.activeReaders--;
+        await session.releaseIfIdle();
+      }
     }
   }
 }

@@ -319,7 +319,10 @@ class _GlassDockState extends State<GlassDock> with TickerProviderStateMixin {
       _iconActivations[identity] = (_iconActivations[identity] ?? 0) + 1;
     });
     _release();
-    _settlePosition(index, velocity: velocity);
+    _settlePosition(
+      widget.animateInactiveIcons ? widget.selectedIndex : index,
+      velocity: velocity,
+    );
     if (!fromDrag &&
         index == widget.selectedIndex &&
         widget.onReselected != null) {

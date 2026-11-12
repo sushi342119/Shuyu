@@ -16,24 +16,24 @@ part 'archive_icon_fold_art.dart';
 /// parts leave together, then settle in order. These finite clocks also power
 /// exported SVG frames, so the showcase cannot exaggerate the app motion.
 abstract final class ArchiveIconMotion {
-  static const duration = Duration(milliseconds: 640);
-  static const morphDuration = Duration(milliseconds: 380);
-  static const stateCurve = Cubic(.18, 1.28, .32, 1);
+  static const duration = Duration(milliseconds: 280);
+  static const morphDuration = Duration(milliseconds: 220);
+  static const stateCurve = Cubic(.18, 1.18, .32, 1);
 
   static ArchiveIconGesture frame(double phase) => ArchiveIconGesture(
     _spring(phase),
-    _spring(((phase - .055) / .945).clamp(0, 1)),
-    _spring(((phase - .11) / .89).clamp(0, 1)),
+    _spring(((phase - .05) / .95).clamp(0, 1)),
+    _spring(((phase - .10) / .90).clamp(0, 1)),
   );
 
   static double _spring(double t) {
-    const times = [0.0, .10, .36, .64, .82, 1.0];
-    const values = [0.0, -.12, 1.0, -.20, .065, 0.0];
+    const times = [0.0, .38, .76, 1.0];
+    const values = [0.0, .72, -.05, 0.0];
     if (t <= 0 || t >= 1) return 0;
     for (var i = 1; i < times.length; i++) {
       if (t <= times[i]) {
         final x = (t - times[i - 1]) / (times[i] - times[i - 1]);
-        final eased = Curves.easeInOutCubic.transform(x);
+        final eased = Curves.easeOutCubic.transform(x);
         return values[i - 1] + (values[i] - values[i - 1]) * eased;
       }
     }
@@ -146,7 +146,13 @@ enum ArchiveSymbol {
   tools('故障排查', '系统'),
   shield('安全', '系统'),
   help('帮助', '系统'),
-  touch('触摸', '阅读');
+  touch('触摸', '阅读'),
+  tag('标签', '操作'),
+  chart('统计', '阅读'),
+  palette('主题色板', '系统'),
+  dot('圆点', '操作'),
+  shuffle('随机抽取', '操作'),
+  sort('排序', '操作');
 
   const ArchiveSymbol(this.label, this.group);
   final String label, group;
@@ -157,8 +163,11 @@ enum ArchiveSymbol {
 abstract final class ArchiveIconSymbols {
   static final legacy = Map<IconData, ArchiveSymbol>.unmodifiable({
     CupertinoIcons.house: ArchiveSymbol.discover,
+    CupertinoIcons.house_fill: ArchiveSymbol.discover,
+    CupertinoIcons.compass: ArchiveSymbol.discover,
     CupertinoIcons.book: ArchiveSymbol.book,
     CupertinoIcons.book_fill: ArchiveSymbol.book,
+    CupertinoIcons.collections: ArchiveSymbol.shelf,
     CupertinoIcons.folder: ArchiveSymbol.folder,
     CupertinoIcons.folder_open: ArchiveSymbol.folderOpen,
     CupertinoIcons.person_crop_circle: ArchiveSymbol.profile,
@@ -170,9 +179,12 @@ abstract final class ArchiveIconSymbols {
     CupertinoIcons.chevron_down: ArchiveSymbol.down,
     CupertinoIcons.arrow_left: ArchiveSymbol.arrowLeft,
     CupertinoIcons.arrow_right: ArchiveSymbol.arrowRight,
+    CupertinoIcons.arrow_up: ArchiveSymbol.arrowUp,
+    CupertinoIcons.arrow_down: ArchiveSymbol.arrowDown,
     CupertinoIcons.arrow_up_right: ArchiveSymbol.external,
     CupertinoIcons.xmark: ArchiveSymbol.close,
     CupertinoIcons.ellipsis: ArchiveSymbol.more,
+    CupertinoIcons.ellipsis_vertical: ArchiveSymbol.more,
     CupertinoIcons.list_bullet: ArchiveSymbol.contents,
     CupertinoIcons.line_horizontal_3: ArchiveSymbol.contents,
     CupertinoIcons.bookmark: ArchiveSymbol.bookmark,
@@ -180,14 +192,17 @@ abstract final class ArchiveIconSymbols {
     CupertinoIcons.location: ArchiveSymbol.location,
     CupertinoIcons.location_fill: ArchiveSymbol.locationFilled,
     CupertinoIcons.hand_draw: ArchiveSymbol.touch,
+    CupertinoIcons.hand_point_right: ArchiveSymbol.touch,
     CupertinoIcons.textformat: ArchiveSymbol.typography,
     CupertinoIcons.slider_horizontal_3: ArchiveSymbol.sliders,
     CupertinoIcons.photo: ArchiveSymbol.image,
     Icons.image_outlined: ArchiveSymbol.image,
     CupertinoIcons.sun_max: ArchiveSymbol.brightness,
+    CupertinoIcons.sun_min: ArchiveSymbol.brightness,
     CupertinoIcons.moon_stars: ArchiveSymbol.moon,
     CupertinoIcons.moon: ArchiveSymbol.moon,
     CupertinoIcons.square_stack: ArchiveSymbol.layers,
+    CupertinoIcons.square_on_square: ArchiveSymbol.layers,
     CupertinoIcons.lock_rotation: ArchiveSymbol.portrait,
     CupertinoIcons.headphones: ArchiveSymbol.headphones,
     CupertinoIcons.play_fill: ArchiveSymbol.play,
@@ -196,10 +211,16 @@ abstract final class ArchiveIconSymbols {
     CupertinoIcons.backward_end: ArchiveSymbol.previous,
     CupertinoIcons.forward_end: ArchiveSymbol.next,
     CupertinoIcons.waveform: ArchiveSymbol.waveform,
+    CupertinoIcons.mic: ArchiveSymbol.voice,
+    CupertinoIcons.speaker_2: ArchiveSymbol.volume,
     CupertinoIcons.speedometer: ArchiveSymbol.speed,
     CupertinoIcons.clock: ArchiveSymbol.timer,
     CupertinoIcons.search: ArchiveSymbol.search,
     CupertinoIcons.line_horizontal_3_decrease: ArchiveSymbol.filter,
+    CupertinoIcons.arrow_up_arrow_down: ArchiveSymbol.sort,
+    CupertinoIcons.sort_down: ArchiveSymbol.sort,
+    CupertinoIcons.sort_up: ArchiveSymbol.sort,
+    CupertinoIcons.shuffle: ArchiveSymbol.shuffle,
     CupertinoIcons.rectangle_grid_1x2: ArchiveSymbol.layout,
     CupertinoIcons.rectangle_grid_2x2: ArchiveSymbol.grid,
     CupertinoIcons.square_grid_2x2: ArchiveSymbol.grid,
@@ -211,6 +232,7 @@ abstract final class ArchiveIconSymbols {
     CupertinoIcons.checkmark_circle: ArchiveSymbol.checkCircle,
     CupertinoIcons.checkmark_circle_fill: ArchiveSymbol.selected,
     CupertinoIcons.circle: ArchiveSymbol.circle,
+    CupertinoIcons.circle_fill: ArchiveSymbol.dot,
     CupertinoIcons.pencil: ArchiveSymbol.edit,
     CupertinoIcons.trash: ArchiveSymbol.delete,
     CupertinoIcons.doc_on_doc: ArchiveSymbol.copy,
@@ -229,6 +251,7 @@ abstract final class ArchiveIconSymbols {
     CupertinoIcons.settings: ArchiveSymbol.settings,
     CupertinoIcons.gear_alt: ArchiveSymbol.settings,
     CupertinoIcons.info_circle: ArchiveSymbol.info,
+    CupertinoIcons.question_circle: ArchiveSymbol.help,
     CupertinoIcons.exclamationmark_triangle: ArchiveSymbol.warning,
     CupertinoIcons.wifi: ArchiveSymbol.wifi,
     CupertinoIcons.wifi_slash: ArchiveSymbol.wifiOff,
@@ -245,7 +268,15 @@ abstract final class ArchiveIconSymbols {
     CupertinoIcons.battery_100: ArchiveSymbol.battery,
     CupertinoIcons.bolt_fill: ArchiveSymbol.charging,
     CupertinoIcons.wrench: ArchiveSymbol.tools,
-    CupertinoIcons.paintbrush: ArchiveSymbol.edit,
+    CupertinoIcons.shield: ArchiveSymbol.shield,
+    CupertinoIcons.paintbrush: ArchiveSymbol.palette,
+    CupertinoIcons.paintbrush_fill: ArchiveSymbol.palette,
+    CupertinoIcons.color_filter: ArchiveSymbol.palette,
+    CupertinoIcons.tag: ArchiveSymbol.tag,
+    CupertinoIcons.tag_fill: ArchiveSymbol.tag,
+    CupertinoIcons.chart_bar: ArchiveSymbol.chart,
+    CupertinoIcons.chart_bar_alt_fill: ArchiveSymbol.chart,
+    CupertinoIcons.chart_bar_square: ArchiveSymbol.chart,
     Icons.home_outlined: ArchiveSymbol.discover,
     Icons.menu_book_outlined: ArchiveSymbol.book,
     Icons.book: ArchiveSymbol.book,
@@ -259,9 +290,12 @@ abstract final class ArchiveIconSymbols {
     Icons.expand_more: ArchiveSymbol.down,
     Icons.arrow_back: ArchiveSymbol.arrowLeft,
     Icons.arrow_forward: ArchiveSymbol.arrowRight,
+    Icons.arrow_upward: ArchiveSymbol.arrowUp,
+    Icons.arrow_downward: ArchiveSymbol.arrowDown,
     Icons.open_in_new: ArchiveSymbol.external,
     Icons.close: ArchiveSymbol.close,
     Icons.more_horiz: ArchiveSymbol.more,
+    Icons.more_vert: ArchiveSymbol.more,
     Icons.format_list_bulleted: ArchiveSymbol.contents,
     Icons.bookmark_border: ArchiveSymbol.bookmark,
     Icons.bookmark: ArchiveSymbol.bookmarked,
@@ -280,6 +314,10 @@ abstract final class ArchiveIconSymbols {
     Icons.schedule: ArchiveSymbol.timer,
     Icons.search: ArchiveSymbol.search,
     Icons.filter_list: ArchiveSymbol.filter,
+    Icons.swap_vert: ArchiveSymbol.sort,
+    Icons.sort: ArchiveSymbol.sort,
+    Icons.shuffle: ArchiveSymbol.shuffle,
+    Icons.casino_outlined: ArchiveSymbol.shuffle,
     Icons.grid_view: ArchiveSymbol.grid,
     Icons.add: ArchiveSymbol.add,
     Icons.add_circle_outline: ArchiveSymbol.addCircle,
@@ -288,6 +326,8 @@ abstract final class ArchiveIconSymbols {
     Icons.check_circle_outline: ArchiveSymbol.checkCircle,
     Icons.check_circle: ArchiveSymbol.selected,
     Icons.radio_button_unchecked: ArchiveSymbol.circle,
+    Icons.circle: ArchiveSymbol.dot,
+    Icons.lens: ArchiveSymbol.dot,
     Icons.edit_outlined: ArchiveSymbol.edit,
     Icons.delete_outline: ArchiveSymbol.delete,
     Icons.content_copy: ArchiveSymbol.copy,
@@ -303,7 +343,10 @@ abstract final class ArchiveIconSymbols {
     Icons.auto_fix_high_outlined: ArchiveSymbol.wand,
     Icons.settings_outlined: ArchiveSymbol.settings,
     Icons.info_outline: ArchiveSymbol.info,
+    Icons.help_outline: ArchiveSymbol.help,
     Icons.warning_amber_rounded: ArchiveSymbol.warning,
+    Icons.broken_image_outlined: ArchiveSymbol.image,
+    Icons.broken_image: ArchiveSymbol.image,
     Icons.wifi: ArchiveSymbol.wifi,
     Icons.wifi_off: ArchiveSymbol.wifiOff,
     Icons.cloud_outlined: ArchiveSymbol.cloud,
@@ -314,6 +357,10 @@ abstract final class ArchiveIconSymbols {
     Icons.visibility_off_outlined: ArchiveSymbol.eyeOff,
     Icons.cancel: ArchiveSymbol.closeCircle,
     Icons.build_outlined: ArchiveSymbol.tools,
+    Icons.palette_outlined: ArchiveSymbol.palette,
+    Icons.label_outline: ArchiveSymbol.tag,
+    Icons.local_offer_outlined: ArchiveSymbol.tag,
+    Icons.bar_chart: ArchiveSymbol.chart,
   });
 
   static ArchiveSymbol? resolve(IconData? icon) {
@@ -324,8 +371,7 @@ abstract final class ArchiveIconSymbols {
         icon == CupertinoIcons.checkmark_alt) {
       return ArchiveSymbol.check;
     }
-    if (icon == CupertinoIcons.check_mark_circled_solid ||
-        icon == CupertinoIcons.circle_fill) {
+    if (icon == CupertinoIcons.check_mark_circled_solid) {
       return ArchiveSymbol.selected;
     }
     if (icon == CupertinoIcons.clear_circled_solid) {
@@ -333,9 +379,6 @@ abstract final class ArchiveIconSymbols {
     }
     if (icon == CupertinoIcons.exclamationmark_circle) {
       return ArchiveSymbol.warning;
-    }
-    if (icon == CupertinoIcons.tag) {
-      return ArchiveSymbol.bookmark;
     }
     if (icon == CupertinoIcons.arrow_right_arrow_left_circle) {
       return ArchiveSymbol.sync;
@@ -347,9 +390,6 @@ abstract final class ArchiveIconSymbols {
     if (icon == CupertinoIcons.square_pencil ||
         icon == CupertinoIcons.pencil_outline) {
       return ArchiveSymbol.edit;
-    }
-    if (icon == CupertinoIcons.chart_bar) {
-      return ArchiveSymbol.sliders;
     }
     if (icon == CupertinoIcons.textformat_size ||
         icon == CupertinoIcons.textformat_alt) {
@@ -378,9 +418,6 @@ abstract final class ArchiveIconSymbols {
     }
     if (icon == CupertinoIcons.arrow_down_circle) {
       return ArchiveSymbol.download;
-    }
-    if (icon.fontPackage == 'cupertino_icons') {
-      return ArchiveSymbol.document;
     }
     return null;
   }
@@ -750,7 +787,9 @@ class _ArchiveGlyphState extends State<_ArchiveGlyph>
     _foreground = state == null || state == AppLifecycleState.resumed;
     WidgetsBinding.instance.addObserver(this);
     _listenToPage(widget.pageAnimation);
-    _queueEntrance(fromMount: true);
+    if (widget.ambient) {
+      _queueEntrance(fromMount: true);
+    }
   }
 
   void _listenToPage(Animation<double>? animation) {
@@ -761,8 +800,9 @@ class _ArchiveGlyphState extends State<_ArchiveGlyph>
   void _pageChanged(AnimationStatus status) {
     final previous = _pageStatus;
     _pageStatus = status;
-    // The shared header survives tab switches. Only a new page entry resets
-    // this clock; ordinary rebuilds and animation frames do not replay icons.
+    if (!widget.ambient) return;
+    // Ambient emblems may greet on a new page entry; ordinary UI icons remain
+    // steady until pressed, triggered, or morphed.
     if ((previous == AnimationStatus.completed &&
             (status == AnimationStatus.forward ||
                 status == AnimationStatus.dismissed)) ||
@@ -800,10 +840,7 @@ class _ArchiveGlyphState extends State<_ArchiveGlyph>
 
   void _queueEntrance({bool fromMount = false}) {
     _entryAfterTransition = false;
-    if (_still || !widget.visible) return;
-    // Start at the rest pose in this frame. Layout verifies visibility before
-    // any moving frame is painted, while the clock stays aligned with the
-    // route/tab animation rather than starting one frame behind it.
+    if (_still || !widget.visible || !widget.ambient) return;
     _replay(entranceDelay: 0);
     final ticket = _entryTicket;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -819,8 +856,6 @@ class _ArchiveGlyphState extends State<_ArchiveGlyph>
           (position.isScrollingNotifier.value ||
               (_scrolledPositions[position] == true &&
                   widget.pageAnimation?.status != AnimationStatus.forward))) {
-        // Lazy rows created by dragging, a wheel or jumpTo are not a page
-        // entrance. Existing visible rows still greet when their tab returns.
         setState(_settle);
         return;
       }
@@ -889,7 +924,7 @@ class _ArchiveGlyphState extends State<_ArchiveGlyph>
       _foreground = foreground;
       if (_still) {
         _settle();
-      } else {
+      } else if (widget.ambient) {
         _queueEntrance();
       }
     });
@@ -941,6 +976,7 @@ class _ArchiveGlyphState extends State<_ArchiveGlyph>
             (coveredNow && accepted))) {
       _replay();
     } else if (!_still &&
+        widget.ambient &&
         ((!oldWidget.visible && widget.visible) ||
             wasStill ||
             (_ambientAllowed && !oldWidget.ambient))) {

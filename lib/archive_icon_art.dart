@@ -84,8 +84,7 @@ class _Art {
   );
 
   void ring() {
-    arc(12, 12, 8.4, 8.4, -.48, math.pi * 1.83);
-    mark(16.9, 4.5, 1.5, angle: math.pi / 4);
+    circle(12, 12, 8.4);
   }
 
   void path(

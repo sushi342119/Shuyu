@@ -4,7 +4,7 @@ import 'package:flutter/widgets.dart';
 /// Page turns share the archive's finite, staggered arrival clock. A drag
 /// scrubs this same clock; releasing it never replays an entrance animation.
 class ReaderTurnScope extends InheritedWidget {
-  static const duration = Duration(milliseconds: 620);
+  static const duration = Duration(milliseconds: 300);
   const ReaderTurnScope({
     super.key,
     required this.animation,

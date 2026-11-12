@@ -356,6 +356,7 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
             progress: count > 1 ? _pageSlider(context, count) : null,
             useAtmosphere: false,
             blurBottom: false,
+            maskTopSafeArea: () => false,
             bottomMaxWidth: 520,
             backgroundColor: theme.colorScheme.surface,
             statusText: count == 0 ? '' : '第 ${_page + 1} / $count 页',

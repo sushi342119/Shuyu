@@ -63,7 +63,7 @@ const _numberRange =
 const _numberSpan =
     '$_number(?:[ \\t　]*[-~～—–─━―、,，/／至到]+[ \\t　]*$_number)*';
 final _numbered = RegExp(
-  '(?:第[ \\t　]*(?:$_numberSpan|[（(【\\[［〖〔][ \\t　]*$_numberSpan[ \\t　]*[）)】\\]］〗〕])[ \\t　]*(?:[分大小]?[卷捲章节節部集篇]|[章节節回囘话話幕折季期更段册冊编編輯辑讲講场場局夜曲弹彈])|$_numberRange[章节節回囘话話幕折卷捲部集篇段册冊编編輯辑])',
+  '(?:第[ \\t　]*(?:$_numberSpan|[（(【\\[［〖〔][ \\t　]*$_numberSpan[ \\t　]*[）)】\\]］〗〕])[ \\t　]*(?:[分大小]?[卷捲章节節部集篇]|[章节節回囘话話幕折季期更段册冊编編輯辑讲講场場局夜曲弹彈])|$_numberRange[章节節回囘话話幕折卷捲部集篇段册冊编編輯辑]|分[卷捲节節]阅读[ \\t　]*$_numberRange)',
 );
 final _weakNumberedUnit = RegExp(r'[段册冊编編輯辑讲講场場局夜曲弹彈]$');
 final _headingOrdinal = RegExp('第[ \\t　]*($_number)');
@@ -80,8 +80,15 @@ const _cnUnits = {
 
 /// Reads the ordinal of headings like "第12章" or "第十二回"; null if unknown.
 int? headingOrdinal(String title) {
-  final m = _headingOrdinal.firstMatch(title);
-  if (m == null) return null;
+  final matches = _headingOrdinal.allMatches(title).toList(growable: false);
+  if (matches.isEmpty) return null;
+  var m = matches.first;
+  if (matches.length > 1) {
+    final afterFirst = title.substring(m.end).trimLeft();
+    if (afterFirst.isNotEmpty && _volumeSuffix.hasMatch(afterFirst[0])) {
+      m = matches[1];
+    }
+  }
   final token = m.group(1)!.replaceAllMapped(
     RegExp('[０-９]'),
     (d) => String.fromCharCode(d[0]!.codeUnitAt(0) - 0xFEE0),
@@ -119,7 +126,7 @@ final _bare = RegExp(
   '^(?:[（(][ \\t　]*($_numberSpan)[ \\t　]*[）)]|[【\\[［〖〔《「『〈<][ \\t　]*($_numberSpan)[ \\t　]*[】\\]］〗〕》」』〉>]|第[ \\t　]*($_numberRange)(?:[.．、:：]|[ \\t　]+|\$)|($_numberRange)(?:[.．、:：]|[ \\t　]*[—–─━―]+|[ \\t　]+-[ \\t　]+)|($_numberRange)[ \\t　]+|($_numberRange)\$)',
 );
 final _special = RegExp(
-  r'^(?:序章|序曲|序言|序幕|自序|代序|总序|序(?=$|[ \t　:：、—\-–）)】\]])|楔子|引子|引言|前言|前传|前傳|前篇|后篇|後篇|续篇|續篇|中篇|终章|終章|终曲|终幕|終幕|终篇|終篇|终卷|終卷|大结局|大結局|结局|結局|完本感言|完结感言|番外(?:篇|章|卷)?(?:[ \t　]*[0-9０-９一二三四五六七八九十百千万零〇两\u2460-\u2473]+)?|后记|後記|后日谈|後日談|跋|尾声|尾聲|外篇|外传|外傳|别传|別傳|正传|正傳|间章|間章|幕间|幕間|[上中下][篇卷部集册冊]|人物(?:介绍|简介)|设定集|背景设定|作品相关|内容简介)',
+  r'^(?:序章|序曲|序言|序幕|自序|代序|总序|序(?=$|[ \t　:：、·・—\-–）)】\]])|楔子|引子|引言|前言|前传|前傳|前篇|后篇|後篇|续篇|續篇|中篇|终章|終章|终曲|终幕|終幕|终篇|終篇|终卷|終卷|大结局|大結局|结局|結局|完本感言|完结感言|番外(?:篇|章|卷)?(?:[ \t　]*[0-9０-９一二三四五六七八九十百千万零〇两\u2460-\u2473]+)?|后记|後記|后日谈|後日談|跋|尾声|尾聲|外篇|外传|外傳|别传|別傳|正传|正傳|间章|間章|幕间|幕間|[上中下][篇卷部集册冊]|人物(?:介绍|简介)|设定集|背景设定|作品相关|内容简介)',
 );
 const _extendedTailPattern = r'[ \t　]*[：:；;—·｜–.|-][^\r\n。！？!?；;]{0,20}';
 final _extendedSpecial = RegExp(
@@ -158,7 +165,7 @@ final _directoryMarkerLine = RegExp(
 );
 final _openingBracket = RegExp(r'^[【\[［〖〔《「『〈<（(]');
 final _volumeSuffix = RegExp(r'[卷捲部集篇]$');
-final _sentencePunctuation = RegExp(r'[。！？!?，,；;“”]');
+final _sentencePunctuation = RegExp(r'[。！？!?，,；;“”…⋯]');
 final _bracketedGroup = RegExp(
   r'【[^】\n]*】|《[^》\n]*》|\[[^\]\n]*\]|［[^］\n]*］|（[^）\n]*）|\([^)\n]*\)|「[^」\n]*」|『[^』\n]*』|〖[^〗\n]*〗|〔[^〕\n]*〕|〈[^〉\n]*〉',
 );
@@ -185,7 +192,7 @@ final _titledBarePrefix = RegExp(
 final _bareTrailingSeparator = RegExp(r'^[\s:：、.．\-—–─━]');
 final _parenthesizedCandidate = RegExp(r'^[（(【\[［〖〔《「『〈<]');
 final _specialTailAllowed = RegExp(
-  r'^[\s\d０-９一二三四五六七八九十百千万零〇两:：、.．【\[［〖〔《「『（(】\]］〗〕》」』）)\-—–~～]',
+  r'^[\s\d０-９一二三四五六七八九十百千万零〇两:：、.．·・【\[［〖〔《「『（(】\]］〗〕》」』）)\-—–~～]',
 );
 final _bracketVolumeEnd = RegExp(
   r'^[【\[].*[卷捲部集篇].*(?:完|结束|END)[）)】\]]*$',
@@ -205,6 +212,18 @@ final _inlineHeadingBoundary = RegExp(
   '(?:第[ \\t　]*$_numberSpan[ \\t　]*[章节節回囘话話幕折卷捲部集篇季期更]'
   r'|chapter[ \t]+[0-9０-９ivxlcdm]+(?![a-z0-9０-９]))'
   r'[^。！？!?，,；;“”’\n]{0,40})$',
+  caseSensitive: false,
+);
+final _midLineHeadingBoundary = RegExp(
+  r'[。！？!?…~～”’」』）)】\]>》][ \t　\uFEFF\u200B]*'
+  r'((?:第[ \t　]*'
+  '$_numberSpan'
+  r'[ \t　]*[卷捲部集篇](?:[ \t　:：—\-–]+[^\s\n。！？!?，,；;“”‘’”’」』]{1,18})?[ \t　]+)?'
+  r'(?:第[ \t　]*'
+  '$_numberSpan'
+  r'[ \t　]*[章节節回囘话話幕折]|chapter[ \t]+[0-9０-９ivxlcdm]+(?![a-z0-9０-９]))'
+  r'(?:[ \t　:：、—\-–]+[^\s\n。！？!?，,；;“”‘’”’」』]{1,22})?)'
+  r'(?:　+|[ \t]{2,})(?=\S)',
   caseSensitive: false,
 );
 final _inlineSuffixProseStart = RegExp(
@@ -244,8 +263,9 @@ class _Heading {
     this.startBytes,
     this.contentBytes, {
     this.glued = false,
+    this.explicitVolume = '',
   });
-  final String title, family, key;
+  final String title, family, key, explicitVolume;
   final int start, content, wordsBefore, wordsAfter;
   final int startBytes, contentBytes;
   final bool weak, volume, glued;
@@ -263,11 +283,13 @@ class ChapterTextIndex {
   int length = 0;
   int byteLength = 0;
   int _lineStart = 0, _lineByteStart = 0;
-  int _indent = 0, _words = 0, _lineWords = 0;
+  int _indent = 0, _indentBytes = 0, _words = 0, _lineWords = 0;
   String _line = '';
+  String _fullLine = '';
   String _tail = '';
   bool _leading = true;
   bool _lineTruncated = false;
+  bool _fullLineTruncated = false;
   final _headings = <_Heading>[];
   final _directoryMarkers = <int>[];
 
@@ -308,7 +330,11 @@ class ChapterTextIndex {
       _lineWords += part.replaceAll(_wordIgnoredChars, '').length;
       if (_leading) {
         final trimmed = part.trimLeft();
-        _indent += part.length - trimmed.length;
+        final leadCount = part.length - trimmed.length;
+        if (leadCount > 0) {
+          _indent += leadCount;
+          _indentBytes += utf8.encode(part.substring(0, leadCount)).length;
+        }
         part = trimmed;
         if (part.isNotEmpty) _leading = false;
       }
@@ -318,6 +344,15 @@ class ChapterTextIndex {
         if (part.length > room) _lineTruncated = true;
       } else if (part.isNotEmpty) {
         _lineTruncated = true;
+      }
+      if (!_fullLineTruncated && part.isNotEmpty) {
+        const maxFullLine = 262144;
+        if (_fullLine.length + part.length <= maxFullLine) {
+          _fullLine += part;
+        } else {
+          _fullLine += part.substring(0, maxFullLine - _fullLine.length);
+          _fullLineTruncated = true;
+        }
       }
       if (part.isNotEmpty) {
         if (part.length >= 256) {
@@ -353,8 +388,20 @@ class ChapterTextIndex {
     final h = _parse(line, next, nextBytes);
     if (h != null) _headings.add(h);
     if (h == null || h.content < next) {
-      final inlineH = _parseInlineEnd(_tail, lineEnd, lineEndBytes, next, nextBytes);
-      if (inlineH != null && (h == null || inlineH.start > h.content)) {
+      final inlineH = _parseInlineEnd(
+        _tail,
+        lineEnd,
+        lineEndBytes,
+        next,
+        nextBytes,
+      );
+      if (!_fullLineTruncated && _fullLine.length >= 40) {
+        final minOffset = h == null ? _lineStart + _indent + 1 : h.content;
+        final maxOffset = inlineH?.start ?? lineEnd;
+        _parseMidLineHeadings(_fullLine, minOffset, maxOffset);
+      }
+      if (inlineH != null &&
+          (_headings.isEmpty || inlineH.start > _headings.last.content)) {
         _headings.add(inlineH);
       }
     }
@@ -364,10 +411,117 @@ class ChapterTextIndex {
     _words += _lineWords;
     _lineWords = 0;
     _line = '';
+    _fullLine = '';
     _tail = '';
     _indent = 0;
+    _indentBytes = 0;
     _leading = true;
     _lineTruncated = false;
+    _fullLineTruncated = false;
+  }
+
+  static bool _hasUnclosedQuoteBefore(String text, int limit) {
+    var dq = 0, cjk1 = 0, cjk2 = 0;
+    for (var i = 0; i < limit; i++) {
+      switch (text.codeUnitAt(i)) {
+        case 0x201C:
+          dq++;
+        case 0x201D:
+          if (dq > 0) dq--;
+        case 0x300C:
+          cjk1++;
+        case 0x300D:
+          if (cjk1 > 0) cjk1--;
+        case 0x300E:
+          cjk2++;
+        case 0x300F:
+          if (cjk2 > 0) cjk2--;
+      }
+    }
+    return dq > 0 || cjk1 > 0 || cjk2 > 0;
+  }
+
+  void _parseMidLineHeadings(String fullLine, int minOffset, int maxOffset) {
+    final baseOffset = _lineStart + _indent;
+    final baseBytes = _lineByteStart + _indentBytes;
+    var lastAcceptedEnd = 0;
+    for (final match in _midLineHeadingBoundary.allMatches(fullLine)) {
+      if (match.start < lastAcceptedEnd) continue;
+      final candidateRaw = match.group(1)!;
+      final candidateOffsetInMatch =
+          fullLine.indexOf(candidateRaw, match.start);
+      if (candidateOffsetInMatch < 0) continue;
+      final headingEndInFull = candidateOffsetInMatch + candidateRaw.length;
+      final start = baseOffset + candidateOffsetInMatch;
+      final content = baseOffset + headingEndInFull;
+      if (start < minOffset || content >= maxOffset) continue;
+      if (_hasUnclosedQuoteBefore(fullLine, candidateOffsetInMatch)) continue;
+
+      final candidate = candidateRaw.trim();
+      if (candidate.isEmpty ||
+          _endMarker.hasMatch(candidate) ||
+          _bracketVolumeEnd.hasMatch(candidate)) {
+        continue;
+      }
+      var explicitVol = '';
+      var m = _numbered.firstMatch(candidate) ?? _english.firstMatch(candidate);
+      if (m == null) continue;
+      if (_volumeSuffix.hasMatch(m.group(0)!)) {
+        final sub =
+            _numbered.allMatches(candidate, m.end).firstOrNull ??
+            _english.allMatches(candidate, m.end).firstOrNull;
+        if (sub == null || _volumeSuffix.hasMatch(sub.group(0)!)) continue;
+        explicitVol = candidate
+            .substring(0, sub.start)
+            .replaceFirst(RegExp(r'[\s　:：—\-–·・|｜/／]+$'), '')
+            .trim();
+        m = sub;
+      }
+      final token = m.group(0)!;
+      final suffix = candidate.substring(m.end);
+      if (_proseSuffix.hasMatch('${token[token.length - 1]}$suffix')) {
+        continue;
+      }
+      final prevWords = fullLine
+          .substring(lastAcceptedEnd, candidateOffsetInMatch)
+          .replaceAll(_wordIgnoredChars, '')
+          .length;
+      final remLimit = (maxOffset - baseOffset).clamp(0, fullLine.length);
+      final nextWords = fullLine
+          .substring(headingEndInFull, remLimit)
+          .replaceAll(_wordIgnoredChars, '')
+          .length;
+      if (prevWords < 12 || nextWords < 12) continue;
+
+      final prefixSlice = fullLine.substring(0, candidateOffsetInMatch);
+      final startBytes = baseBytes + utf8.encode(prefixSlice).length;
+      final contentBytes = startBytes + utf8.encode(candidateRaw).length;
+      final wordsBefore =
+          _words + prefixSlice.replaceAll(_wordIgnoredChars, '').length;
+      final wordsAfter =
+          wordsBefore + candidateRaw.replaceAll(_wordIgnoredChars, '').length;
+      final family = token.toLowerCase().startsWith('chapter')
+          ? 'english'
+          : token[token.length - 1];
+      final key = candidate.replaceAll(_headingKeyIgnored, '');
+      _headings.add(
+        _Heading(
+          candidate,
+          start,
+          content,
+          wordsBefore,
+          wordsAfter,
+          family,
+          false,
+          false,
+          key,
+          startBytes,
+          contentBytes,
+          explicitVolume: explicitVol,
+        ),
+      );
+      lastAcceptedEnd = match.end;
+    }
   }
 
   _Heading? _parseInlineEnd(
@@ -474,11 +628,13 @@ class ChapterTextIndex {
         _numbered.firstMatch(line) ??
         _volumeNumber.firstMatch(line) ??
         _english.firstMatch(line);
+    var explicitVolume = '';
     if (extended == null &&
         m != null &&
         (_volumeSuffix.hasMatch(m.group(0)!) ||
             m.group(0)!.startsWith('卷'))) {
-      final rest = line.substring(m.end);
+      final volMatch = m;
+      final rest = line.substring(volMatch.end);
       final sub = _numbered.firstMatch(rest) ?? _english.firstMatch(rest);
       if (sub != null && sub.start <= 36) {
         final subToken = sub.group(0)!;
@@ -487,10 +643,16 @@ class ChapterTextIndex {
             !_proseSuffix.hasMatch(
               '${subToken[subToken.length - 1]}$subSuffix',
             )) {
-          m =
-              _numbered.allMatches(line, m.end).firstOrNull ??
-              _english.allMatches(line, m.end).firstOrNull ??
-              m;
+          final nextMatch =
+              _numbered.allMatches(line, volMatch.end).firstOrNull ??
+              _english.allMatches(line, volMatch.end).firstOrNull;
+          if (nextMatch != null) {
+            explicitVolume = line
+                .substring(0, nextMatch.start)
+                .replaceFirst(RegExp(r'[\s　:：—\-–·・|｜/／]+$'), '')
+                .trim();
+            m = nextMatch;
+          }
         }
       }
     }
@@ -505,10 +667,14 @@ class ChapterTextIndex {
       if (m.start > 0) {
         final prefix = line.substring(0, m.start);
         final unbracketedPrefix = prefix.replaceAll(_bracketedGroup, '');
+        final prefixDisallowed = explicitVolume.isNotEmpty
+            ? _punctuation
+            : _sentencePunctuation;
         if (prefix.length > 48 ||
-            _sentencePunctuation.hasMatch(unbracketedPrefix)) {
+            prefixDisallowed.hasMatch(unbracketedPrefix)) {
           mValid = false;
-        } else if (_validHeadingPrefixEnd.hasMatch(prefix) ||
+        } else if (explicitVolume.isNotEmpty ||
+            _validHeadingPrefixEnd.hasMatch(prefix) ||
             _volumeSuffix.hasMatch(prefix) ||
             prefix == '正文') {
           mValid = true;
@@ -531,8 +697,10 @@ class ChapterTextIndex {
             lowerToken.startsWith('ep') ||
             lowerToken.startsWith('act') ||
             lowerToken.startsWith('vol');
+        final isSplitSection = token.startsWith('分');
         if (!token.startsWith('第') &&
             !token.startsWith('卷') &&
+            !isSplitSection &&
             !lowerToken.startsWith('chapter')) {
           mWeak = true;
         }
@@ -543,9 +711,10 @@ class ChapterTextIndex {
           mValid = false;
         }
         final mIsVolume =
-            _volumeSuffix.hasMatch(token) ||
-            _triPartVolume.hasMatch(token) ||
-            _englishVolumePrefix.hasMatch(token);
+            !isSplitSection &&
+            (_volumeSuffix.hasMatch(token) ||
+                _triPartVolume.hasMatch(token) ||
+                _englishVolumePrefix.hasMatch(token));
         if (mValid && mIsVolume) {
           final volumeGlued =
               !mWeak &&
@@ -564,11 +733,14 @@ class ChapterTextIndex {
         }
         if (mValid) {
           weak = mWeak;
-          family = isEnglish ? 'english' : token[token.length - 1];
+          family = isSplitSection
+              ? 'split_part'
+              : (isEnglish ? 'english' : token[token.length - 1]);
         }
       }
       if (!mValid) {
         m = null;
+        explicitVolume = '';
         if (opening != null &&
             _special.matchAsPrefix(line) == null) {
           opening = null;
@@ -667,11 +839,15 @@ class ChapterTextIndex {
     }
     final token = m.group(0)!;
     final isVolume =
-        (_volumeSuffix.hasMatch(token) && family != 'special') ||
-        _triPartVolume.hasMatch(token) ||
-        _englishVolumePrefix.hasMatch(token);
+        family != 'split_part' &&
+        ((_volumeSuffix.hasMatch(token) && family != 'special') ||
+            _triPartVolume.hasMatch(token) ||
+            _englishVolumePrefix.hasMatch(token));
     final suffix = line.substring(m.end);
-    if (_proseSuffix.hasMatch('${token[token.length - 1]}$suffix')) return null;
+    if (family != 'split_part' &&
+        _proseSuffix.hasMatch('${token[token.length - 1]}$suffix')) {
+      return null;
+    }
     // In-body numbered lists need repeated evidence and never accept sentences.
     final allowWeakGlued = family == 'parenthesized' && strippedPrefix.isEmpty;
     if (weak && !_isAcceptableWeakSuffix(suffix, allowGlued: allowWeakGlued)) {
@@ -733,6 +909,7 @@ class ChapterTextIndex {
       _lineByteStart,
       contentBytes,
       glued: glued,
+      explicitVolume: explicitVolume,
     );
   }
 
@@ -749,13 +926,17 @@ class ChapterTextIndex {
       families.update(h.family, (n) => n + 1, ifAbsent: () => 1);
     }
     final weakEvidence = <String, int>{};
+    final strongEvidence = <String, int>{};
     for (var i = 0; i < _headings.length; i++) {
       final h = _headings[i];
-      if (!h.weak) continue;
       final next = i + 1 < _headings.length ? _headings[i + 1] : null;
       final minWords = h.glued ? 45 : 8;
       if ((next?.wordsBefore ?? _words) - h.wordsAfter > minWords) {
-        weakEvidence.update(h.family, (n) => n + 1, ifAbsent: () => 1);
+        if (h.weak) {
+          weakEvidence.update(h.family, (n) => n + 1, ifAbsent: () => 1);
+        } else {
+          strongEvidence.update(h.family, (n) => n + 1, ifAbsent: () => 1);
+        }
       }
     }
     final dominant =
@@ -798,11 +979,21 @@ class ChapterTextIndex {
     var index = -1;
     var headings = _headings.where((h) {
       index++;
-      if (h.weak && (weakEvidence[h.family] ?? 0) < 2) {
-        return h.wordsAfter < (index + 1 < _headings.length
-                ? _headings[index + 1].wordsBefore
-                : _words) &&
-            continuesMainSequence(index);
+      if (h.weak) {
+        final weakCount = weakEvidence[h.family] ?? 0;
+        final canBorrowStrong =
+            h.family != 'bare' &&
+            h.family != 'parenthesized' &&
+            !_weakNumberedUnit.hasMatch(h.family);
+        final totalEvidence =
+            weakCount + (canBorrowStrong ? (strongEvidence[h.family] ?? 0) : 0);
+        if (totalEvidence < 2 || weakCount == 0) {
+          return h.wordsAfter <
+                  (index + 1 < _headings.length
+                      ? _headings[index + 1].wordsBefore
+                      : _words) &&
+              continuesMainSequence(index);
+        }
       }
       if (dominant.isNotEmpty &&
           dominant.first.value >= 8 &&
@@ -821,6 +1012,7 @@ class ChapterTextIndex {
       lastHeadingByKey[headings[i].key] = i;
     }
     final directory = <_Heading>{};
+    final directoryKeys = <String>{};
     var markerCursor = 0;
     var inMarkedToc = false;
     for (var i = 0; i + 1 < headings.length; i++) {
@@ -841,20 +1033,25 @@ class ChapterTextIndex {
       if (gapWords == 0 &&
           (repeated || (inMarkedToc && !isVolumeBeforeRealChapter))) {
         directory.add(h);
+        directoryKeys.add(h.key);
         continue;
       }
+      final afterRestartsToc =
+          afterRepeated ||
+          directoryKeys.contains(after.key) ||
+          after.volume ||
+          after.family == 'special';
       if (i > 0 &&
           directory.contains(headings[i - 1]) &&
           repeated &&
-          gapWords <= 40) {
+          (gapWords <= 40 || (inMarkedToc || afterRestartsToc))) {
         directory.add(h);
+        directoryKeys.add(h.key);
+        inMarkedToc = false;
         continue;
       }
       if (gapWords > 0 && !repeated) {
         inMarkedToc = false;
-      }
-      if (!repeated && gapWords > 200 && markerCursor >= _directoryMarkers.length) {
-        break;
       }
     }
     headings = headings.where((h) => !directory.contains(h)).toList();
@@ -894,6 +1091,9 @@ class ChapterTextIndex {
       while (volumeCursor < volumes.length &&
           volumes[volumeCursor].start <= h.start) {
         volume = volumes[volumeCursor++].title;
+      }
+      if (h.explicitVolume.isNotEmpty) {
+        volume = h.explicitVolume;
       }
       if (bodyWords <= 0) continue;
       chapters.add(

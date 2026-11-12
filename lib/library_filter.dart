@@ -37,22 +37,33 @@ class LibraryFilter extends ChangeNotifier {
   void resetForTesting() {
     _tags.clear();
     _formats.clear();
+    _untaggedOnly = false;
   }
 
   final Set<String> _tags = {};
   final Set<BookFormatFilter> _formats = {};
+  bool _untaggedOnly = false;
 
   Set<String> get tagIds => Set.unmodifiable(_tags);
   Set<BookFormatFilter> get formats => Set.unmodifiable(_formats);
-  bool get hasTags => _tags.isNotEmpty;
-  bool get isEmpty => _tags.isEmpty && _formats.isEmpty;
+  bool get untaggedOnly => _untaggedOnly;
+  bool get hasTags => _tags.isNotEmpty || _untaggedOnly;
+  bool get isEmpty => _tags.isEmpty && _formats.isEmpty && !_untaggedOnly;
 
   void toggleTag(String id) {
+    _untaggedOnly = false;
     if (!_tags.remove(id)) _tags.add(id);
     notifyListeners();
   }
 
+  void toggleUntagged() {
+    _untaggedOnly = !_untaggedOnly;
+    if (_untaggedOnly) _tags.clear();
+    notifyListeners();
+  }
+
   void setSingleTag(String? id) {
+    _untaggedOnly = false;
     _tags
       ..clear()
       ..addAll([?id]);
@@ -71,6 +82,7 @@ class LibraryFilter extends ChangeNotifier {
     if (isEmpty) return;
     _tags.clear();
     _formats.clear();
+    _untaggedOnly = false;
     notifyListeners();
   }
 
@@ -80,6 +92,9 @@ class LibraryFilter extends ChangeNotifier {
       _tags.removeWhere((id) => store.tagById(id) == null);
 
   bool matchesTags(int bookId, TagMatchMode mode, {TagStore? store}) {
+    if (_untaggedOnly) {
+      return (store ?? TagStore.shared).tagsForBook(bookId).isEmpty;
+    }
     if (_tags.isEmpty) return true;
     final own = (store ?? TagStore.shared)
         .tagsForBook(bookId)

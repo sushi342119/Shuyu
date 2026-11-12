@@ -845,7 +845,7 @@ class _LiquidGlassState extends State<LiquidGlass> {
           ? Duration.zero
           : _pressed
           ? NovelMotion.contact
-          : NovelMotion.enter,
+          : const Duration(milliseconds: 180),
       curve: NovelMotion.settle,
       child: NativeBackdrop(
         bypass: widget.transparent,
@@ -894,7 +894,10 @@ class _LiquidGlassState extends State<LiquidGlass> {
                         },
                   onTapCancel: widget.onTap == null
                       ? null
-                      : () => _cancelledPress = true,
+                      : () => setState(() {
+                          _cancelledPress = true;
+                          _pressed = false;
+                        }),
                   onHighlightChanged: widget.onTap == null
                       ? null
                       : (pressed) => setState(() {
@@ -994,13 +997,14 @@ class GlassIconButton extends StatelessWidget {
     final compact = compactMainPage || CompactMainPageControls.of(context);
     final geometry = _compactControlGeometry(context);
     final size = compact ? Size(48, geometry.hit) : const Size.square(46);
+    final compactScaleY = 40 / geometry.hit;
     final content = SizedBox(
       width: size.width,
       height: size.height,
       child: _unscaleCompactContent(
         compact: compact,
         scaleX: 40 / 48,
-        scaleY: geometry.scale,
+        scaleY: compactScaleY,
         child:
             child ??
             ArchiveIcon(
@@ -1022,7 +1026,7 @@ class GlassIconButton extends StatelessWidget {
         child: _scaleCompactFace(
           compact: compact,
           scaleX: 40 / 48,
-          scaleY: geometry.scale,
+          scaleY: compactScaleY,
           child: liveGlass
               ? LiquidGlass(
                   radius: 24,
@@ -1479,12 +1483,12 @@ class _ContentPanelState extends State<ContentPanel> {
     final theme = Theme.of(context);
     final dark = theme.brightness == Brightness.dark;
     return AnimatedScale(
-      scale: _pressed && !reduceMotion ? .975 : 1,
+      scale: _pressed && !reduceMotion ? .98 : 1,
       duration: reduceMotion
           ? Duration.zero
           : _pressed
           ? NovelMotion.contact
-          : NovelMotion.enter,
+          : const Duration(milliseconds: 180),
       curve: NovelMotion.settle,
       child: DecoratedBox(
         decoration: BoxDecoration(
@@ -1520,6 +1524,9 @@ class _ContentPanelState extends State<ContentPanel> {
                     setState(() => _iconActivation++);
                     widget.onTap!();
                   },
+            onTapCancel: widget.onTap == null
+                ? null
+                : () => setState(() => _pressed = false),
             onHighlightChanged: widget.onTap == null
                 ? null
                 : (pressed) => setState(() => _pressed = pressed),
@@ -1571,7 +1578,7 @@ class _JellyTapSurfaceState extends State<JellyTapSurface> {
           ? Duration.zero
           : _pressed
           ? NovelMotion.contact
-          : NovelMotion.enter,
+          : const Duration(milliseconds: 180),
       curve: NovelMotion.settle,
       child: Material(
         color: Colors.transparent,
@@ -1582,7 +1589,10 @@ class _JellyTapSurfaceState extends State<JellyTapSurface> {
           highlightColor: Colors.transparent,
           onTapCancel: widget.onTap == null
               ? null
-              : () => _cancelledPress = true,
+              : () => setState(() {
+                  _cancelledPress = true;
+                  _pressed = false;
+                }),
           onHighlightChanged: widget.onTap == null
               ? null
               : (pressed) => setState(() {

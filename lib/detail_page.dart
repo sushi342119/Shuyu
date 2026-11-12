@@ -230,6 +230,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   bool _contentStarted = false;
   bool _readerOpening = false;
   bool _shelfChanging = false;
+  bool _reverseChapters = false;
   int? _resumeChapter;
 
   /// 当前显示的书籍（编辑后更新，刷新详情页）。
@@ -674,7 +675,44 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      sectionHeader(context, '目录', ''),
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: sectionHeader(
+                                              context,
+                                              '目录',
+                                              novel.chapters.isEmpty
+                                                  ? ''
+                                                  : '共 ${novel.chapters.length} 章',
+                                            ),
+                                          ),
+                                          if (novel.chapters.length > 1) ...[
+                                            GlassIconButton(
+                                              key: const ValueKey(
+                                                'detail-directory-sort',
+                                              ),
+                                              icon: CupertinoIcons
+                                                  .arrow_up_arrow_down,
+                                              label: _reverseChapters
+                                                  ? '切换正序'
+                                                  : '切换倒序',
+                                              onPressed: () => setState(
+                                                () => _reverseChapters =
+                                                    !_reverseChapters,
+                                              ),
+                                            ),
+                                            GlassIconButton(
+                                              key: const ValueKey(
+                                                'detail-directory-search',
+                                              ),
+                                              icon: CupertinoIcons.search,
+                                              label: '搜索目录',
+                                              onPressed: () =>
+                                                  _openDirectorySheet(context),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
                                       const SizedBox(height: 7),
                                       if (novel.chapters.isEmpty)
                                         const Text('暂无章节'),
@@ -694,13 +732,18 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                         // visible/cache-nearby rows build, lay out and paint.
                         sliver: SliverList.builder(
                           itemCount: novel.chapters.length,
-                          itemBuilder: (context, index) => RevealFromTop(
-                            key: ValueKey('detail-chapter-$index'),
-                            animation: _contentIntro,
-                            start: .48 + index.clamp(0, 8) * .025,
-                            end: .78 + index.clamp(0, 8) * .025,
-                            child: _chapterRow(context, index),
-                          ),
+                          itemBuilder: (context, index) {
+                            final chapterIndex = _reverseChapters
+                                ? novel.chapters.length - 1 - index
+                                : index;
+                            return RevealFromTop(
+                              key: ValueKey('detail-chapter-$chapterIndex'),
+                              animation: _contentIntro,
+                              start: .48 + index.clamp(0, 8) * .025,
+                              end: .78 + index.clamp(0, 8) * .025,
+                              child: _chapterRow(context, chapterIndex),
+                            );
+                          },
                         ),
                       ),
                     SliverToBoxAdapter(
@@ -763,6 +806,23 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     );
   }
 
+  Future<void> _openDirectorySheet(BuildContext context) async {
+    if (novel.chapters.isEmpty) return;
+    final picked = await showJellySheet<int>(
+      context: context,
+      reduceMotion: state.reduceMotion,
+      builder: (_) => ReaderCatalogue(
+        novel: novel,
+        currentChapter: state.chapterForNovel(novel),
+        cache: repository is OfflineNovelRepository
+            ? (repository as OfflineNovelRepository).cache
+            : null,
+      ),
+    );
+    if (!context.mounted || picked == null) return;
+    await _openReader(context, picked);
+  }
+
   String get _readLabel {
     if (isLoading) return '正在加载目录';
     if (loadError != null) return '重试加载目录';
@@ -775,62 +835,77 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     return '$action · 第${state.chapterForNovel(novel) + 1}$unit';
   }
 
-  Widget _chapterRow(BuildContext context, int index) => JellyTapSurface(
-    onTap: () => _openReader(context, index),
-    child: Container(
-      padding: const EdgeInsets.symmetric(vertical: 17),
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: Theme.of(context).dividerColor),
-        ),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 36,
-            child: Text(
-              (index + 1).toString().padLeft(2, '0'),
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                fontSize: 12,
-              ),
-            ),
+  Widget _chapterRow(BuildContext context, int index) {
+    final chapter = novel.chapters[index];
+    final showVolume =
+        chapter.volume.isNotEmpty &&
+        !chapter.title.trimLeft().startsWith(chapter.volume.trim());
+    return JellyTapSurface(
+      onTap: () => _openReader(context, index),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 17),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(color: Theme.of(context).dividerColor),
           ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (novel.chapters[index].volume.isNotEmpty)
-                  Text(
-                    novel.chapters[index].volume,
-                    style: const TextStyle(fontSize: 11),
-                  ),
-                Text(
-                  novel.chapters[index].title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w500,
-                    fontSize: 14,
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 44,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  (index + 1).toString().padLeft(2, '0'),
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                    fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
-              ],
-            ),
-          ),
-          if (index == _resumeChapter) ...[
-            const SizedBox(width: 8),
-            Text(
-              '上次阅读',
-              style: TextStyle(
-                fontSize: 10,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (showVolume)
+                    Text(
+                      chapter.volume,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  Text(
+                    chapter.title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w500,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (index == _resumeChapter) ...[
+              const SizedBox(width: 8),
+              Text(
+                '上次阅读',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
+            const ArchiveIcon(CupertinoIcons.chevron_right, size: 14),
           ],
-          const ArchiveIcon(CupertinoIcons.chevron_right, size: 14),
-        ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 
   Widget _header(BuildContext context) => Row(
     children: [

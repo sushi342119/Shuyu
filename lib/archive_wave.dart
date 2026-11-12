@@ -13,6 +13,33 @@ import 'archive_shelf_geometry.dart';
 import 'catalog.dart';
 import 'performance_preferences.dart';
 
+String _carouselSubtitleFor(Novel book) {
+  final author = book.author.trim();
+  if (book.genre == '本地' || (book.id >= 0x40000000 && book.id <= 0x7fffffff)) {
+    final summaryParts = book.summary
+        .split(' · ')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty && part != '本地书籍')
+        .take(3)
+        .toList(growable: false);
+    if (summaryParts.isNotEmpty) {
+      return [
+        if (author.isNotEmpty) author,
+        ...summaryParts,
+      ].join(' · ');
+    }
+    final count = book.chapters.isNotEmpty
+        ? book.chapters.length
+        : book.chapterCount;
+    return [
+      if (author.isNotEmpty) author else '本地藏书',
+      if (count > 0) '$count 章',
+    ].join(' · ');
+  }
+  final status = book.isComplete ? '已完结' : '连载中';
+  return author.isEmpty ? status : '$author · $status';
+}
+
 /// Scroll position is the single clock for the continuous extraction wave.
 class ArchiveFileCarousel extends StatefulWidget {
   const ArchiveFileCarousel({
@@ -375,7 +402,7 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
                                     ),
                                   ),
                                   Text(
-                                    '${book.author} · ${book.isComplete ? '已完结' : '连载中'}',
+                                    _carouselSubtitleFor(book),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
@@ -402,45 +429,53 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
               _entryLabel(
                 ValueListenableBuilder<int>(
                   valueListenable: _active,
-                  builder: (context, index, _) => Wrap(
-                    key: const ValueKey('archive-carousel-footer'),
-                    alignment: WrapAlignment.spaceBetween,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 8,
-                    runSpacing: 4,
-                    children: [
-                      if (widget.books.length > 1)
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              tooltip: '上一份档案',
-                              onPressed: () => _step(-1),
-                              icon: const ArchiveIcon(CupertinoIcons.chevron_left,
-                                size: 13,
+                  builder: (context, index, _) {
+                    final digits = math.max(
+                      2,
+                      widget.books.length.toString().length,
+                    );
+                    return Wrap(
+                      key: const ValueKey('archive-carousel-footer'),
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        if (widget.books.length > 1)
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                tooltip: '上一份档案',
+                                onPressed: () => _step(-1),
+                                icon: const ArchiveIcon(
+                                  CupertinoIcons.chevron_left,
+                                  size: 13,
+                                ),
+                                visualDensity: VisualDensity.compact,
                               ),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                            Semantics(
-                              label:
-                                  '第 ${index % widget.books.length + 1} 本，共 ${widget.books.length} 本，循环浏览',
-                              child: ArchiveCode(
-                                '${(index % widget.books.length + 1).toString().padLeft(2, '0')} / ${widget.books.length.toString().padLeft(2, '0')}',
+                              Semantics(
+                                label:
+                                    '第 ${index % widget.books.length + 1} 本，共 ${widget.books.length} 本，循环浏览',
+                                child: ArchiveCode(
+                                  '${(index % widget.books.length + 1).toString().padLeft(digits, '0')} / ${widget.books.length.toString().padLeft(digits, '0')}',
+                                ),
                               ),
-                            ),
-                            IconButton(
-                              tooltip: '下一份档案',
-                              onPressed: () => _step(1),
-                              icon: const ArchiveIcon(CupertinoIcons.chevron_right,
-                                size: 13,
+                              IconButton(
+                                tooltip: '下一份档案',
+                                onPressed: () => _step(1),
+                                icon: const ArchiveIcon(
+                                  CupertinoIcons.chevron_right,
+                                  size: 13,
+                                ),
+                                visualDensity: VisualDensity.compact,
                               ),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                          ],
-                        ),
-                      ?widget.footerAction,
-                    ],
-                  ),
+                            ],
+                          ),
+                        ?widget.footerAction,
+                      ],
+                    );
+                  },
                 ),
                 .72,
               ),

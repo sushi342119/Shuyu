@@ -36,6 +36,13 @@ class SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final localLib = LocalPlatform.android ? localLibraryOf(repository) : null;
+    final offlineRepo = switch (repository) {
+      final OfflineNovelRepository o => o,
+      CompositeNovelRepository(:final remote)
+          when remote is OfflineNovelRepository =>
+        remote,
+      _ => null,
+    };
     final updateScope = AppUpdatesScope.maybeOf(context);
     final versionText =
         '版本 ${updateScope?.installed?.version ?? currentAppVersion}'
@@ -43,262 +50,292 @@ class SettingsPage extends StatelessWidget {
         '${updateScope?.available == true ? ' · 有新版本' : ''}';
 
     return AnimatedBuilder(
-      animation: state.settingsChanges,
-      builder: (context, child) => GlassHeaderLayout(
-        showHeader: showHeader,
-        header: buildHeader(context),
-        body: ListView(
-          key: const PageStorageKey('settings'),
-          cacheExtent: 0,
-          padding: EdgeInsets.fromLTRB(
-            24,
-            MediaQuery.paddingOf(context).top + FrostedHeader.toolbarHeight + 8,
-            24,
-            MediaQuery.paddingOf(context).bottom + 120,
-          ),
-          children: [
-            // 01 / 书库：最常用的本地书库入口放在最前。
-            sectionHeader(context, '书库', '本地文件 · 标签 · 备份'),
-            const SizedBox(height: 14),
-            ContentPanel(
-              child: _settingsToolList(context, [
-                if (localLib != null) ...[
-                  _SettingsBentoItem(
-                    key: const ValueKey('settings-local-library'),
-                    icon: CupertinoIcons.book,
-                    title: '本地书库',
-                    subtitle: '选择文件夹，扫描导入 TXT / EPUB / PDF',
-                    onTap: () => pushNovelPage<void>(
-                      context,
-                      LocalLibraryPage(
-                        state: state,
-                        local: localLib,
-                        repository: repository!,
-                      ),
-                      reduceMotion: state.reduceMotion,
-                    ),
-                  ),
-                  _SettingsBentoItem(
-                    key: const ValueKey('settings-tag-manage'),
-                    icon: CupertinoIcons.tag,
-                    title: '标签管理',
-                    subtitle: '新建、重命名或删除书架标签',
-                    onTap: () => pushNovelPage<void>(
-                      context,
-                      TagManagePage(state: state, local: localLib),
-                      reduceMotion: state.reduceMotion,
-                    ),
-                  ),
-                ],
-                _SettingsBentoItem(
-                  key: const ValueKey('settings-backup'),
-                  icon: CupertinoIcons.archivebox,
-                  title: '备份与恢复',
-                  subtitle: '导出或恢复书架、进度、书签与设置',
-                  onTap: () => pushNovelPage<void>(
-                    context,
-                    LibraryBackupPage(state: state),
-                    reduceMotion: state.reduceMotion,
-                  ),
-                ),
-              ]),
+      animation: Listenable.merge([
+        state.settingsChanges,
+        ?localLib,
+        ?TagStore.maybeShared,
+      ]),
+      builder: (context, child) {
+        final localCount = localLib?.books.length ?? 0;
+        final tagCount = TagStore.maybeShared?.tags.length ?? 0;
+        return GlassHeaderLayout(
+          showHeader: showHeader,
+          header: buildHeader(context),
+          body: ListView(
+            key: const PageStorageKey('settings'),
+            cacheExtent: 0,
+            padding: EdgeInsets.fromLTRB(
+              24,
+              MediaQuery.paddingOf(context).top +
+                  FrostedHeader.toolbarHeight +
+                  8,
+              24,
+              MediaQuery.paddingOf(context).bottom + 120,
             ),
-            const SizedBox(height: 24),
-
-            // 02 / 阅读偏好：显示设置在前，进入子页的工具在后。
-            sectionHeader(context, '阅读偏好', '外观 · 排版 · 工具'),
-            const SizedBox(height: 14),
-            ContentPanel(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _appearanceSetting(context),
-                  _settingsDivider(context),
-                  ReaderValueSlider(
-                    sliderKey: const ValueKey('settings-font-slider'),
-                    label: '阅读字号',
-                    value: state.fontSize,
-                    min: readerFontSizeMin,
-                    max: readerFontSizeMax,
-                    divisions: 16,
-                    format: (value) => '${value.round()} pt',
-                    onCommitted: (value) => _savePreference(
-                      context,
-                      () => state.setFontSize(value),
-                    ),
-                  ),
-                  if (LocalPlatform.android) ...[
-                    _settingsDivider(context),
-                    Row(
-                      children: [
-                        _settingsIconBadge(context, CupertinoIcons.lightbulb),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Text(
-                            '阅读时保持亮屏',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                        CupertinoSwitch(
-                          value: state.keepScreenOn,
-                          activeTrackColor: Theme.of(
-                            context,
-                          ).colorScheme.primary,
-                          onChanged: (value) => _savePreference(
-                            context,
-                            () => state.setKeepScreenOn(value),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                  _settingsDivider(context),
-                  _settingsToolList(context, [
-                    // Same record as the reader's 亮度 sheet (synced both ways).
-                    _SettingsBentoItem(
-                      key: const ValueKey('settings-reader-paper'),
-                      icon: CupertinoIcons.circle_lefthalf_fill,
-                      title: '纸色与夜读',
-                      subtitle: '纸色、夜读亮度与暖光',
-                      trailingText: state.readerPreferences.paper.label,
-                      onTap: () =>
-                          showReaderAppearanceSheet(context, state: state),
-                    ),
-                    _SettingsBentoItem(
-                      key: const ValueKey('settings-palette-page'),
-                      icon: CupertinoIcons.paintbrush,
-                      title: '主题调节',
-                      subtitle: '界面极光与纸张色系',
-                      onTap: () => pushNovelPage<void>(
-                        context,
-                        PaletteSettingsPage(state: state),
-                        reduceMotion: state.reduceMotion,
-                      ),
-                    ),
-                    _SettingsBentoItem(
-                      key: const ValueKey('settings-font-settings-page'),
-                      icon: CupertinoIcons.textformat_alt,
-                      title: '字体管理',
-                      subtitle: '内置与导入字库',
-                      onTap: () => pushNovelPage<void>(
-                        context,
-                        FontSettingsPage(state: state),
-                        reduceMotion: state.reduceMotion,
-                      ),
-                    ),
-                    _SettingsBentoItem(
-                      key: const ValueKey('settings-purification-rules'),
-                      icon: CupertinoIcons.wand_stars,
-                      title: '正文替换',
-                      subtitle: '正则与文本纠错',
-                      onTap: () => showReaderPurificationSheet(
-                        context: context,
-                        reduceMotion: state.reduceMotion,
-                      ),
-                    ),
-                    _SettingsBentoItem(
-                      key: const ValueKey('settings-reading-widget-page'),
-                      icon: CupertinoIcons.rectangle_on_rectangle,
-                      title: '桌面阅读小组件',
-                      subtitle: '配置主屏幕阅读进度卡片',
-                      onTap: () => pushNovelPage<void>(
-                        context,
-                        ReadingWidgetSettingsPage(state: state),
-                        reduceMotion: state.reduceMotion,
-                      ),
-                    ),
-                  ]),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // 03 / 阅读记录：历史、统计、书签与离线缓存。
-            if (repository != null) ...[
-              sectionHeader(context, '阅读记录', '历史 · 统计 · 缓存'),
+            children: [
+              // 01 / 书库：最常用的本地书库入口放在最前。
+              sectionHeader(context, '书库', '本地文件 · 标签 · 备份'),
               const SizedBox(height: 14),
               ContentPanel(
                 child: _settingsToolList(context, [
-                  if (repository case final NovelRepository source) ...[
+                  if (localLib != null) ...[
                     _SettingsBentoItem(
-                      key: const ValueKey('settings-reading-history'),
-                      icon: CupertinoIcons.clock,
-                      title: '阅读历史',
-                      subtitle: '足迹与章节续读',
-                      onTap: () => openReadingHistory(context, state, source),
-                    ),
-                    _SettingsBentoItem(
-                      key: const ValueKey('settings-reading-statistics'),
-                      icon: CupertinoIcons.chart_bar,
-                      title: '阅读统计',
-                      subtitle: '阅读时长与日历报告',
+                      key: const ValueKey('settings-local-library'),
+                      icon: CupertinoIcons.book,
+                      title: '本地书库',
+                      subtitle: '选择文件夹，扫描导入 TXT / EPUB / PDF / MOBI',
+                      trailingText: localCount > 0 ? '$localCount 本' : null,
                       onTap: () => pushNovelPage<void>(
                         context,
-                        ReadingStatisticsPage(state: state, repository: source),
-                        reduceMotion: state.reduceMotion,
-                      ),
-                    ),
-                    _SettingsBentoItem(
-                      key: const ValueKey('settings-bookmarks'),
-                      icon: CupertinoIcons.bookmark,
-                      title: '书签与划线',
-                      subtitle: '汇总全部书签与批注',
-                      onTap: () => pushNovelPage<void>(
-                        context,
-                        BookmarkLibraryPage(state: state, repository: source),
-                        reduceMotion: state.reduceMotion,
-                      ),
-                    ),
-                  ],
-                  if (repository case final OfflineNovelRepository offline)
-                    _SettingsBentoItem(
-                      icon: CupertinoIcons.cloud_download,
-                      title: '缓存管理',
-                      subtitle: '管理已下载章节与离线缓存空间',
-                      onTap: () => pushNovelPage<void>(
-                        context,
-                        OfflineCachePage(
-                          repository: offline,
-                          reduceMotion: state.reduceMotion,
-                          onOpen: (pageContext, novel) => openDetail(
-                            pageContext,
-                            novel,
-                            state,
-                            offline,
-                            fromCache: true,
-                          ),
+                        LocalLibraryPage(
+                          state: state,
+                          local: localLib,
+                          repository: repository!,
                         ),
                         reduceMotion: state.reduceMotion,
                       ),
                     ),
+                    _SettingsBentoItem(
+                      key: const ValueKey('settings-local-duplicates'),
+                      icon: CupertinoIcons.doc_on_doc,
+                      title: '重复小说清理',
+                      subtitle: '按内容指纹或书名排查重复文件',
+                      onTap: () => pushNovelPage<void>(
+                        context,
+                        LocalDuplicatesPage(local: localLib, state: state),
+                        reduceMotion: state.reduceMotion,
+                      ),
+                    ),
+                    _SettingsBentoItem(
+                      key: const ValueKey('settings-tag-manage'),
+                      icon: CupertinoIcons.tag,
+                      title: '标签管理',
+                      subtitle: '新建、重命名或删除书架标签',
+                      trailingText: tagCount > 0 ? '$tagCount 个' : null,
+                      onTap: () => pushNovelPage<void>(
+                        context,
+                        TagManagePage(state: state, local: localLib),
+                        reduceMotion: state.reduceMotion,
+                      ),
+                    ),
+                  ],
+                  _SettingsBentoItem(
+                    key: const ValueKey('settings-backup'),
+                    icon: CupertinoIcons.archivebox,
+                    title: '备份与恢复',
+                    subtitle: '导出或恢复书架、进度、书签与设置',
+                    onTap: () => pushNovelPage<void>(
+                      context,
+                      LibraryBackupPage(state: state),
+                      reduceMotion: state.reduceMotion,
+                    ),
+                  ),
                 ]),
               ),
               const SizedBox(height: 24),
-            ],
 
-            AppearancePerformancePanel(state: state),
-            const SizedBox(height: 24),
-
-            // 系统与关于：版本信息与在线更新。
-            sectionHeader(context, '系统与关于', '版本 · 更新'),
-            const SizedBox(height: 14),
-            ContentPanel(
-              child: _settingsNavRow(
-                context,
-                rowKey: const ValueKey('settings-app-update'),
-                icon: CupertinoIcons.arrow_down_circle,
-                title: '关于书屿',
-                subtitle: versionText,
-                onTap: () => pushNovelPage<void>(
-                  context,
-                  AppUpdatePage(updates: updateScope),
-                  reduceMotion: state.reduceMotion,
+              // 02 / 阅读偏好：显示设置在前，进入子页的工具在后。
+              sectionHeader(context, '阅读偏好', '外观 · 排版 · 工具'),
+              const SizedBox(height: 14),
+              ContentPanel(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _appearanceSetting(context),
+                    _settingsDivider(context),
+                    ReaderValueSlider(
+                      sliderKey: const ValueKey('settings-font-slider'),
+                      label: '阅读字号',
+                      value: state.fontSize,
+                      min: readerFontSizeMin,
+                      max: readerFontSizeMax,
+                      divisions: 16,
+                      format: (value) => '${value.round()} pt',
+                      onCommitted: (value) => _savePreference(
+                        context,
+                        () => state.setFontSize(value),
+                      ),
+                    ),
+                    if (LocalPlatform.android) ...[
+                      _settingsDivider(context),
+                      Row(
+                        children: [
+                          _settingsIconBadge(
+                            context,
+                            CupertinoIcons.lightbulb,
+                          ),
+                          const SizedBox(width: 12),
+                          const Expanded(
+                            child: Text(
+                              '阅读时保持亮屏',
+                              style: TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          CupertinoSwitch(
+                            value: state.keepScreenOn,
+                            activeTrackColor: Theme.of(
+                              context,
+                            ).colorScheme.primary,
+                            onChanged: (value) => _savePreference(
+                              context,
+                              () => state.setKeepScreenOn(value),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    _settingsDivider(context),
+                    _settingsToolList(context, [
+                      // Same record as the reader's 亮度 sheet (synced both ways).
+                      _SettingsBentoItem(
+                        key: const ValueKey('settings-reader-paper'),
+                        icon: CupertinoIcons.circle_lefthalf_fill,
+                        title: '纸色与夜读',
+                        subtitle: '纸色、夜读亮度与暖光',
+                        trailingText: state.readerPreferences.paper.label,
+                        onTap: () =>
+                            showReaderAppearanceSheet(context, state: state),
+                      ),
+                      _SettingsBentoItem(
+                        key: const ValueKey('settings-palette-page'),
+                        icon: CupertinoIcons.paintbrush,
+                        title: '主题调节',
+                        subtitle: '界面极光与纸张色系',
+                        onTap: () => pushNovelPage<void>(
+                          context,
+                          PaletteSettingsPage(state: state),
+                          reduceMotion: state.reduceMotion,
+                        ),
+                      ),
+                      _SettingsBentoItem(
+                        key: const ValueKey('settings-font-settings-page'),
+                        icon: CupertinoIcons.textformat_alt,
+                        title: '字体管理',
+                        subtitle: '内置与导入字库',
+                        onTap: () => pushNovelPage<void>(
+                          context,
+                          FontSettingsPage(state: state),
+                          reduceMotion: state.reduceMotion,
+                        ),
+                      ),
+                      _SettingsBentoItem(
+                        key: const ValueKey('settings-purification-rules'),
+                        icon: CupertinoIcons.wand_stars,
+                        title: '正文替换',
+                        subtitle: '正则与文本纠错',
+                        onTap: () => showReaderPurificationSheet(
+                          context: context,
+                          reduceMotion: state.reduceMotion,
+                        ),
+                      ),
+                      _SettingsBentoItem(
+                        key: const ValueKey('settings-reading-widget-page'),
+                        icon: CupertinoIcons.rectangle_on_rectangle,
+                        title: '桌面阅读小组件',
+                        subtitle: '配置主屏幕阅读进度卡片',
+                        onTap: () => pushNovelPage<void>(
+                          context,
+                          ReadingWidgetSettingsPage(state: state),
+                          reduceMotion: state.reduceMotion,
+                        ),
+                      ),
+                    ]),
+                  ],
                 ),
               ),
-            ),
-          ],
-        ),
-      ),
+              const SizedBox(height: 24),
+
+              // 03 / 阅读记录：历史、统计、书签与离线缓存。
+              if (repository != null) ...[
+                sectionHeader(context, '阅读记录', '历史 · 统计 · 缓存'),
+                const SizedBox(height: 14),
+                ContentPanel(
+                  child: _settingsToolList(context, [
+                    if (repository case final NovelRepository source) ...[
+                      _SettingsBentoItem(
+                        key: const ValueKey('settings-reading-history'),
+                        icon: CupertinoIcons.clock,
+                        title: '阅读历史',
+                        subtitle: '足迹与章节续读',
+                        onTap: () => openReadingHistory(context, state, source),
+                      ),
+                      _SettingsBentoItem(
+                        key: const ValueKey('settings-reading-statistics'),
+                        icon: CupertinoIcons.chart_bar,
+                        title: '阅读统计',
+                        subtitle: '阅读时长与日历报告',
+                        onTap: () => pushNovelPage<void>(
+                          context,
+                          ReadingStatisticsPage(
+                            state: state,
+                            repository: source,
+                          ),
+                          reduceMotion: state.reduceMotion,
+                        ),
+                      ),
+                      _SettingsBentoItem(
+                        key: const ValueKey('settings-bookmarks'),
+                        icon: CupertinoIcons.bookmark,
+                        title: '书签与划线',
+                        subtitle: '汇总全部书签与批注',
+                        onTap: () => pushNovelPage<void>(
+                          context,
+                          BookmarkLibraryPage(state: state, repository: source),
+                          reduceMotion: state.reduceMotion,
+                        ),
+                      ),
+                    ],
+                    if (offlineRepo case final OfflineNovelRepository offline)
+                      _SettingsBentoItem(
+                        key: const ValueKey('settings-offline-cache'),
+                        icon: CupertinoIcons.cloud_download,
+                        title: '缓存管理',
+                        subtitle: '管理已下载章节与离线缓存空间',
+                        onTap: () => pushNovelPage<void>(
+                          context,
+                          OfflineCachePage(
+                            repository: offline,
+                            reduceMotion: state.reduceMotion,
+                            onOpen: (pageContext, novel) => openDetail(
+                              pageContext,
+                              novel,
+                              state,
+                              offline,
+                              fromCache: true,
+                            ),
+                          ),
+                          reduceMotion: state.reduceMotion,
+                        ),
+                      ),
+                  ]),
+                ),
+                const SizedBox(height: 24),
+              ],
+
+              AppearancePerformancePanel(state: state),
+              const SizedBox(height: 24),
+
+              // 系统与关于：版本信息与在线更新。
+              sectionHeader(context, '系统与关于', '版本 · 更新'),
+              const SizedBox(height: 14),
+              ContentPanel(
+                child: _settingsNavRow(
+                  context,
+                  rowKey: const ValueKey('settings-app-update'),
+                  icon: CupertinoIcons.arrow_down_circle,
+                  title: '关于书屿',
+                  subtitle: versionText,
+                  onTap: () => pushNovelPage<void>(
+                    context,
+                    AppUpdatePage(updates: updateScope),
+                    reduceMotion: state.reduceMotion,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -317,7 +354,7 @@ class SettingsPage extends StatelessWidget {
         ),
       ),
       alignment: Alignment.center,
-      child: Icon(icon, size: 18, color: scheme.primary),
+      child: ArchiveIcon(icon, size: 18, color: scheme.primary),
     );
   }
 

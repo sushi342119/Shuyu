@@ -30,7 +30,7 @@ class ShelfPage extends StatefulWidget {
   State<ShelfPage> createState() => _ShelfPageState();
 }
 
-enum _ShelfSort { recentRead, recentAdded, title }
+enum _ShelfSort { recentRead, recentAdded, title, progress, chapters }
 
 class _ShelfPageState extends State<ShelfPage> {
   final Map<int, Future<Novel?>> _requests = {};
@@ -118,6 +118,18 @@ class _ShelfPageState extends State<ShelfPage> {
     return book;
   }
 
+  int _chapterTotalFor(int id) {
+    final book = _known(id);
+    if (book == null) return 0;
+    return book.chapters.isNotEmpty ? book.chapters.length : book.chapterCount;
+  }
+
+  double _sortProgressFor(int id) {
+    final book = _known(id);
+    if (book == null || !state.hasRead(id)) return -1;
+    return _progressOf(book) ?? 0;
+  }
+
   int _compare(int a, int b) {
     final result = switch (_sort) {
       _ShelfSort.recentRead =>
@@ -126,6 +138,10 @@ class _ShelfPageState extends State<ShelfPage> {
       _ShelfSort.title => (_known(a)?.title ?? '$a').compareTo(
         _known(b)?.title ?? '$b',
       ),
+      _ShelfSort.progress =>
+        _sortProgressFor(b).compareTo(_sortProgressFor(a)),
+      _ShelfSort.chapters =>
+        _chapterTotalFor(b).compareTo(_chapterTotalFor(a)),
     };
     if (result != 0) return result;
     final added = state.addedAt(b).compareTo(state.addedAt(a));
@@ -469,7 +485,7 @@ class _ShelfPageState extends State<ShelfPage> {
           },
         ),
             ),
-            if (saved.length > 200)
+            if (saved.length >= 40)
               Positioned(
                 top: MediaQuery.paddingOf(context).top +
                     FrostedHeader.toolbarHeight + 20,
@@ -494,18 +510,28 @@ class _ShelfPageState extends State<ShelfPage> {
   );
 
   /// 快速滚动条标签：按书名排序时用书名首字（无拼音库，汉字显示原字），
-  /// 按时间排序时用年月。
+  /// 按进度/章节排序时显示百分比或章节数，按时间排序时用年月。
   String _indexLabel(int id) {
-    if (_sort == _ShelfSort.title) {
-      final title = _known(id)?.title.trim() ?? '';
-      return title.isEmpty ? '#' : title.characters.first.toUpperCase();
-    }
-    final at = _sort == _ShelfSort.recentAdded
-        ? state.addedAt(id)
-        : state.lastReadAt(id);
-    if (at <= 0) return '—';
-    final date = DateTime.fromMillisecondsSinceEpoch(at);
-    return '${date.year % 100}.${date.month}';
+    return switch (_sort) {
+      _ShelfSort.title => () {
+        final title = _known(id)?.title.trim() ?? '';
+        return title.isEmpty ? '#' : title.characters.first.toUpperCase();
+      }(),
+      _ShelfSort.progress => () {
+        final book = _known(id);
+        if (book == null || !state.hasRead(id)) return '未读';
+        return '${((_progressOf(book) ?? 0) * 100).round()}%';
+      }(),
+      _ShelfSort.chapters => '${_chapterTotalFor(id)}章',
+      _ShelfSort.recentAdded || _ShelfSort.recentRead => () {
+        final at = _sort == _ShelfSort.recentAdded
+            ? state.addedAt(id)
+            : state.lastReadAt(id);
+        if (at <= 0) return '—';
+        final date = DateTime.fromMillisecondsSinceEpoch(at);
+        return '${date.year % 100}.${date.month}';
+      }(),
+    };
   }
 
   Widget _selectionBar(BuildContext context, List<int> visible) {
@@ -536,16 +562,10 @@ class _ShelfPageState extends State<ShelfPage> {
               onPressed: () => _batchRemove(context),
               child: const Text('移出'),
             ),
-            Opacity(
-              opacity: .45,
-              child: TextButton(
-                key: const ValueKey('shelf-batch-finish'),
-                onPressed: () => showNovelFeedback(
-                  context,
-                  '暂不支持标为已读：需要改写阅读进度记录，本轮只改显示不改进度字段',
-                ),
-                child: const Text('标为已读'),
-              ),
+            TextButton(
+              key: const ValueKey('shelf-batch-finish'),
+              onPressed: () => _batchFinish(context),
+              child: const Text('标为已读'),
             ),
             IconButton(
               tooltip: '退出多选',
@@ -657,6 +677,50 @@ class _ShelfPageState extends State<ShelfPage> {
     showNovelFeedback(
       context,
       failed == 0 ? '已移出 ${ids.length} 本' : '已移出 ${ids.length - failed} 本，$failed 本失败',
+    );
+  }
+
+  Future<void> _batchFinish(BuildContext context) async {
+    final ids = _selection.toList();
+    if (ids.isEmpty) return;
+    var succeeded = 0;
+    for (final id in ids) {
+      try {
+        final resolved = _known(id) ?? await _resolve(id);
+        if (resolved == null) continue;
+        Novel book = resolved;
+        if (book.chapters.isEmpty) {
+          try {
+            book = await widget.repository.detail(book);
+          } catch (_) {}
+        }
+        if (book.chapters.isEmpty) {
+          final count = math.max(1, book.chapterCount);
+          book = book.withChapters([
+            for (var i = 0; i < count; i++)
+              NovelChapter('第 ${i + 1} 章', '', id: book.id * 1000 + i + 1),
+          ]);
+        }
+        await state.savePosition(
+          novel: book,
+          chapter: book.chapters.length - 1,
+          offset: 1,
+          maximum: 1,
+          width: 390,
+        );
+        if (state.finishedReading(book)) {
+          succeeded++;
+        }
+      } catch (_) {}
+    }
+    if (!context.mounted) return;
+    setState(_selection.clear);
+    final failed = ids.length - succeeded;
+    showNovelFeedback(
+      context,
+      failed == 0
+          ? '已将 $succeeded 本标为已读'
+          : '已将 $succeeded 本标为已读，$failed 本未能更新',
     );
   }
 
@@ -792,7 +856,7 @@ class _ShelfPageState extends State<ShelfPage> {
             top: 8,
             left: 0,
             child: IgnorePointer(
-              child: Icon(
+              child: ArchiveIcon(
                 _selection.contains(book.id)
                     ? CupertinoIcons.checkmark_circle_fill
                     : CupertinoIcons.circle,
@@ -855,6 +919,8 @@ class _ShelfPageState extends State<ShelfPage> {
             (_ShelfSort.recentRead, '最近阅读'),
             (_ShelfSort.recentAdded, '最近加入'),
             (_ShelfSort.title, '书名'),
+            (_ShelfSort.progress, '阅读进度'),
+            (_ShelfSort.chapters, '章节数'),
           ])
             GlassMenuItem(
               order: value.index,

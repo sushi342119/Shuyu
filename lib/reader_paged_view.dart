@@ -253,6 +253,7 @@ class ReaderPagedView extends StatefulWidget {
     this.position,
     this.reduceMotion = false,
     this.showPageCount = true,
+    this.showBottomLocation = true,
     this.preservePositionStart = false,
     this.pageBuilderKey,
     this.status,
@@ -296,6 +297,7 @@ class ReaderPagedView extends StatefulWidget {
   final ReadingPosition? position;
   final bool reduceMotion;
   final bool showPageCount;
+  final bool showBottomLocation;
 
   /// Explicit typography-scope changes keep the current reading line at top.
   final bool preservePositionStart;
@@ -1651,7 +1653,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
                   ),
                 ),
               ),
-            if (widget.bookTitle != null)
+            if (widget.bookTitle != null && widget.showBottomLocation)
               Positioned(
                 left: padding.left,
                 right: padding.right,

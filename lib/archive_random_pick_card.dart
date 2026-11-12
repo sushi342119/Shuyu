@@ -46,6 +46,8 @@ class ArchiveRandomPickCard<T extends Object> extends StatefulWidget {
     this.weightOf,
     this.onPicked,
     this.resultLabelOf,
+    this.leadingOf,
+    this.metaOf,
     this.filterHeader,
     this.emptyState,
     this.totalDuration = const Duration(milliseconds: 900),
@@ -67,6 +69,12 @@ class ArchiveRandomPickCard<T extends Object> extends StatefulWidget {
 
   /// 抽样后、通知 onPicked 前捕获，仅在揭晓结果时展示。
   final String? Function(T book)? resultLabelOf;
+
+  /// 揭晓正面可选的左侧微缩书封展示。
+  final Widget Function(T book)? leadingOf;
+
+  /// 揭晓正面可选的补充信息（如章节数、字数、格式）。
+  final String? Function(T book)? metaOf;
 
   final Widget? filterHeader;
   final Widget? emptyState;
@@ -392,6 +400,10 @@ class _ArchiveRandomPickCardState<T extends Object>
 
   Widget _buildCardFront(T book) {
     final index = _displayedIndex ?? 0;
+    final leading = widget.leadingOf?.call(book);
+    final label = _resultLabel;
+    final rawMeta = widget.metaOf?.call(book)?.trim();
+    final meta = rawMeta != null && rawMeta.isNotEmpty ? rawMeta : null;
 
     return _buildCardSurface(
       child: Column(
@@ -412,21 +424,49 @@ class _ArchiveRandomPickCardState<T extends Object>
           Divider(height: 1, thickness: 1, color: _border),
           const SizedBox(height: 16),
           Expanded(
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                _title(book),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontFamily: 'serif',
-                  color: _ink,
-                  fontSize: 23,
-                  height: 1.4,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
+            child: leading == null
+                ? Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _title(book),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: 'serif',
+                        color: _ink,
+                        fontSize: 23,
+                        height: 1.4,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  )
+                : Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Flexible(
+                        flex: 0,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: leading,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Text(
+                          _title(book),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontFamily: 'serif',
+                            color: _ink,
+                            fontSize: 21,
+                            height: 1.38,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
           ),
           const SizedBox(height: 12),
           Text(
@@ -437,9 +477,32 @@ class _ArchiveRandomPickCardState<T extends Object>
           ),
           const SizedBox(height: 12),
           Divider(height: 1, thickness: 1, color: _border),
-          if (_resultLabel case final label?) ...[
+          if (label != null || meta != null) ...[
             const SizedBox(height: 8),
-            Text(label, style: TextStyle(color: _muted, fontSize: 12)),
+            Row(
+              children: [
+                if (label != null)
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: _muted, fontSize: 12),
+                    ),
+                  ),
+                if (label != null && meta != null) const SizedBox(width: 8),
+                if (meta != null)
+                  Expanded(
+                    child: Text(
+                      meta,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: label == null ? TextAlign.start : TextAlign.end,
+                      style: TextStyle(color: _muted, fontSize: 12),
+                    ),
+                  ),
+              ],
+            ),
           ],
         ],
       ),

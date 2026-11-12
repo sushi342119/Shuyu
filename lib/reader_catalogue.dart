@@ -37,6 +37,11 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
   final _scroll = ScrollController();
   final _center = GlobalKey();
   late Novel _novel = widget.novel;
+  late int _activeChapter = _clampChapter(
+    widget.currentChapter,
+    widget.novel.chapters.length,
+  );
+  bool _reversed = false;
   late List<int> _matches = _filter('');
   bool _configuringRule = false;
   bool _applyingRule = false;
@@ -46,20 +51,40 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
   bool _locatedFeedback = false;
   int _locatePulse = 0;
 
+  static int _clampChapter(int chapter, int total) =>
+      total <= 0 ? 0 : chapter.clamp(0, total - 1);
+
   List<int> _filter(String query) {
     final chapters = _novel.chapters;
     final text = query.trim().toLowerCase();
-    if (text.isEmpty) return List.generate(chapters.length, (index) => index);
-    final number = int.tryParse(text);
-    if (number != null) {
-      return number > 0 && number <= chapters.length ? [number - 1] : [];
+    List<int> indices;
+    if (text.isEmpty) {
+      indices = List.generate(chapters.length, (index) => index);
+    } else {
+      final number = int.tryParse(text);
+      if (number != null) {
+        indices = number > 0 && number <= chapters.length ? [number - 1] : [];
+      } else {
+        indices = [
+          for (var index = 0; index < chapters.length; index++)
+            if (chapters[index].title.toLowerCase().contains(text) ||
+                chapters[index].volume.toLowerCase().contains(text))
+              index,
+        ];
+      }
     }
-    return [
-      for (var index = 0; index < chapters.length; index++)
-        if (chapters[index].title.toLowerCase().contains(text) ||
-            chapters[index].volume.toLowerCase().contains(text))
-          index,
-    ];
+    return _reversed ? indices.reversed.toList() : indices;
+  }
+
+  void _toggleSortOrder() {
+    setState(() {
+      _reversed = !_reversed;
+      _matches = _filter(_search.text);
+      _locatedFeedback = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _scroll.hasClients) _scroll.jumpTo(0);
+    });
   }
 
   void _filterChanged(String query) {
@@ -113,6 +138,7 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
     });
     try {
       final pattern = custom.isNotEmpty ? custom : _selectedPreset.pattern;
+      final oldTotal = math.max(1, _novel.chapters.length);
       final updated = await callback(
         pattern,
         _subdivideOversized ? 12000 : 0,
@@ -120,7 +146,12 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
       if (!mounted) return;
       setState(() {
         if (updated != null) {
+          final ratio = _activeChapter / oldTotal;
           _novel = updated;
+          _activeChapter = _clampChapter(
+            (ratio * updated.chapters.length).floor(),
+            updated.chapters.length,
+          );
           _matches = _filter(_search.text);
         }
         _configuringRule = false;
@@ -140,8 +171,13 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
   @override
   void didUpdateWidget(ReaderCatalogue oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.novel.chapters, widget.novel.chapters)) {
+    if (!identical(oldWidget.novel.chapters, widget.novel.chapters) ||
+        oldWidget.currentChapter != widget.currentChapter) {
       _novel = widget.novel;
+      _activeChapter = _clampChapter(
+        widget.currentChapter,
+        widget.novel.chapters.length,
+      );
       _matches = _filter(_search.text);
     }
   }
@@ -199,6 +235,12 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
                   _ruleError = null;
                 }),
               ),
+            GlassIconButton(
+              key: const ValueKey('reader-catalogue-sort-order'),
+              icon: CupertinoIcons.arrow_up_arrow_down,
+              label: _reversed ? '切换正序' : '切换倒序',
+              onPressed: _novel.chapters.length <= 1 ? null : _toggleSortOrder,
+            ),
             GlassIconButton(
               icon: CupertinoIcons.location,
               label: '定位当前章节',
@@ -306,8 +348,8 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
         Text(
           _search.text.trim().isEmpty
               ? _locatedFeedback
-                    ? '共 ${_novel.chapters.length} 章 · 已定位到第 ${widget.currentChapter + 1} 章'
-                    : '共 ${_novel.chapters.length} 章 · 当前第 ${widget.currentChapter + 1} 章'
+                    ? '共 ${_novel.chapters.length} 章 · 已定位到第 ${_activeChapter + 1} 章'
+                    : '共 ${_novel.chapters.length} 章 · 当前第 ${_activeChapter + 1} 章${_reversed ? ' · 倒序' : ''}'
               : '找到 ${_matches.length} 章',
           style: TextStyle(
             fontSize: 12,
@@ -329,7 +371,9 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
     if (_matches.isEmpty) {
       return const Center(child: Text('没有匹配的章节'));
     }
-    final current = _matches.indexOf(widget.currentChapter);
+    final current = _reversed && !_locatedFeedback
+        ? -1
+        : _matches.indexOf(_activeChapter);
     final origin = current < 0 || _matches.length <= 6 ? 0 : current;
     return CustomScrollView(
       key: const ValueKey('reader-catalogue-scroll'),
@@ -355,8 +399,11 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
 
   Widget _row(BuildContext context, int index) {
     final chapter = _novel.chapters[index];
-    final current = index == widget.currentChapter;
+    final current = index == _activeChapter;
     final scheme = Theme.of(context).colorScheme;
+    final showVolume =
+        chapter.volume.isNotEmpty &&
+        !chapter.title.trimLeft().startsWith(chapter.volume.trim());
     return Semantics(
       selected: current,
       child: JellyTapSurface(
@@ -400,13 +447,16 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
           child: Row(
             children: [
               SizedBox(
-                width: 38,
+                width: 42,
                 child: FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: Alignment.centerLeft,
                   child: Text(
                     '${index + 1}',
-                    style: const TextStyle(fontSize: 12),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
                   ),
                 ),
               ),
@@ -415,9 +465,18 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (chapter.volume.isNotEmpty)
-                      Text(chapter.volume, style: const TextStyle(fontSize: 11)),
-                    Text(chapter.title, style: const TextStyle(fontSize: 14, height: 1.45)),
+                    if (showVolume)
+                      Text(
+                        chapter.volume,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    Text(
+                      chapter.title,
+                      style: const TextStyle(fontSize: 14, height: 1.45),
+                    ),
                   ],
                 ),
               ),

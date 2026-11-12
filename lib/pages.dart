@@ -57,6 +57,7 @@ import 'local_library.dart';
 import 'local_record_removal.dart';
 import 'local_scan_follow_up.dart';
 import 'local_library_page.dart';
+import 'local_duplicates_page.dart';
 import 'local_pdf_reader.dart';
 import 'local_epub_reader.dart';
 import 'text_anchor.dart';

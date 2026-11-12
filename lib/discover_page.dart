@@ -2,11 +2,12 @@ part of 'pages.dart';
 
 final _readerWhitespace = RegExp(r'\s+');
 
-/// showGlassMenu 的外层 null 表示关闭菜单；实例中的 tagId == null 表示选择“全部”。
+/// showGlassMenu 的外层 null 表示关闭菜单；实例中的 tagId == null 表示选择“全部”或“未设标签”。
 class _TagMenuChoice {
-  const _TagMenuChoice(this.tagId);
+  const _TagMenuChoice(this.tagId, {this.untagged = false});
 
   final String? tagId;
+  final bool untagged;
 }
 
 class DiscoverPage extends StatefulWidget {
@@ -118,7 +119,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
         // 同一标签下保持轮播 State（分页追加不重置焦点）；
         // 切换标签或切回全部时重建，从初始位置展示。
         key: ValueKey(
-          'archive-files-${widget.feed?.sort.name ?? 'recent'}-${LibraryFilter.shared.hasTags ? (LibraryFilter.shared.tagIds.toList()..sort()).join(',') : 'all'}',
+          'archive-files-${widget.feed?.sort.name ?? 'recent'}-${LibraryFilter.shared.untaggedOnly ? 'untagged' : LibraryFilter.shared.hasTags ? (LibraryFilter.shared.tagIds.toList()..sort()).join(',') : 'all'}',
         ),
         books: carouselBooks,
         footerAction: footerAction,
@@ -144,7 +145,11 @@ class _DiscoverPageState extends State<DiscoverPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                stillLoading ? '已加载书籍中暂无匹配，正在继续加载…' : '该标签下暂无书籍',
+                stillLoading
+                    ? '已加载书籍中暂无匹配，正在继续加载…'
+                    : (LibraryFilter.shared.untaggedOnly
+                          ? '暂无未设标签的书籍'
+                          : '该标签下暂无书籍'),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 12),
@@ -271,6 +276,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
                       if (allBooks.isNotEmpty) ...[
                         NovelRandomPickSection(
                           books: allBooks,
+                          state: widget.state,
                           carouselBuilder: (resetButton) => _buildCarouselArea(
                             context,
                             carouselBooks,
@@ -333,11 +339,12 @@ class _DiscoverPageState extends State<DiscoverPage> {
         ? null
         : _tagStore.tagById(selectedTagId);
     final count = LibraryFilter.shared.tagIds.length;
-    final title =
-        selectedTag?.name ??
-        (count > 1 ? '$count 个标签' : null) ??
-        widget.categoryTitle ??
-        '全部';
+    final title = LibraryFilter.shared.untaggedOnly
+        ? '未设标签'
+        : selectedTag?.name ??
+              (count > 1 ? '$count 个标签' : null) ??
+              widget.categoryTitle ??
+              '全部';
     return Row(
       children: [
         Expanded(child: sectionHeader(context, title, '')),
@@ -367,8 +374,11 @@ class _DiscoverPageState extends State<DiscoverPage> {
         builder: (context, _) {
           final tags = _tagStore.tags.toList(growable: false);
           final selectedTagId = _selectedTagId;
+          final untaggedOnly = LibraryFilter.shared.untaggedOnly;
           final effectiveSelectedTagId =
-              selectedTagId != null && _tagStore.tagById(selectedTagId) != null
+              !untaggedOnly &&
+                  selectedTagId != null &&
+                  _tagStore.tagById(selectedTagId) != null
               ? selectedTagId
               : null;
           return ConstrainedBox(
@@ -382,16 +392,30 @@ class _DiscoverPageState extends State<DiscoverPage> {
                   GlassMenuItem(
                     order: 0,
                     label: '全部',
-                    selected: effectiveSelectedTagId == null,
+                    selected:
+                        !untaggedOnly &&
+                        effectiveSelectedTagId == null &&
+                        LibraryFilter.shared.tagIds.isEmpty,
                     onPressed: () => Navigator.of(
                       menuContext,
                     ).pop<_TagMenuChoice>(const _TagMenuChoice(null)),
                   ),
+                  GlassMenuItem(
+                    order: 1,
+                    label: '未设标签',
+                    selected: untaggedOnly,
+                    onPressed: () => Navigator.of(menuContext)
+                        .pop<_TagMenuChoice>(
+                          const _TagMenuChoice(null, untagged: true),
+                        ),
+                  ),
                   for (var index = 0; index < tags.length; index++)
                     GlassMenuItem(
-                      order: index + 1,
+                      order: index + 2,
                       label: tags[index].name,
-                      selected: effectiveSelectedTagId == tags[index].id,
+                      selected:
+                          !untaggedOnly &&
+                          effectiveSelectedTagId == tags[index].id,
                       onPressed: () => Navigator.of(
                         menuContext,
                       ).pop<_TagMenuChoice>(_TagMenuChoice(tags[index].id)),
@@ -407,6 +431,13 @@ class _DiscoverPageState extends State<DiscoverPage> {
     // 外层 null 是取消菜单，不清除现有选择。
     if (!mounted || choice == null) return;
 
+    if (choice.untagged) {
+      if (!LibraryFilter.shared.untaggedOnly) {
+        LibraryFilter.shared.toggleUntagged();
+      }
+      return;
+    }
+
     final requestedTagId = choice.tagId;
     // 标签可能在点击与菜单 Future 返回之间被删除。
     final String? nextTagId =
@@ -415,7 +446,8 @@ class _DiscoverPageState extends State<DiscoverPage> {
         : null;
 
     // 重复选择不触发重建。
-    if (_selectedTagId == nextTagId &&
+    if (!LibraryFilter.shared.untaggedOnly &&
+        _selectedTagId == nextTagId &&
         LibraryFilter.shared.tagIds.length <= 1) {
       return;
     }
@@ -446,6 +478,7 @@ class DiscoverLibraryOverview extends StatefulWidget {
 
 class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
   late Listenable _changes;
+  Widget? _cachedCard;
 
   @override
   void initState() {
@@ -456,6 +489,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
   @override
   void didUpdateWidget(covariant DiscoverLibraryOverview oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _cachedCard = null;
     if (oldWidget.state != widget.state ||
         oldWidget.repository != widget.repository ||
         oldWidget.feed != widget.feed) {
@@ -514,6 +548,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
 
   @override
   Widget build(BuildContext context) {
+    _cachedCard = null;
     final scheme = Theme.of(context).colorScheme;
     final dark = Theme.of(context).brightness == Brightness.dark;
     final containerPaper = dark
@@ -532,6 +567,10 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
     return ListenableBuilder(
       listenable: _changes,
       builder: (context, _) {
+        final isCurrent = ModalRoute.of(context)?.isCurrent ?? true;
+        if (!isCurrent && _cachedCard != null) {
+          return _cachedCard!;
+        }
         final local =
             localLibraryOf(widget.repository) ?? widget.state.localLibrary;
         final libraryIds = <int>{
@@ -597,7 +636,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
           (prev, item) => math.max(prev, item.count),
         );
 
-        return Container(
+        return _cachedCard = Container(
           key: const ValueKey('discover-library-overview'),
           width: double.infinity,
           decoration: BoxDecoration(
@@ -844,7 +883,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
                           count: untaggedBooks,
                           maxCount: math.max(1, totalBooks),
                           color: muted,
-                          selected: false,
+                          selected: LibraryFilter.shared.untaggedOnly,
                           paper: tilePaper,
                           border: border,
                           ink: ink,
@@ -852,6 +891,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
                           reduceMotion: widget.state.reduceMotion,
                           accent: accent,
                           dark: dark,
+                          onTap: LibraryFilter.shared.toggleUntagged,
                         ),
                     ],
                   ),
@@ -1334,8 +1374,8 @@ class _ShelfBookTags extends StatelessWidget {
   }
 }
 
-/// Right-edge fast scroller for shelves over 200 books. Dragging maps the
-/// thumb position to the list extent and shows the label under the finger.
+/// Right-edge fast scroller for large shelves. Dragging maps the thumb
+/// position to the list extent and shows the label under the finger.
 class _FastScroller extends StatefulWidget {
   const _FastScroller({required this.controller, required this.labels});
   final ScrollController controller;
@@ -1346,6 +1386,7 @@ class _FastScroller extends StatefulWidget {
 }
 
 class _FastScrollerState extends State<_FastScroller> {
+  static const double _thumbHeight = 28;
   String? _label;
   double _y = 0;
 
@@ -1362,57 +1403,94 @@ class _FastScrollerState extends State<_FastScroller> {
   }
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) => GestureDetector(
-      key: const ValueKey('shelf-fast-scroller'),
-      behavior: HitTestBehavior.opaque,
-      onVerticalDragStart: (d) =>
-          _drag(d.localPosition.dy, constraints.maxHeight),
-      onVerticalDragUpdate: (d) =>
-          _drag(d.localPosition.dy, constraints.maxHeight),
-      onVerticalDragEnd: (_) => setState(() => _label = null),
-      child: SizedBox(
-        width: 28,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Center(
-              child: Container(
-                width: 4,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).dividerColor,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            if (_label != null)
-              Positioned(
-                right: 34,
-                top: _y - 22,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.primary,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    _label!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onPrimary,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final dragging = _label != null;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final height = constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : 0.0;
+        return GestureDetector(
+          key: const ValueKey('shelf-fast-scroller'),
+          behavior: HitTestBehavior.opaque,
+          onVerticalDragStart: (d) => _drag(d.localPosition.dy, height),
+          onVerticalDragUpdate: (d) => _drag(d.localPosition.dy, height),
+          onVerticalDragEnd: (_) => setState(() => _label = null),
+          onVerticalDragCancel: () => setState(() => _label = null),
+          child: SizedBox(
+            width: 28,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Center(
+                  child: Container(
+                    width: 4,
+                    decoration: BoxDecoration(
+                      color: Theme.of(
+                        context,
+                      ).dividerColor.withValues(alpha: .65),
+                      borderRadius: BorderRadius.circular(2),
                     ),
                   ),
                 ),
-              ),
-          ],
-        ),
-      ),
-    ),
-  );
+                AnimatedBuilder(
+                  animation: widget.controller,
+                  builder: (context, _) {
+                    final c = widget.controller;
+                    final maxExtent = c.hasClients
+                        ? c.position.maxScrollExtent
+                        : 0.0;
+                    final fraction = c.hasClients && maxExtent > 0
+                        ? (c.offset / maxExtent).clamp(0.0, 1.0)
+                        : 0.0;
+                    final travel = math.max(0.0, height - _thumbHeight);
+                    return Positioned(
+                      top: fraction * travel,
+                      left: dragging ? 10 : 11,
+                      right: dragging ? 10 : 11,
+                      height: math.min(_thumbHeight, math.max(8.0, height)),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: dragging
+                              ? scheme.primary
+                              : scheme.primary.withValues(alpha: .62),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                if (_label != null)
+                  Positioned(
+                    right: 34,
+                    top: _y - 22,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: scheme.primary,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        _label!,
+                        style: TextStyle(
+                          color: scheme.onPrimary,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class NovelRow extends StatelessWidget {

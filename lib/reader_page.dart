@@ -128,6 +128,8 @@ class _ReaderPageState extends State<ReaderPage>
   int _totalWeight = 0;
   final _progressValue = ValueNotifier<double>(0);
   late final _progressBarVisible = ValueNotifier<bool>(_showProgressBar);
+  final _bookmarkedState = ValueNotifier<bool>(false);
+  final _pagedPageTick = ValueNotifier<int>(0);
   bool _progressDragging = false;
   double _dragValue = 0;
   // 拖拽 accepted 后底层指针取消可能走 onEnd 而非 onCancel，
@@ -269,10 +271,66 @@ class _ReaderPageState extends State<ReaderPage>
   bool _chromeTarget = true;
   final _selection = ReaderSelectionController();
 
+  late Listenable _bookmarkMerged;
+  late Listenable _statusExtraMerged;
+  bool _deferredProgressSync = false;
+  bool _pagedTickQueued = false;
+
+  void _rebuildMergedListenables() {
+    _bookmarkMerged = Listenable.merge([
+      _bookmarkedState,
+      widget.state.readerSettingsChanges,
+    ]);
+    _statusExtraMerged = Listenable.merge([
+      _pagedPageTick,
+      widget.state.readerSettingsChanges,
+    ]);
+  }
+
+  void _notifyPagedStatus() {
+    if (!mounted || !_activityAttached) return;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      if (_pagedTickQueued) return;
+      _pagedTickQueued = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _pagedTickQueued = false;
+        if (mounted && _activityAttached) _pagedPageTick.value++;
+      });
+      return;
+    }
+    _pagedPageTick.value++;
+  }
+
+  void _syncBookmarkedState() {
+    if (!mounted || !_activityAttached) return;
+    final next = _isCurrentPositionBookmarked;
+    if (_bookmarkedState.value != next) {
+      if (SchedulerBinding.instance.schedulerPhase ==
+          SchedulerPhase.persistentCallbacks) {
+        _scheduleDeferredProgressSync();
+        return;
+      }
+      _bookmarkedState.value = next;
+    }
+  }
+
+  void _scheduleDeferredProgressSync() {
+    if (_deferredProgressSync) return;
+    _deferredProgressSync = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _deferredProgressSync = false;
+      if (mounted && _activityAttached) {
+        _applyProgressFromScroll();
+      }
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     unawaited(ReaderPurificationStore.shared.ensureLoaded());
+    _rebuildMergedListenables();
     _readingActivity = ReadingActivitySession(
       store: widget.state.readingActivity,
       bookId: _novel.id,
@@ -287,6 +345,9 @@ class _ReaderPageState extends State<ReaderPage>
     }
     _computeChapterWeights();
     _scroll.addListener(_updateProgressFromScroll);
+    widget.state.bookmarkChanges.addListener(_syncBookmarkedState);
+    _bookmarkLanding.addListener(_syncBookmarkedState);
+    _progressValue.addListener(_syncBookmarkedState);
     _chapterReveal = AnimationController(
       vsync: this,
       duration: NovelMotion.enter,
@@ -307,6 +368,7 @@ class _ReaderPageState extends State<ReaderPage>
             : saved.chapter == _chapter)) {
       _restorePending = saved;
     }
+    _syncBookmarkedState();
     _content = _local != null
         ? _reloadLocalContent(initial: true)
         : _loadContent();
@@ -316,12 +378,16 @@ class _ReaderPageState extends State<ReaderPage>
   void didUpdateWidget(covariant ReaderPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.state != widget.state) {
+      oldWidget.state.bookmarkChanges.removeListener(_syncBookmarkedState);
+      widget.state.bookmarkChanges.addListener(_syncBookmarkedState);
+      _rebuildMergedListenables();
       _readingActivity.dispose();
       _readingActivity = ReadingActivitySession(
         store: widget.state.readingActivity,
         bookId: _novel.id,
       );
       _syncReadingActivity();
+      _syncBookmarkedState();
     }
   }
 
@@ -349,6 +415,9 @@ class _ReaderPageState extends State<ReaderPage>
   void dispose() {
     _readingActivity.dispose();
     _local?.removeListener(_localChanged);
+    widget.state.bookmarkChanges.removeListener(_syncBookmarkedState);
+    _bookmarkLanding.removeListener(_syncBookmarkedState);
+    _progressValue.removeListener(_syncBookmarkedState);
     _idleSave?.cancel();
     _prefetchTimer?.cancel();
     _savePosition(notify: false, finalSave: true);
@@ -356,6 +425,8 @@ class _ReaderPageState extends State<ReaderPage>
     _findMatch.dispose();
     _progressValue.dispose();
     _progressBarVisible.dispose();
+    _bookmarkedState.dispose();
+    _pagedPageTick.dispose();
     _bookmarkLandingTimer?.cancel();
     _bookmarkLanding.dispose();
     _listening?.snapshot.removeListener(_listeningChanged);
@@ -638,7 +709,22 @@ class _ReaderPageState extends State<ReaderPage>
 
   /// 滚动时更新进度条（拖动中不跟随，避免打架）。
   void _updateProgressFromScroll() {
+    if (!mounted || !_activityAttached) return;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      _scheduleDeferredProgressSync();
+      return;
+    }
+    _applyProgressFromScroll();
+  }
+
+  void _applyProgressFromScroll() {
+    if (!mounted || !_activityAttached) return;
     _syncProgressBarVisibility();
+    final nextBookmarked = _isCurrentPositionBookmarked;
+    if (_bookmarkedState.value != nextBookmarked) {
+      _bookmarkedState.value = nextBookmarked;
+    }
     if (_progressDragging) return;
     final v = _bookProgress();
     if ((v - _progressValue.value).abs() > 0.0005) {
@@ -725,11 +811,13 @@ class _ReaderPageState extends State<ReaderPage>
       _content = _loadContent();
     });
     if (_scroll.hasClients) _scroll.jumpTo(0);
+    _syncBookmarkedState();
     // 章节切换后刷新进度条（新章节从头开始）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _syncProgressBarVisibility();
         _progressValue.value = _bookProgress();
+        _syncBookmarkedState();
       }
     });
   }
@@ -759,9 +847,13 @@ class _ReaderPageState extends State<ReaderPage>
           state: widget.state,
           novel: _novel,
           currentChapter: _chapter,
-          cache: widget.repository is OfflineNovelRepository
-              ? (widget.repository as OfflineNovelRepository).cache
-              : null,
+          cache: switch (widget.repository) {
+            final OfflineNovelRepository o => o.cache,
+            CompositeNovelRepository(:final remote)
+                when remote is OfflineNovelRepository =>
+              remote.cache,
+            _ => null,
+          },
           onPickUnderline: _ready && _currentContent != null
               ? () => _pickChapterTextInMarksSheet(sheetContext: sheetContext)
               : null,
@@ -777,6 +869,8 @@ class _ReaderPageState extends State<ReaderPage>
                   if (updated != null &&
                       mounted &&
                       updated.chapters.isNotEmpty) {
+                    _parsedChapters.clear();
+                    _resolvedChapters.clear();
                     setState(() {
                       _novel = updated;
                       catalogueRevision = _novel.chapters.first.revision;
@@ -1191,12 +1285,7 @@ class _ReaderPageState extends State<ReaderPage>
       chrome: _chrome,
       novelId: _novel.id,
       title: _novel.title,
-      bookmarkListenable: Listenable.merge([
-        widget.state.bookmarkChanges,
-        _progressValue,
-        _scroll,
-        _bookmarkLanding,
-      ]),
+      bookmarkListenable: _bookmarkMerged,
       isBookmarked: () => _isCurrentPositionBookmarked,
       onAddBookmark: _quickAddBookmark,
       actions: _readerActions(),
@@ -1310,6 +1399,7 @@ class _ReaderPageState extends State<ReaderPage>
           GlassDock(
             key: const ValueKey('reader-liquid-dock'),
             selectedIndex: 1,
+            animateInactiveIcons: true,
             reduceMotion: widget.state.reduceMotion,
             items: [
               GlassDockItem(
@@ -1342,8 +1432,17 @@ class _ReaderPageState extends State<ReaderPage>
         ],
       ),
       statusListenable: _progressValue,
-      statusTextBuilder: (progress) =>
-          '${chapter.title} · ${(progress * 100).round()}%',
+      statusExtraListenable: _statusExtraMerged,
+      maskTopSafeArea: () =>
+          !_paginated && !widget.state.readerPreferences.hideSystemStatus,
+      statusTextBuilder: (progress) {
+        final pct = '${(progress * 100).round()}%';
+        if (_paginated && _paged.pageCount > 0) {
+          final page = (_paged.page + 1).clamp(1, _paged.pageCount);
+          return '${chapter.title} · $page/${_paged.pageCount}页 · $pct';
+        }
+        return '${chapter.title} · $pct';
+      },
     );
   }
 
@@ -1386,6 +1485,7 @@ class _ReaderPageState extends State<ReaderPage>
     final restore = _pagedRestore;
     final chapterIndex = _chapter;
     final chapterId = _novel.chapters[chapterIndex].id;
+    final statusReserve = ReaderStatusLine.totalExtentFor(context) + 4;
     return AnimatedBuilder(
       animation: widget.state.underlineChanges,
       builder: (context, _) {
@@ -1402,11 +1502,12 @@ class _ReaderPageState extends State<ReaderPage>
           title: _novel.chapters[chapterIndex].title,
           bookTitle: _novel.title,
           chrome: _chrome,
+          showBottomLocation: false,
           padding: EdgeInsets.fromLTRB(
             prefs.marginLeft ?? prefs.margin,
             media.top + FrostedHeader.toolbarHeight + 8,
             prefs.marginRight ?? prefs.margin,
-            media.bottom + 28,
+            media.bottom + statusReserve,
           ),
           pageBuilder: (page) => readerPageBody(
             page,
@@ -1425,11 +1526,13 @@ class _ReaderPageState extends State<ReaderPage>
             if (!mounted || chapterIndex != _chapter) return;
             _restorePending = null;
             _restoring = false;
+            _notifyPagedStatus();
             _updateProgressFromScroll();
           },
           onChanged: () {
             if (!mounted || chapterIndex != _chapter) return;
             _selection.clear();
+            _notifyPagedStatus();
             _updateProgressFromScroll();
             _idleSave?.cancel();
             _idleSave = Timer(const Duration(milliseconds: 160), () {

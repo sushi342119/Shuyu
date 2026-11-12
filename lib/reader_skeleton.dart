@@ -1,12 +1,15 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 
 import 'app_interactions.dart';
 import 'app_palette.dart';
 import 'app_ui.dart';
+import 'app_window_insets.dart';
 import 'glass_palette.dart';
 import 'library_state.dart';
 import 'performance_preferences.dart';
@@ -280,7 +283,9 @@ class ReaderBottomPanel extends StatelessWidget {
   );
 }
 
-/// 11sp status line shown while the controls are hidden.
+/// 11sp status footer band shown while the controls are hidden.
+/// Renders on an opaque paper strip with a soft upper feather so scrolling
+/// body text never collides with chapter, progress, or clock text.
 class ReaderStatusLine extends StatefulWidget {
   const ReaderStatusLine({
     super.key,
@@ -289,6 +294,19 @@ class ReaderStatusLine extends StatefulWidget {
   });
   final Animation<double> chrome;
   final String text;
+
+  static const double featherHeight = 14.0;
+
+  /// Height of the opaque status band (excluding bottom system inset).
+  static double bandHeightFor(BuildContext context) {
+    final lineHeight =
+        (MediaQuery.textScalerOf(context).scale(11) * 1.35).ceilToDouble();
+    return math.max(26.0, lineHeight + 12);
+  }
+
+  /// Total vertical extent including the upper paper feather (excluding bottom inset).
+  static double totalExtentFor(BuildContext context) =>
+      bandHeightFor(context) + featherHeight;
 
   @override
   State<ReaderStatusLine> createState() => _ReaderStatusLineState();
@@ -317,24 +335,106 @@ class _ReaderStatusLineState extends State<ReaderStatusLine> {
     final time =
         '${now.hour.toString().padLeft(2, '0')}:'
         '${now.minute.toString().padLeft(2, '0')}';
+    final raw = widget.text.trim();
+    final sep = raw.indexOf(' · ');
+    final String primary;
+    final String trailing;
+    if (raw.isEmpty) {
+      primary = '';
+      trailing = time;
+    } else if (sep >= 0) {
+      primary = raw.substring(0, sep);
+      trailing = '${raw.substring(sep + 3)} · $time';
+    } else {
+      primary = raw;
+      trailing = time;
+    }
+
     return IgnorePointer(
       child: AnimatedBuilder(
         animation: widget.chrome,
         builder: (context, _) {
-          final hidden = 1 - widget.chrome.value;
+          final hidden = (1 - widget.chrome.value).clamp(0.0, 1.0);
           if (hidden == 0) return const SizedBox.shrink();
+          final media = MediaQuery.paddingOf(context);
+          final scheme = Theme.of(context).colorScheme;
+          final paper = scheme.surface;
+          final textStyle = TextStyle(
+            fontSize: 11,
+            height: 1.3,
+            color: scheme.onSurfaceVariant.withValues(alpha: .86),
+            fontFeatures: const [FontFeature.tabularFigures()],
+          );
+          final bandHeight = ReaderStatusLine.bandHeightFor(context);
           return Opacity(
-            opacity: .55 * hidden,
-            child: Text(
-              '${widget.text} · $time',
-              key: const ValueKey('reader-status-line'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 11,
-                color: Theme.of(context).colorScheme.onSurface,
-              ),
+            opacity: hidden,
+            child: Column(
+              key: const ValueKey('reader-status-band'),
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(
+                  height: ReaderStatusLine.featherHeight,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [paper.withValues(alpha: 0), paper],
+                      ),
+                    ),
+                  ),
+                ),
+                ColoredBox(
+                  color: paper,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: 26 + math.max(media.left, media.right),
+                    ),
+                    child: SizedBox(
+                      height: .5,
+                      child: ColoredBox(
+                        color: scheme.outlineVariant.withValues(alpha: .38),
+                      ),
+                    ),
+                  ),
+                ),
+                ColoredBox(
+                  color: paper,
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      26 + media.left,
+                      5,
+                      26 + media.right,
+                      media.bottom + 5,
+                    ),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(minHeight: bandHeight - 10.5),
+                      child: Row(
+                        key: const ValueKey('reader-status-line'),
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              primary,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: textStyle,
+                            ),
+                          ),
+                          if (primary.isNotEmpty) const SizedBox(width: 12),
+                          Text(
+                            trailing,
+                            maxLines: 1,
+                            textAlign: TextAlign.end,
+                            style: textStyle,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           );
         },
@@ -359,7 +459,9 @@ class ReaderScaffold extends StatelessWidget {
     required this.body,
     this.statusText = '',
     this.statusListenable,
+    this.statusExtraListenable,
     this.statusTextBuilder,
+    this.maskTopSafeArea,
     this.progress,
     this.navigation,
     this.leadingStackChild,
@@ -379,7 +481,9 @@ class ReaderScaffold extends StatelessWidget {
   final Widget body;
   final String statusText;
   final ValueListenable<double>? statusListenable;
+  final Listenable? statusExtraListenable;
   final String Function(double progress)? statusTextBuilder;
+  final bool Function()? maskTopSafeArea;
   final Widget? progress;
   final Widget? navigation;
   final Widget? leadingStackChild;
@@ -391,6 +495,14 @@ class ReaderScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.paddingOf(context);
+    final topSafe = math.max(
+      media.top,
+      math.max(
+        MediaQuery.viewPaddingOf(context).top,
+        AppWindowInsets.viewPaddingOf(context).top,
+      ),
+    );
+    final theme = Theme.of(context);
     Widget bottomPanel = ReaderBottomPanel(
       actions: actions,
       progress: progress,
@@ -402,7 +514,7 @@ class ReaderScaffold extends StatelessWidget {
         child: bottomPanel,
       );
     }
-    final statusWidget = statusListenable != null && statusTextBuilder != null
+    Widget statusWidget = statusListenable != null && statusTextBuilder != null
         ? ValueListenableBuilder<double>(
             valueListenable: statusListenable!,
             builder: (context, value, _) => ReaderStatusLine(
@@ -411,15 +523,112 @@ class ReaderScaffold extends StatelessWidget {
             ),
           )
         : ReaderStatusLine(chrome: chrome, text: statusText);
+    if (statusExtraListenable != null &&
+        statusListenable != null &&
+        statusTextBuilder != null) {
+      statusWidget = AnimatedBuilder(
+        animation: statusExtraListenable!,
+        builder: (context, _) => ValueListenableBuilder<double>(
+          valueListenable: statusListenable!,
+          builder: (context, value, _) => ReaderStatusLine(
+            chrome: chrome,
+            text: statusTextBuilder!(value),
+          ),
+        ),
+      );
+    }
+    Widget buildTopSafeBand(BuildContext context) {
+      if (!(maskTopSafeArea?.call() ?? true)) {
+        return const SizedBox.shrink();
+      }
+      final scheme = Theme.of(context).colorScheme;
+      final paper = scheme.surface;
+      return Column(
+        key: const ValueKey('reader-top-safe-band'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            height: topSafe - .5 > 0 ? topSafe - .5 : topSafe,
+            child: ColoredBox(color: paper),
+          ),
+          if (topSafe >= 1)
+            SizedBox(
+              height: .5,
+              child: ColoredBox(
+                color: scheme.outlineVariant.withValues(alpha: .32),
+              ),
+            ),
+          Expanded(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [paper, paper.withValues(alpha: 0)],
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
     final stack = Stack(
       children: [
         ?leadingStackChild,
         Positioned.fill(child: body),
+        // Always-on paper mask over the system status bar in scroll readers so
+        // scrolling prose never collides with system clock, network, or battery.
+        if (topSafe > 0)
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: topSafe + ReaderStatusLine.featherHeight,
+            child: IgnorePointer(
+              child: statusExtraListenable != null
+                  ? AnimatedBuilder(
+                      animation: statusExtraListenable!,
+                      builder: (context, _) => buildTopSafeBand(context),
+                    )
+                  : Builder(builder: buildTopSafeBand),
+            ),
+          ),
         Positioned.fill(
           child: ReaderEdgeBlur(animation: chrome, blurBottom: blurBottom),
         ),
-        // Paper scrim so body text never reads through the bottom controls.
-        // A plain gradient (no backdrop sampling) keeps scrolling cheap.
+        // Paper scrims so body text never reads through the top/bottom controls.
+        // Plain gradients (no backdrop sampling) keep scrolling cheap.
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          height: topSafe + FrostedHeader.toolbarHeight + 28,
+          child: IgnorePointer(
+            child: AnimatedBuilder(
+              animation: chrome,
+              builder: (context, _) {
+                final t = Curves.easeOut.transform(chrome.value);
+                if (t == 0) return const SizedBox.shrink();
+                final paper = Theme.of(context).colorScheme.surface;
+                return DecoratedBox(
+                  key: const ValueKey('reader-top-scrim'),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      stops: const [0, .72, 1],
+                      colors: [
+                        paper.withValues(alpha: .98 * t),
+                        paper.withValues(alpha: .94 * t),
+                        paper.withValues(alpha: 0),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
         Positioned(
           left: 0,
           right: 0,
@@ -483,23 +692,26 @@ class ReaderScaffold extends StatelessWidget {
           ),
         ),
         Positioned(
-          left: 24,
-          right: 24,
-          bottom: media.bottom + 6,
+          left: 0,
+          right: 0,
+          bottom: 0,
           child: statusWidget,
         ),
       ],
     );
-    return Scaffold(
-      resizeToAvoidBottomInset: false,
-      backgroundColor: backgroundColor,
-      body: useAtmosphere
-          ? Atmosphere(
-              shareGlass: true,
-              archiveBackdrop: false,
-              child: stack,
-            )
-          : stack,
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: novelSystemUiStyle(theme.brightness),
+      child: Scaffold(
+        resizeToAvoidBottomInset: false,
+        backgroundColor: backgroundColor,
+        body: useAtmosphere
+            ? Atmosphere(
+                shareGlass: true,
+                archiveBackdrop: false,
+                child: stack,
+              )
+            : stack,
+      ),
     );
   }
 }

@@ -1029,7 +1029,17 @@ class LibraryState extends ChangeNotifier {
       return null;
     }
     if (position.chapterId > 0) {
-      final index = novel.chapters.indexWhere(
+      final chapters = novel.chapters;
+      if (position.chapter >= 0 &&
+          position.chapter < chapters.length &&
+          chapters[position.chapter].id == position.chapterId) {
+        return position.chapter;
+      }
+      if (position.chapterId < chapters.length &&
+          chapters[position.chapterId].id == position.chapterId) {
+        return position.chapterId;
+      }
+      final index = chapters.indexWhere(
         (chapter) => chapter.id == position.chapterId,
       );
       return index < 0 ? null : index;
@@ -1968,7 +1978,17 @@ class LibraryState extends ChangeNotifier {
   int chapterForNovel(Novel novel) {
     final position = _positions[novel.id];
     if (position != null && position.chapterId > 0) {
-      final index = novel.chapters.indexWhere(
+      final chapters = novel.chapters;
+      if (position.chapter >= 0 &&
+          position.chapter < chapters.length &&
+          chapters[position.chapter].id == position.chapterId) {
+        return position.chapter;
+      }
+      if (position.chapterId < chapters.length &&
+          chapters[position.chapterId].id == position.chapterId) {
+        return position.chapterId;
+      }
+      final index = chapters.indexWhere(
         (chapter) => chapter.id == position.chapterId,
       );
       if (index >= 0) return index;

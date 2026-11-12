@@ -332,6 +332,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
         offset: 0,
         maximum: 0,
         width: width,
+        notify: false,
       );
     } catch (_) {}
   }
@@ -897,6 +898,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
           GlassDock(
             key: const ValueKey('reader-liquid-dock'),
             selectedIndex: 1,
+            animateInactiveIcons: true,
             reduceMotion: widget.state.reduceMotion,
             items: [
               GlassDockItem(
@@ -1105,7 +1107,13 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
   }
 
   Widget _brokenImage() {
-    return const Center(child: Icon(Icons.broken_image, size: 48));
+    return const Center(
+      child: ArchiveIcon(
+        Icons.broken_image,
+        symbol: ArchiveSymbol.image,
+        size: 40,
+      ),
+    );
   }
 }
 

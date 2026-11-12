@@ -139,12 +139,23 @@ class FeatureEntry extends StatelessWidget {
   final IconData icon;
   final VoidCallback? onTap;
   @override
-  Widget build(BuildContext context) => ContentPanel(
-    onTap: onTap,
-    child: Row(
-      children: [
-        Icon(icon, size: 21),
-        const SizedBox(width: 12),
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ContentPanel(
+      onTap: onTap,
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: scheme.primary.withValues(alpha: .10),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: ArchiveIcon(icon, size: 18, color: scheme.primary),
+          ),
+          const SizedBox(width: 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -168,6 +179,7 @@ class FeatureEntry extends StatelessWidget {
       ],
     ),
   );
+  }
 }
 
 class FeatureError extends StatelessWidget {
