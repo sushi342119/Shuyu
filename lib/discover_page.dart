@@ -33,12 +33,7 @@ class DiscoverPage extends StatefulWidget {
   /// 顶部栏由 HomeShell 通过 widget 实例直接取用，不依赖 State。
   Widget buildHeader(BuildContext context) => Row(
     children: [
-      const Expanded(
-        child: ArchiveMasthead(
-          title: '书屿',
-          brand: true,
-        ),
-      ),
+      const Expanded(child: ArchiveMasthead(title: '书屿', brand: true)),
       GlassIconButton(
         icon: CupertinoIcons.search,
         label: '搜索',
@@ -420,7 +415,8 @@ class _DiscoverPageState extends State<DiscoverPage> {
         : null;
 
     // 重复选择不触发重建。
-    if (_selectedTagId == nextTagId && LibraryFilter.shared.tagIds.length <= 1) {
+    if (_selectedTagId == nextTagId &&
+        LibraryFilter.shared.tagIds.length <= 1) {
       return;
     }
     _selectedTagId = nextTagId;
@@ -594,8 +590,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
         }
         final untaggedBooks = math.max(0, totalBooks - taggedBooks);
         final tagCounts = <({Tag tag, int count})>[
-          for (final tag in tags)
-            (tag: tag, count: store.bookCountFor(tag.id)),
+          for (final tag in tags) (tag: tag, count: store.bookCountFor(tag.id)),
         ];
         final maxTagCount = tagCounts.fold<int>(
           0,
@@ -629,7 +624,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
                         height: 1.3,
                         fontWeight: FontWeight.w600,
                         color: ink,
-                        letterSpacing: 1,
+                        letterSpacing: 0,
                       ),
                     ),
                     TextButton.icon(
@@ -644,30 +639,25 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
                         ),
                         minimumSize: const Size(0, 32),
                       ),
-                      icon: const ArchiveIcon(CupertinoIcons.chart_bar, size: 15),
-                      label: const Text(
-                        '阅读统计',
-                        style: TextStyle(fontSize: 12),
+                      icon: const ArchiveIcon(
+                        CupertinoIcons.chart_bar,
+                        size: 15,
                       ),
+                      label: const Text('阅读统计', style: TextStyle(fontSize: 12)),
                     ),
                   ],
                 ),
                 const SizedBox(height: 6),
                 Text(
                   '当前书库规模、标签分布与累计阅读记录。',
-                  style: TextStyle(
-                    color: muted,
-                    fontSize: 13,
-                    height: 1.5,
-                  ),
+                  style: TextStyle(color: muted, fontSize: 13, height: 1.5),
                 ),
                 const SizedBox(height: 16),
                 LayoutBuilder(
                   builder: (context, constraints) {
                     final largeText =
                         MediaQuery.textScalerOf(context).scale(14) > 20;
-                    final columns =
-                        constraints.maxWidth < 250 || largeText
+                    final columns = constraints.maxWidth < 250 || largeText
                         ? 1
                         : (constraints.maxWidth >= 560 ? 4 : 2);
                     const spacing = 12.0;
@@ -687,6 +677,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
                         border: border,
                         ink: ink,
                         muted: muted,
+                        reduceMotion: widget.state.reduceMotion,
                       ),
                       _OverviewStatTile(
                         key: const ValueKey('discover-stat-reading-hours'),
@@ -698,6 +689,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
                         border: border,
                         ink: ink,
                         muted: muted,
+                        reduceMotion: widget.state.reduceMotion,
                         onTap: _openStatistics,
                       ),
                       _OverviewStatTile(
@@ -712,6 +704,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
                         border: border,
                         ink: ink,
                         muted: muted,
+                        reduceMotion: widget.state.reduceMotion,
                         onTap: _openStatistics,
                       ),
                       _OverviewStatTile(
@@ -726,6 +719,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
                         border: border,
                         ink: ink,
                         muted: muted,
+                        reduceMotion: widget.state.reduceMotion,
                         onTap: _openTagManage,
                       ),
                     ];
@@ -792,10 +786,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
                         ),
                         minimumSize: const Size(0, 30),
                       ),
-                      child: const Text(
-                        '管理标签',
-                        style: TextStyle(fontSize: 12),
-                      ),
+                      child: const Text('管理标签', style: TextStyle(fontSize: 12)),
                     ),
                   ],
                 ),
@@ -814,11 +805,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
                     ),
                     child: Text(
                       '还没有创建标签，为书籍添加标签后可在此查看各标签的藏书数量。',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: muted,
-                        height: 1.5,
-                      ),
+                      style: TextStyle(fontSize: 13, color: muted, height: 1.5),
                     ),
                   )
                 else
@@ -845,6 +832,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
                             muted: muted,
                             accent: accent,
                             dark: dark,
+                            reduceMotion: widget.state.reduceMotion,
                             onTap: () =>
                                 LibraryFilter.shared.toggleTag(item.tag.id),
                           ),
@@ -861,6 +849,7 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
                           border: border,
                           ink: ink,
                           muted: muted,
+                          reduceMotion: widget.state.reduceMotion,
                           accent: accent,
                           dark: dark,
                         ),
@@ -886,6 +875,7 @@ class _OverviewStatTile extends StatelessWidget {
     required this.border,
     required this.ink,
     required this.muted,
+    this.reduceMotion = false,
     this.onTap,
   });
 
@@ -897,6 +887,7 @@ class _OverviewStatTile extends StatelessWidget {
   final Color border;
   final Color ink;
   final Color muted;
+  final bool reduceMotion;
   final VoidCallback? onTap;
 
   @override
@@ -934,7 +925,7 @@ class _OverviewStatTile extends StatelessWidget {
                   height: 1.1,
                   fontWeight: FontWeight.w600,
                   color: ink,
-                  letterSpacing: -.5,
+                  letterSpacing: 0,
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
@@ -956,19 +947,67 @@ class _OverviewStatTile extends StatelessWidget {
             caption,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 11,
-              color: muted.withValues(alpha: .85),
-            ),
+            style: TextStyle(fontSize: 11, color: muted.withValues(alpha: .85)),
           ),
         ],
       ),
     );
     if (onTap == null) return content;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
+    return _OverviewPressable(
+      reduceMotion: reduceMotion,
+      onTap: onTap!,
       child: content,
+    );
+  }
+}
+
+/// Light press feedback for overview tiles: a short scale and dim on contact.
+/// Reduce motion keeps only the dim so the tap still reads as acknowledged.
+class _OverviewPressable extends StatefulWidget {
+  const _OverviewPressable({
+    required this.onTap,
+    required this.child,
+    this.reduceMotion = false,
+  });
+
+  final VoidCallback onTap;
+  final Widget child;
+  final bool reduceMotion;
+
+  @override
+  State<_OverviewPressable> createState() => _OverviewPressableState();
+}
+
+class _OverviewPressableState extends State<_OverviewPressable> {
+  bool _pressed = false;
+
+  void _setPressed(bool value) {
+    if (_pressed == value) return;
+    setState(() => _pressed = value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (_) => _setPressed(true),
+        onTapUp: (_) => _setPressed(false),
+        onTapCancel: () => _setPressed(false),
+        onTap: widget.onTap,
+        child: AnimatedOpacity(
+          opacity: _pressed ? .78 : 1,
+          duration: NovelMotion.contact,
+          curve: NovelMotion.ease,
+          child: AnimatedScale(
+            scale: _pressed && !widget.reduceMotion ? .98 : 1,
+            duration: widget.reduceMotion ? Duration.zero : NovelMotion.contact,
+            curve: NovelMotion.ease,
+            child: widget.child,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -987,6 +1026,7 @@ class _OverviewTagRow extends StatelessWidget {
     required this.muted,
     required this.accent,
     required this.dark,
+    this.reduceMotion = false,
     this.onTap,
   });
 
@@ -1001,17 +1041,18 @@ class _OverviewTagRow extends StatelessWidget {
   final Color muted;
   final Color accent;
   final bool dark;
+  final bool reduceMotion;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final fraction = maxCount <= 0 ? 0.0 : (count / maxCount).clamp(0.0, 1.0);
-    final row = Container(
+    final row = AnimatedContainer(
+      duration: reduceMotion ? Duration.zero : NovelMotion.contact * 2,
+      curve: NovelMotion.ease,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: selected
-            ? Color.lerp(paper, accent, dark ? .18 : .10)!
-            : paper,
+        color: selected ? Color.lerp(paper, accent, dark ? .18 : .10)! : paper,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
           color: selected
@@ -1027,10 +1068,7 @@ class _OverviewTagRow extends StatelessWidget {
               Container(
                 width: 10,
                 height: 10,
-                decoration: BoxDecoration(
-                  color: color,
-                  shape: BoxShape.circle,
-                ),
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -1058,22 +1096,28 @@ class _OverviewTagRow extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 6),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(2),
-            child: LinearProgressIndicator(
-              value: fraction,
-              minHeight: 3,
-              color: color.withValues(alpha: .85),
-              backgroundColor: border.withValues(alpha: .45),
+          // The bar grows from zero on first build and eases between counts.
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: fraction),
+            duration: reduceMotion ? Duration.zero : NovelMotion.enter,
+            curve: NovelMotion.ease,
+            builder: (context, value, _) => ClipRRect(
+              borderRadius: BorderRadius.circular(2),
+              child: LinearProgressIndicator(
+                value: value,
+                minHeight: 3,
+                color: color.withValues(alpha: .85),
+                backgroundColor: border.withValues(alpha: .45),
+              ),
             ),
           ),
         ],
       ),
     );
     if (onTap == null) return row;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
+    return _OverviewPressable(
+      reduceMotion: reduceMotion,
+      onTap: onTap!,
       child: row,
     );
   }
@@ -1322,8 +1366,10 @@ class _FastScrollerState extends State<_FastScroller> {
     builder: (context, constraints) => GestureDetector(
       key: const ValueKey('shelf-fast-scroller'),
       behavior: HitTestBehavior.opaque,
-      onVerticalDragStart: (d) => _drag(d.localPosition.dy, constraints.maxHeight),
-      onVerticalDragUpdate: (d) => _drag(d.localPosition.dy, constraints.maxHeight),
+      onVerticalDragStart: (d) =>
+          _drag(d.localPosition.dy, constraints.maxHeight),
+      onVerticalDragUpdate: (d) =>
+          _drag(d.localPosition.dy, constraints.maxHeight),
       onVerticalDragEnd: (_) => setState(() => _label = null),
       child: SizedBox(
         width: 28,
@@ -1344,7 +1390,10 @@ class _FastScrollerState extends State<_FastScroller> {
                 right: 34,
                 top: _y - 22,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: Theme.of(context).colorScheme.primary,
                     borderRadius: BorderRadius.circular(10),
@@ -1453,4 +1502,3 @@ class NovelRow extends StatelessWidget {
     ),
   );
 }
-

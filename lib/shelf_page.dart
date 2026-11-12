@@ -96,12 +96,13 @@ class _ShelfPageState extends State<ShelfPage> {
     };
   }
 
-  Novel? _knownFromSources(int id) {
+  Novel? _knownFromSources(int id, [Map<int, Novel>? feedById]) {
     final local = localLibraryOf(widget.repository);
     final source = local?.bookFor(id);
     if (source != null) return local!.toNovel(source);
     final cached = state.cachedNovel(id);
     if (cached != null) return cached;
+    if (feedById != null) return feedById[id];
     for (final book in widget.books) {
       if (book.id == id) return book;
     }
@@ -135,7 +136,11 @@ class _ShelfPageState extends State<ShelfPage> {
   Widget build(BuildContext context) => ActiveListenableBuilder(
     listenable: _changes,
     builder: (context) {
-      _buildKnown = {for (final id in state.shelf) id: _knownFromSources(id)};
+      // One id->book map per build keeps lookups O(1) for large shelves.
+      final feedById = {for (final book in widget.books) book.id: book};
+      _buildKnown = {
+        for (final id in state.shelf) id: _knownFromSources(id, feedById),
+      };
       _filter.prune(TagStore.shared);
       final saved = state.shelf.where(_matches).toList()..sort(_compare);
       _selection.removeWhere((id) => !state.contains(id));

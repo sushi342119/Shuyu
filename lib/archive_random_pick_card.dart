@@ -11,8 +11,7 @@ int sampleArchiveRandomPickIndex(List<double> weights, math.Random random) {
     throw ArgumentError.value(weights, 'weights', '候选不能为空');
   }
   final validWeights = [
-    for (final weight in weights)
-      weight.isFinite && weight > 0 ? weight : 0.0,
+    for (final weight in weights) weight.isFinite && weight > 0 ? weight : 0.0,
   ];
   final largest = validWeights.reduce(math.max);
   if (largest == 0) return random.nextInt(weights.length);
@@ -97,9 +96,8 @@ class _ArchiveRandomPickCardState<T extends Object>
       ? _scheme.outlineVariant
       : Color.lerp(_scheme.outlineVariant, _scheme.primary, .16)!;
   Color get _accent => _scheme.primary;
-  Color get _shadow => _dark
-      ? const Color(0x52000000)
-      : _scheme.primary.withValues(alpha: .08);
+  Color get _shadow =>
+      _dark ? const Color(0x52000000) : _scheme.primary.withValues(alpha: .08);
 
   // 仪式 (2400ms) 时间轴：
   //    0–280ms  第一次洗牌
@@ -325,9 +323,7 @@ class _ArchiveRandomPickCardState<T extends Object>
     super.dispose();
   }
 
-  Widget _buildCardSurface({
-    required Widget child,
-  }) {
+  Widget _buildCardSurface({required Widget child}) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -335,11 +331,7 @@ class _ArchiveRandomPickCardState<T extends Object>
         borderRadius: BorderRadius.circular(9),
         border: Border.all(color: _border),
         boxShadow: [
-          BoxShadow(
-            color: _shadow,
-            blurRadius: 12,
-            offset: Offset(0, 4),
-          ),
+          BoxShadow(color: _shadow, blurRadius: 12, offset: Offset(0, 4)),
         ],
       ),
       child: child,
@@ -441,11 +433,7 @@ class _ArchiveRandomPickCardState<T extends Object>
             _author(book),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: _muted,
-              fontSize: 14,
-              height: 1.5,
-            ),
+            style: TextStyle(color: _muted, fontSize: 14, height: 1.5),
           ),
           const SizedBox(height: 12),
           Divider(height: 1, thickness: 1, color: _border),
@@ -476,8 +464,7 @@ class _ArchiveRandomPickCardState<T extends Object>
           )
         : _buildCardBack(cardId);
 
-    final transform = Matrix4.identity()
-      ..setEntry(3, 2, 0.001);
+    final transform = Matrix4.identity()..setEntry(3, 2, 0.001);
     transform.multiply(Matrix4.rotationY(angle));
 
     return Transform(
@@ -578,19 +565,12 @@ class _ArchiveRandomPickCardState<T extends Object>
               _slotOffset(rank - 1),
               advance,
             )!;
-            angles[id] = _lerp(
-              _slotAngle(rank),
-              _slotAngle(rank - 1),
-              advance,
-            );
+            angles[id] = _lerp(_slotAngle(rank), _slotAngle(rank - 1), advance);
           }
 
           // 最侧方时切换遮挡关系，使顶卡回到卡堆底部。
           if (!outgoingHalf) {
-            paintOrder = <int>[
-              outgoing,
-              ...order.skip(1).toList().reversed,
-            ];
+            paintOrder = <int>[outgoing, ...order.skip(1).toList().reversed];
           }
         }
 
@@ -611,11 +591,10 @@ class _ArchiveRandomPickCardState<T extends Object>
                 width: cardWidth,
                 height: cardHeight,
                 child: Opacity(
-                  opacity: shuffleFinished && id != topCardId
-                      ? 1 - finish
-                      : 1,
+                  opacity: shuffleFinished && id != topCardId ? 1 - finish : 1,
                   child: Transform.translate(
-                    offset: offsets[id]! +
+                    offset:
+                        offsets[id]! +
                         Offset(
                           0,
                           shuffleFinished && id == topCardId
@@ -624,9 +603,7 @@ class _ArchiveRandomPickCardState<T extends Object>
                         ),
                     child: Transform.rotate(
                       angle: angles[id]!,
-                      child: shuffleFinished &&
-                              id == topCardId &&
-                              book != null
+                      child: shuffleFinished && id == topCardId && book != null
                           ? _buildFlipCard(
                               progress: flip,
                               book: book,
@@ -669,10 +646,7 @@ class _ArchiveRandomPickCardState<T extends Object>
             final stageWidth = constraints.maxWidth;
 
             // 两侧预留滑出和阴影空间；宽屏时保持索引卡比例。
-            final cardWidth = math.min(
-              420.0,
-              math.max(1.0, stageWidth - 64),
-            );
+            final cardWidth = math.min(420.0, math.max(1.0, stageWidth - 64));
 
             return SizedBox(
               height: stageHeight,
@@ -705,11 +679,7 @@ class _ArchiveRandomPickCardState<T extends Object>
 
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          header,
-          const SizedBox(height: 12),
-          empty,
-        ],
+        children: [header, const SizedBox(height: 12), empty],
       );
     }
 
@@ -730,18 +700,13 @@ class _ArchiveRandomPickCardState<T extends Object>
       elevation: 0,
       minimumSize: const Size(120, 44),
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(10),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
     );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (header != null) ...[
-          header,
-          const SizedBox(height: 12),
-        ],
+        if (header != null) ...[header, const SizedBox(height: 12)],
         Container(
           width: double.infinity,
           decoration: BoxDecoration(
@@ -766,30 +731,44 @@ class _ArchiveRandomPickCardState<T extends Object>
                           height: 1.3,
                           fontWeight: FontWeight.w600,
                           color: _ink,
-                          letterSpacing: 1,
+                          letterSpacing: 0,
                         ),
                       ),
                     ),
                     const SizedBox(width: 12),
-                    Container(
+                    AnimatedContainer(
+                      duration: _reduceMotion
+                          ? Duration.zero
+                          : const Duration(milliseconds: 260),
+                      curve: Curves.easeOutCubic,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 9,
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: _accent.withValues(alpha: _dark ? .16 : .08),
+                        color: _accent.withValues(
+                          alpha: result
+                              ? (_dark ? .26 : .14)
+                              : (_dark ? .16 : .08),
+                        ),
                         border: Border.all(
                           color: _accent.withValues(alpha: _dark ? .34 : .22),
                         ),
                         borderRadius: BorderRadius.circular(6),
                       ),
-                      child: Text(
-                        status,
-                        style: TextStyle(
-                          color: _accent,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          height: 1.4,
+                      child: AnimatedSwitcher(
+                        duration: _reduceMotion
+                            ? Duration.zero
+                            : const Duration(milliseconds: 220),
+                        child: Text(
+                          status,
+                          key: ValueKey(status),
+                          style: TextStyle(
+                            color: _accent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            height: 1.4,
+                          ),
                         ),
                       ),
                     ),
@@ -798,11 +777,7 @@ class _ArchiveRandomPickCardState<T extends Object>
                 const SizedBox(height: 8),
                 Text(
                   '从当前展出的 ${widget.books.length} 本馆藏中，抽阅一本。',
-                  style: TextStyle(
-                    color: _muted,
-                    fontSize: 13,
-                    height: 1.6,
-                  ),
+                  style: TextStyle(color: _muted, fontSize: 13, height: 1.6),
                 ),
                 const SizedBox(height: 8),
                 _buildStage(),
@@ -812,20 +787,26 @@ class _ArchiveRandomPickCardState<T extends Object>
                   runSpacing: 10,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    ElevatedButton(
+                    ElevatedButton.icon(
                       onPressed: spinning ? null : _pick,
                       style: buttonStyle,
-                      child: Text(
+                      icon: Icon(
+                        result ? Icons.refresh_rounded : Icons.shuffle_rounded,
+                        size: 18,
+                      ),
+                      label: Text(
                         spinning
                             ? '抽阅中…'
                             : result
-                                ? '再抽一本'
-                                : '抽阅一本',
+                            ? '再抽一本'
+                            : '抽阅一本',
                       ),
                     ),
                     if (result && _displayedBook != null)
-                      TextButton(
+                      TextButton.icon(
                         onPressed: _openDetail,
+                        iconAlignment: IconAlignment.end,
+                        icon: const Icon(Icons.arrow_forward_rounded, size: 16),
                         style: TextButton.styleFrom(
                           foregroundColor: _accent,
                           minimumSize: const Size(96, 44),
@@ -834,7 +815,7 @@ class _ArchiveRandomPickCardState<T extends Object>
                             vertical: 12,
                           ),
                         ),
-                        child: const Text('查看详情'),
+                        label: const Text('查看详情'),
                       ),
                   ],
                 ),

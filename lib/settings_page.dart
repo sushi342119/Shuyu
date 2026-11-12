@@ -6,12 +6,14 @@ class _SettingsBentoItem {
     required this.icon,
     required this.title,
     required this.subtitle,
+    this.trailingText,
     required this.onTap,
   });
   final Key? key;
   final IconData icon;
   final String title;
   final String subtitle;
+  final String? trailingText;
   final VoidCallback onTap;
 }
 
@@ -55,8 +57,56 @@ class SettingsPage extends StatelessWidget {
             MediaQuery.paddingOf(context).bottom + 120,
           ),
           children: [
-            // ── 01 / 阅读偏好（核心显示、字号与阅读工具箱整合） ────────────────────
-            sectionHeader(context, '阅读偏好', '排版 · 词典 · 工具'),
+            // 01 / 书库：最常用的本地书库入口放在最前。
+            sectionHeader(context, '书库', '本地文件 · 标签 · 备份'),
+            const SizedBox(height: 14),
+            ContentPanel(
+              child: _settingsToolList(context, [
+                if (localLib != null) ...[
+                  _SettingsBentoItem(
+                    key: const ValueKey('settings-local-library'),
+                    icon: CupertinoIcons.book,
+                    title: '本地书库',
+                    subtitle: '选择文件夹，扫描导入 TXT / EPUB / PDF',
+                    onTap: () => pushNovelPage<void>(
+                      context,
+                      LocalLibraryPage(
+                        state: state,
+                        local: localLib,
+                        repository: repository!,
+                      ),
+                      reduceMotion: state.reduceMotion,
+                    ),
+                  ),
+                  _SettingsBentoItem(
+                    key: const ValueKey('settings-tag-manage'),
+                    icon: CupertinoIcons.tag,
+                    title: '标签管理',
+                    subtitle: '新建、重命名或删除书架标签',
+                    onTap: () => pushNovelPage<void>(
+                      context,
+                      TagManagePage(state: state, local: localLib),
+                      reduceMotion: state.reduceMotion,
+                    ),
+                  ),
+                ],
+                _SettingsBentoItem(
+                  key: const ValueKey('settings-backup'),
+                  icon: CupertinoIcons.archivebox,
+                  title: '备份与恢复',
+                  subtitle: '导出或恢复书架、进度、书签与设置',
+                  onTap: () => pushNovelPage<void>(
+                    context,
+                    LibraryBackupPage(state: state),
+                    reduceMotion: state.reduceMotion,
+                  ),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 24),
+
+            // 02 / 阅读偏好：显示设置在前，进入子页的工具在后。
+            sectionHeader(context, '阅读偏好', '外观 · 排版 · 工具'),
             const SizedBox(height: 14),
             ContentPanel(
               child: Column(
@@ -81,7 +131,7 @@ class SettingsPage extends StatelessWidget {
                     _settingsDivider(context),
                     Row(
                       children: [
-                        _settingsIconBadge(context, CupertinoIcons.sun_max),
+                        _settingsIconBadge(context, CupertinoIcons.lightbulb),
                         const SizedBox(width: 12),
                         const Expanded(
                           child: Text(
@@ -102,13 +152,23 @@ class SettingsPage extends StatelessWidget {
                       ],
                     ),
                   ],
-                  _settingsSubgroupHeader(context, '阅读与排版工具箱'),
+                  _settingsDivider(context),
                   _settingsToolList(context, [
+                    // Same record as the reader's 亮度 sheet (synced both ways).
+                    _SettingsBentoItem(
+                      key: const ValueKey('settings-reader-paper'),
+                      icon: CupertinoIcons.circle_lefthalf_fill,
+                      title: '纸色与夜读',
+                      subtitle: '纸色、夜读亮度与暖光',
+                      trailingText: state.readerPreferences.paper.label,
+                      onTap: () =>
+                          showReaderAppearanceSheet(context, state: state),
+                    ),
                     _SettingsBentoItem(
                       key: const ValueKey('settings-palette-page'),
                       icon: CupertinoIcons.paintbrush,
                       title: '主题调节',
-                      subtitle: '极光与纸张色系',
+                      subtitle: '界面极光与纸张色系',
                       onTap: () => pushNovelPage<void>(
                         context,
                         PaletteSettingsPage(state: state),
@@ -136,105 +196,62 @@ class SettingsPage extends StatelessWidget {
                         reduceMotion: state.reduceMotion,
                       ),
                     ),
-                  ]),
-                  const SizedBox(height: 8),
-                  // Same record as the reader's 亮度 sheet (synced both ways).
-                  _settingsNavRow(
-                    context,
-                    rowKey: const ValueKey('settings-reader-paper'),
-                    icon: CupertinoIcons.sun_max,
-                    title: '纸色与夜读',
-                    subtitle: '纸色、夜读亮度、暖光与 PDF 反色，与阅读页同步',
-                    trailingText: state.readerPreferences.paper.label,
-                    onTap: () =>
-                        showReaderAppearanceSheet(context, state: state),
-                  ),
-                  _settingsDivider(context),
-                  _settingsNavRow(
-                    context,
-                    rowKey: const ValueKey('settings-reading-widget-page'),
-                    icon: CupertinoIcons.rectangle_on_rectangle,
-                    title: '桌面阅读小组件',
-                    subtitle: '配置主屏幕阅读进度卡片',
-                    onTap: () => pushNovelPage<void>(
-                      context,
-                      ReadingWidgetSettingsPage(state: state),
-                      reduceMotion: state.reduceMotion,
+                    _SettingsBentoItem(
+                      key: const ValueKey('settings-reading-widget-page'),
+                      icon: CupertinoIcons.rectangle_on_rectangle,
+                      title: '桌面阅读小组件',
+                      subtitle: '配置主屏幕阅读进度卡片',
+                      onTap: () => pushNovelPage<void>(
+                        context,
+                        ReadingWidgetSettingsPage(state: state),
+                        reduceMotion: state.reduceMotion,
+                      ),
                     ),
-                  ),
+                  ]),
                 ],
               ),
             ),
             const SizedBox(height: 24),
 
-            // ── 02 / 书库与数据（阅读记录、离线缓存、备份与本地书库整合） ─────────
-            sectionHeader(context, '书库与数据', '记录 · 缓存 · 备份'),
-            const SizedBox(height: 14),
-            ContentPanel(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
+            // 03 / 阅读记录：历史、统计、书签与离线缓存。
+            if (repository != null) ...[
+              sectionHeader(context, '阅读记录', '历史 · 统计 · 缓存'),
+              const SizedBox(height: 14),
+              ContentPanel(
+                child: _settingsToolList(context, [
                   if (repository case final NovelRepository source) ...[
-                    _settingsBentoGrid(context, [
-                      _SettingsBentoItem(
-                        key: const ValueKey('settings-reading-history'),
-                        icon: CupertinoIcons.clock,
-                        title: '阅读历史',
-                        subtitle: '足迹与章节续读',
-                        onTap: () => openReadingHistory(context, state, source),
+                    _SettingsBentoItem(
+                      key: const ValueKey('settings-reading-history'),
+                      icon: CupertinoIcons.clock,
+                      title: '阅读历史',
+                      subtitle: '足迹与章节续读',
+                      onTap: () => openReadingHistory(context, state, source),
+                    ),
+                    _SettingsBentoItem(
+                      key: const ValueKey('settings-reading-statistics'),
+                      icon: CupertinoIcons.chart_bar,
+                      title: '阅读统计',
+                      subtitle: '阅读时长与日历报告',
+                      onTap: () => pushNovelPage<void>(
+                        context,
+                        ReadingStatisticsPage(state: state, repository: source),
+                        reduceMotion: state.reduceMotion,
                       ),
-                      if (repository case final OfflineNovelRepository offline)
-                        _SettingsBentoItem(
-                          icon: CupertinoIcons.cloud_download,
-                          title: '缓存管理',
-                          subtitle: '已下载离线章节',
-                          onTap: () => pushNovelPage<void>(
-                            context,
-                            OfflineCachePage(
-                              repository: offline,
-                              reduceMotion: state.reduceMotion,
-                              onOpen: (pageContext, novel) => openDetail(
-                                pageContext,
-                                novel,
-                                state,
-                                offline,
-                                fromCache: true,
-                              ),
-                            ),
-                            reduceMotion: state.reduceMotion,
-                          ),
-                        ),
-                      _SettingsBentoItem(
-                        key: const ValueKey('settings-reading-statistics'),
-                        icon: CupertinoIcons.chart_bar,
-                        title: '阅读统计与报告',
-                        subtitle: '时长与日历分析',
-                        onTap: () => pushNovelPage<void>(
-                          context,
-                          ReadingStatisticsPage(
-                            state: state,
-                            repository: source,
-                          ),
-                          reduceMotion: state.reduceMotion,
-                        ),
+                    ),
+                    _SettingsBentoItem(
+                      key: const ValueKey('settings-bookmarks'),
+                      icon: CupertinoIcons.bookmark,
+                      title: '书签与划线',
+                      subtitle: '汇总全部书签与批注',
+                      onTap: () => pushNovelPage<void>(
+                        context,
+                        BookmarkLibraryPage(state: state, repository: source),
+                        reduceMotion: state.reduceMotion,
                       ),
-                      _SettingsBentoItem(
-                        key: const ValueKey('settings-bookmarks'),
-                        icon: CupertinoIcons.bookmark,
-                        title: '书签与划线',
-                        subtitle: '汇总书签与批注',
-                        onTap: () => pushNovelPage<void>(
-                          context,
-                          BookmarkLibraryPage(state: state, repository: source),
-                          reduceMotion: state.reduceMotion,
-                        ),
-                      ),
-                    ]),
-                    _settingsSubgroupHeader(context, '存储与本地书库'),
-                  ] else if (repository
-                      case final OfflineNovelRepository offline) ...[
-                    _settingsNavRow(
-                      context,
+                    ),
+                  ],
+                  if (repository case final OfflineNovelRepository offline)
+                    _SettingsBentoItem(
                       icon: CupertinoIcons.cloud_download,
                       title: '缓存管理',
                       subtitle: '管理已下载章节与离线缓存空间',
@@ -254,56 +271,10 @@ class SettingsPage extends StatelessWidget {
                         reduceMotion: state.reduceMotion,
                       ),
                     ),
-                    _settingsDivider(context),
-                  ],
-                  _settingsNavRow(
-                    context,
-                    rowKey: const ValueKey('settings-backup'),
-                    icon: CupertinoIcons.folder,
-                    title: '备份与恢复',
-                    subtitle: '导出或恢复书架、进度、书签与设置',
-                    onTap: () => pushNovelPage<void>(
-                      context,
-                      LibraryBackupPage(state: state),
-                      reduceMotion: state.reduceMotion,
-                    ),
-                  ),
-                  if (localLib != null) ...[
-                    _settingsDivider(context),
-                    _settingsNavRow(
-                      context,
-                      rowKey: const ValueKey('settings-local-library'),
-                      icon: CupertinoIcons.book,
-                      title: '本地书库',
-                      subtitle: '选择文件夹，扫描导入 TXT / EPUB / PDF',
-                      onTap: () => pushNovelPage<void>(
-                        context,
-                        LocalLibraryPage(
-                          state: state,
-                          local: localLib,
-                          repository: repository!,
-                        ),
-                        reduceMotion: state.reduceMotion,
-                      ),
-                    ),
-                    _settingsDivider(context),
-                    _settingsNavRow(
-                      context,
-                      rowKey: const ValueKey('settings-tag-manage'),
-                      icon: CupertinoIcons.tag,
-                      title: '标签管理',
-                      subtitle: '新建、重命名或删除书架标签',
-                      onTap: () => pushNovelPage<void>(
-                        context,
-                        TagManagePage(state: state, local: localLib),
-                        reduceMotion: state.reduceMotion,
-                      ),
-                    ),
-                  ],
-                ],
+                ]),
               ),
-            ),
-            const SizedBox(height: 24),
+              const SizedBox(height: 24),
+            ],
 
             AppearancePerformancePanel(state: state),
             const SizedBox(height: 24),
@@ -353,31 +324,6 @@ class SettingsPage extends StatelessWidget {
   Widget _settingsDivider(BuildContext context) =>
       const Divider(height: 18, indent: 46);
 
-  Widget _settingsSubgroupHeader(BuildContext context, String label) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(top: 12, bottom: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Divider(height: 12),
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.6,
-                color: scheme.primary.withValues(alpha: 0.85),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _settingsToolList(
     BuildContext context,
     List<_SettingsBentoItem> items,
@@ -392,113 +338,12 @@ class SettingsPage extends StatelessWidget {
           icon: item.icon,
           title: item.title,
           subtitle: item.subtitle,
+          trailingText: item.trailingText,
           onTap: item.onTap,
         ),
       ],
     ],
   );
-
-  Widget _settingsBentoGrid(
-    BuildContext context,
-    List<_SettingsBentoItem> items,
-  ) => LayoutBuilder(
-    builder: (context, constraints) {
-      final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
-      if (constraints.maxWidth < 260 * scale) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (final (index, item) in items.indexed) ...[
-              if (index > 0) _settingsDivider(context),
-              _settingsNavRow(
-                context,
-                rowKey: item.key,
-                icon: item.icon,
-                title: item.title,
-                subtitle: item.subtitle,
-                onTap: item.onTap,
-              ),
-            ],
-          ],
-        );
-      }
-      final rows = <Widget>[];
-      for (var i = 0; i < items.length; i += 2) {
-        if (i > 0) rows.add(const SizedBox(height: 10));
-        final first = items[i];
-        final second = i + 1 < items.length ? items[i + 1] : null;
-        rows.add(
-          Row(
-            children: [
-              Expanded(child: _settingsBentoTile(context, first)),
-              if (second != null) ...[
-                const SizedBox(width: 10),
-                Expanded(child: _settingsBentoTile(context, second)),
-              ],
-            ],
-          ),
-        );
-      }
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: rows,
-      );
-    },
-  );
-
-  Widget _settingsBentoTile(BuildContext context, _SettingsBentoItem item) {
-    final scheme = Theme.of(context).colorScheme;
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return JellyTapSurface(
-      key: item.key,
-      onTap: item.onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-        decoration: BoxDecoration(
-          color: dark
-              ? ArchiveDesign.darkRaised.withValues(alpha: 0.92)
-              : scheme.primary.withValues(alpha: 0.055),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: scheme.primary.withValues(alpha: dark ? 0.24 : 0.12),
-            width: 0.8,
-          ),
-        ),
-        child: Row(
-          children: [
-            _settingsIconBadge(context, item.icon),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    item.subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Widget _settingsNavRow(
     BuildContext context, {
@@ -795,4 +640,3 @@ class InlineSearchResults extends StatelessWidget {
     );
   }
 }
-

@@ -48,6 +48,8 @@ class _ReaderPageState extends State<ReaderPage>
     _followTicket++;
     _followScroll.cancel();
     _reloadingLocal = true;
+    _parsedChapters.clear();
+    _resolvedChapters.clear();
     setState(() {
       _content = _reloadLocalContent();
     });
@@ -116,7 +118,8 @@ class _ReaderPageState extends State<ReaderPage>
   ReaderMode? _lastMode;
   ReadingPosition? _pagedRestoreSource, _pagedRestore, _settingsPosition;
   bool get _paginated =>
-      widget.state.readerPreferences.mode.paginated && _novel.chapters.isNotEmpty;
+      widget.state.readerPreferences.mode.paginated &&
+      _novel.chapters.isNotEmpty;
   late final _followScroll = ReaderFollowScroll(_scroll);
   final _paragraphRegistry = ReaderParagraphRegistry();
   // 阅读进度条：章节字数权重 + 章内滚动比例。
@@ -198,6 +201,67 @@ class _ReaderPageState extends State<ReaderPage>
   double _layoutTextScale = 1;
   double _readingInset = 0;
   int _contentGeneration = 0;
+  // Parsed chapters keyed by "revision|id"; neighbours are warmed after each
+  // open so stepping or quickly flicking chapters skips read + parse.
+  final Map<String, Future<ReaderContent>> _parsedChapters = {};
+  // Same entries as [_parsedChapters] once parsed, so a cached chapter can be
+  // shown in the very first frame instead of flashing the skeleton.
+  final Map<String, ReaderContent> _resolvedChapters = {};
+  ({int generation, ReaderContent content})? _instant;
+  static const _parsedChapterLimit = 8;
+  Timer? _prefetchTimer;
+
+  String _parsedKey(int index) {
+    final c = _novel.chapters[index];
+    return '${c.revision}|${c.id}|$index';
+  }
+
+  Future<ReaderContent> _parsedChapter(int index, {bool refresh = false}) {
+    final key = _parsedKey(index);
+    if (!refresh) {
+      final hit = _parsedChapters.remove(key);
+      if (hit != null) return _parsedChapters[key] = hit;
+    }
+    _resolvedChapters.remove(key);
+    final future = _requestContent(
+      index,
+      refresh: refresh,
+    ).then(ReaderContent.parse);
+    _parsedChapters[key] = future;
+    // Failed reads must not stick in the cache.
+    future.then<void>(
+      (content) {
+        if (identical(_parsedChapters[key], future)) {
+          _resolvedChapters[key] = content;
+        }
+      },
+      onError: (Object _) {
+        if (identical(_parsedChapters[key], future)) {
+          _parsedChapters.remove(key);
+        }
+      },
+    );
+    while (_parsedChapters.length > _parsedChapterLimit) {
+      _resolvedChapters.remove(_parsedChapters.keys.first);
+      _parsedChapters.remove(_parsedChapters.keys.first);
+    }
+    return future;
+  }
+
+  void _prefetchNeighbours(int index, int generation) {
+    // Only local files are free to read ahead; remote sources stay on demand.
+    if (!isLocalNovelId(_novel.id)) return;
+    _prefetchTimer?.cancel();
+    _prefetchTimer = Timer(const Duration(milliseconds: 280), () {
+      if (!mounted || generation != _contentGeneration) return;
+      for (final next in [index + 1, index - 1]) {
+        if (next < 0 || next >= _novel.chapters.length) continue;
+        if (_parsedChapters.containsKey(_parsedKey(next))) continue;
+        unawaited(_parsedChapter(next).then((_) {}, onError: (_) {}));
+      }
+    });
+  }
+
   late final AnimationController _chapterReveal;
   bool _chapterRevealPending = false;
   int _chapterRevealFirst = 0;
@@ -286,6 +350,7 @@ class _ReaderPageState extends State<ReaderPage>
     _readingActivity.dispose();
     _local?.removeListener(_localChanged);
     _idleSave?.cancel();
+    _prefetchTimer?.cancel();
     _savePosition(notify: false, finalSave: true);
     _highlightTimer?.cancel();
     _findMatch.dispose();
@@ -709,7 +774,9 @@ class _ReaderPageState extends State<ReaderPage>
                     customPattern: customPattern,
                     maxChapterChars: maxChapterChars,
                   );
-                  if (updated != null && mounted && updated.chapters.isNotEmpty) {
+                  if (updated != null &&
+                      mounted &&
+                      updated.chapters.isNotEmpty) {
                     setState(() {
                       _novel = updated;
                       catalogueRevision = _novel.chapters.first.revision;
@@ -757,14 +824,18 @@ class _ReaderPageState extends State<ReaderPage>
     final generation = ++_contentGeneration;
     _chapterRevealPending = false;
     _chapterReveal.value = 1;
+    final cached = refresh ? null : _resolvedChapters[_parsedKey(index)];
+    _instant = cached == null
+        ? null
+        : (generation: generation, content: cached);
+    if (cached != null) _currentContent = cached;
     // Picker results can arrive between frames. Carry expected request failure
     // as data, rather than an exceptional future awaiting the next UI listener.
     try {
-      final content = await ReaderContent.parse(
-        await _requestContent(index, refresh: refresh),
-      );
+      final content = await _parsedChapter(index, refresh: refresh);
       if (mounted && index == _chapter && generation == _contentGeneration) {
         _currentContent = content;
+        _prefetchNeighbours(index, generation);
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && generation == _contentGeneration) {
             _listeningTarget = null;
@@ -1149,14 +1220,10 @@ class _ReaderPageState extends State<ReaderPage>
                     _seekProgress(0),
                 const SingleActivator(LogicalKeyboardKey.end): () =>
                     _seekProgress(1),
-                const SingleActivator(
-                  LogicalKeyboardKey.keyF,
-                  control: true,
-                ): _findInChapter,
-                const SingleActivator(
-                  LogicalKeyboardKey.keyF,
-                  meta: true,
-                ): _findInChapter,
+                const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+                    _findInChapter,
+                const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
+                    _findInChapter,
               },
               child: Focus(
                 autofocus: true,
@@ -1202,11 +1269,7 @@ class _ReaderPageState extends State<ReaderPage>
             builder: (context, showProgressBar, child) =>
                 showProgressBar ? child! : const SizedBox.shrink(),
             child: Padding(
-              padding: const EdgeInsets.only(
-                left: 56,
-                right: 56,
-                bottom: 8,
-              ),
+              padding: const EdgeInsets.only(left: 56, right: 56, bottom: 8),
               child: ValueListenableBuilder<double>(
                 valueListenable: _progressValue,
                 builder: (context, progress, _) => ReaderProgressBar(
@@ -1304,21 +1367,21 @@ class _ReaderPageState extends State<ReaderPage>
     if (!identical(pending, _pagedRestoreSource)) {
       _pagedRestoreSource = pending;
       _pagedRestore = pending == null
-        ? null
-        : ReadingPosition(
-            chapter: pending.chapter,
-            chapterId: pending.chapterId,
-            offset: pending.offset,
-            fraction: pending.fraction,
-            fontSize: pending.fontSize,
-            width: pending.width,
-            updatedAt: pending.updatedAt,
-            lineHeight: pending.lineHeight,
-            paragraphIndex: pending.paragraphIndex,
-            paragraphFraction: pending.paragraphFraction,
-            textScale: pending.textScale,
-            typeface: pending.typeface,
-          );
+          ? null
+          : ReadingPosition(
+              chapter: pending.chapter,
+              chapterId: pending.chapterId,
+              offset: pending.offset,
+              fraction: pending.fraction,
+              fontSize: pending.fontSize,
+              width: pending.width,
+              updatedAt: pending.updatedAt,
+              lineHeight: pending.lineHeight,
+              paragraphIndex: pending.paragraphIndex,
+              paragraphFraction: pending.paragraphFraction,
+              textScale: pending.textScale,
+              typeface: pending.typeface,
+            );
     }
     final restore = _pagedRestore;
     final chapterIndex = _chapter;
@@ -1417,10 +1480,16 @@ class _ReaderPageState extends State<ReaderPage>
                 MediaQuery.paddingOf(context).top +
                 FrostedHeader.toolbarHeight +
                 12;
-            final content = snapshot.data?.content;
-            final ready =
-                snapshot.connectionState == ConnectionState.done &&
-                content != null;
+            final done = snapshot.connectionState == ConnectionState.done;
+            final instant = _instant;
+            final useInstant =
+                !done &&
+                instant != null &&
+                instant.generation == _contentGeneration;
+            final content = useInstant
+                ? instant.content
+                : snapshot.data?.content;
+            final ready = (done || useInstant) && content != null;
             final failed =
                 snapshot.connectionState == ConnectionState.done &&
                 (snapshot.hasError || snapshot.data?.error != null);
@@ -1794,8 +1863,7 @@ class _ReaderPageState extends State<ReaderPage>
       icon: CupertinoIcons.sun_max,
       caption: '亮度',
       label: '亮度与纸色',
-      onPressed: () =>
-          showReaderAppearanceSheet(context, state: widget.state),
+      onPressed: () => showReaderAppearanceSheet(context, state: widget.state),
     ),
     ReaderAction(
       key: const ValueKey('reader-listening-entry'),
@@ -1895,4 +1963,3 @@ class _ReaderPageState extends State<ReaderPage>
     }
   }
 }
-

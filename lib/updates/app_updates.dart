@@ -15,12 +15,13 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.9.10',
+  defaultValue: '1.9.11',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 84);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 85);
 const currentReleaseNotes = '''
-1. 修复设置页、功能菜单与正文替换等界面中 `CupertinoIcons` 图标显示为缺字方框（叉号）的问题：恢复 `cupertino_icons` 字体资源依赖，确保未经过自绘矢量映射的普通 `Icon(CupertinoIcons.*)` 正常渲染。
-2. 新增图标字体资源清单与设置图标像素级渲染回归测试，防止字体资源缺失再次导致图标回退为缺字符号。
+1. 优化发现页、设置页与阅读工具布局，改善随机抽书状态切换动画和阅读器底部控件的正文遮挡。
+2. 提升大书架列表构建效率，使用书籍索引减少重复查找。
+3. 修复章节中偶尔混用“章 / 节 / 回”时的漏分章问题，结合相邻章节序号保留连续章节，并新增回归测试。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

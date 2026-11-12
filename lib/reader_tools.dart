@@ -12,6 +12,23 @@ import 'ui_preferences.dart' show readerFontSizeMin, readerFontSizeMax;
 import 'local_platform.dart';
 import 'reader_paging.dart' show ReaderPagingSettings;
 
+class _ToolLabel extends StatelessWidget {
+  const _ToolLabel(this.icon, this.label);
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: [
+      Icon(icon, size: 17),
+      const SizedBox(width: 6),
+      Flexible(child: Text(label, overflow: TextOverflow.ellipsis)),
+    ],
+  );
+}
+
 sealed class ReaderToolAction {
   const ReaderToolAction();
 }
@@ -283,7 +300,10 @@ class _ReaderToolsState extends State<ReaderTools> {
                   alignment: Alignment.centerRight,
                   child: GlassTextButton(
                     onPressed: widget.onReset,
-                    child: const Text('恢复默认排版'),
+                    child: const _ToolLabel(
+                      CupertinoIcons.arrow_counterclockwise,
+                      '恢复默认排版',
+                    ),
                   ),
                 ),
                 const Divider(height: 24),
@@ -310,7 +330,10 @@ class _ReaderToolsState extends State<ReaderTools> {
                               context,
                               const ReaderSeekProgress(0),
                             ),
-                      child: const Text('回到章首'),
+                      child: const _ToolLabel(
+                        CupertinoIcons.arrow_up_to_line,
+                        '回到章首',
+                      ),
                     ),
                     GlassTextButton(
                       onPressed: widget.position == null
@@ -319,7 +342,10 @@ class _ReaderToolsState extends State<ReaderTools> {
                               context,
                               const ReaderSeekProgress(1),
                             ),
-                      child: const Text('跳至章末'),
+                      child: const _ToolLabel(
+                        CupertinoIcons.arrow_down_to_line,
+                        '跳至章末',
+                      ),
                     ),
                   ],
                 ),
@@ -329,35 +355,42 @@ class _ReaderToolsState extends State<ReaderTools> {
                   onPressed: widget.position == null
                       ? null
                       : () => Navigator.pop(context, const ReaderOpenFind()),
-                  child: const Text('章内查找'),
+                  child: const _ToolLabel(CupertinoIcons.search, '章内查找'),
                 ),
                 const SizedBox(height: 8),
                 GlassTextButton(
                   key: const ValueKey('reader-open-purification'),
-                  onPressed: () => Navigator.pop(
-                    context,
-                    const ReaderOpenPurification(),
-                  ),
-                  child: const Text('正文净化与纠错'),
+                  onPressed: () =>
+                      Navigator.pop(context, const ReaderOpenPurification()),
+                  child: const _ToolLabel(CupertinoIcons.wand_stars, '正文净化与纠错'),
                 ),
-                if (LocalPlatform.android)
-                  AnimatedBuilder(
-                    animation: widget.state.readerBehaviorChanges,
-                    builder: (context, _) => Row(
+                AnimatedBuilder(
+                  animation: widget.state.readerSettingsChanges,
+                  builder: (context, _) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(
                       children: [
-                        const Expanded(child: Text('阅读时保持亮屏')),
+                        const Padding(
+                          padding: EdgeInsets.only(left: 4, right: 10),
+                          child: Icon(CupertinoIcons.sparkles, size: 18),
+                        ),
+                        const Expanded(child: Text('切换章节时淡入正文')),
                         CupertinoSwitch(
-                          key: const ValueKey('reader-keep-screen-on'),
-                          value: widget.state.keepScreenOn,
+                          key: const ValueKey('reader-chapter-entrance'),
+                          value: widget.state.readerPreferences.chapterEntrance,
                           activeTrackColor: Theme.of(
                             context,
                           ).colorScheme.primary,
                           onChanged: (value) async {
                             try {
-                              await widget.state.setKeepScreenOn(value);
+                              await widget.state.setReaderPreferences(
+                                widget.state.readerPreferences.copyWith(
+                                  chapterEntrance: value,
+                                ),
+                              );
                             } catch (_) {
                               if (context.mounted) {
-                                showNovelFeedback(context, '亮屏设置保存失败，请重试');
+                                showNovelFeedback(context, '动画设置保存失败，请重试');
                               }
                             }
                           },
@@ -365,11 +398,47 @@ class _ReaderToolsState extends State<ReaderTools> {
                       ],
                     ),
                   ),
+                ),
+                if (LocalPlatform.android)
+                  AnimatedBuilder(
+                    animation: widget.state.readerBehaviorChanges,
+                    builder: (context, _) => Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Row(
+                        children: [
+                          const Padding(
+                            padding: EdgeInsets.only(left: 4, right: 10),
+                            child: Icon(CupertinoIcons.sun_max, size: 18),
+                          ),
+                          const Expanded(child: Text('阅读时保持亮屏')),
+                          CupertinoSwitch(
+                            key: const ValueKey('reader-keep-screen-on'),
+                            value: widget.state.keepScreenOn,
+                            activeTrackColor: Theme.of(
+                              context,
+                            ).colorScheme.primary,
+                            onChanged: (value) async {
+                              try {
+                                await widget.state.setKeepScreenOn(value);
+                              } catch (_) {
+                                if (context.mounted) {
+                                  showNovelFeedback(context, '亮屏设置保存失败，请重试');
+                                }
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 GlassTextButton(
                   onPressed: widget.position == null
                       ? null
                       : () => Navigator.pop(context, const ReaderEnterFocus()),
-                  child: const Text('专注阅读 · 隐藏控件'),
+                  child: const _ToolLabel(
+                    CupertinoIcons.fullscreen,
+                    '专注阅读 · 隐藏控件',
+                  ),
                 ),
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
@@ -500,7 +569,9 @@ class _ReaderToolsState extends State<ReaderTools> {
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
                                         fontSize: 12,
-                                        color: Theme.of(context).colorScheme.onSurface,
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.onSurface,
                                       ),
                                     ),
                                   ],
@@ -522,7 +593,9 @@ class _ReaderToolsState extends State<ReaderTools> {
                           ),
                         ),
                         GlassIconButton(
-                          key: ValueKey('reader-tool-bookmark-delete-${mark.id}'),
+                          key: ValueKey(
+                            'reader-tool-bookmark-delete-${mark.id}',
+                          ),
                           icon: CupertinoIcons.trash,
                           label: '删除${mark.kindLabel} ${mark.id}',
                           onPressed: () => _remove(mark),

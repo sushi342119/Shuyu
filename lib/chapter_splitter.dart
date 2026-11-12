@@ -66,6 +66,47 @@ final _numbered = RegExp(
   '(?:第[ \\t　]*(?:$_numberSpan|[（(【\\[［〖〔][ \\t　]*$_numberSpan[ \\t　]*[）)】\\]］〗〕])[ \\t　]*(?:[分大小]?[卷捲章节節部集篇]|[章节節回囘话話幕折季期更段册冊编編輯辑讲講场場局夜曲弹彈])|$_numberRange[章节節回囘话話幕折卷捲部集篇段册冊编編輯辑])',
 );
 final _weakNumberedUnit = RegExp(r'[段册冊编編輯辑讲講场場局夜曲弹彈]$');
+final _headingOrdinal = RegExp('第[ \\t　]*($_number)');
+const _cnDigits = {
+  '零': 0, '〇': 0, '一': 1, '壹': 1, '二': 2, '两': 2, '兩': 2, '贰': 2,
+  '貳': 2, '三': 3, '叁': 3, '參': 3, '四': 4, '肆': 4, '五': 5, '伍': 5,
+  '六': 6, '陆': 6, '陸': 6, '七': 7, '柒': 7, '八': 8, '捌': 8, '九': 9,
+  '玖': 9,
+};
+const _cnUnits = {
+  '十': 10, '拾': 10, '百': 100, '佰': 100, '千': 1000, '仟': 1000,
+  '万': 10000, '萬': 10000,
+};
+
+/// Reads the ordinal of headings like "第12章" or "第十二回"; null if unknown.
+int? headingOrdinal(String title) {
+  final m = _headingOrdinal.firstMatch(title);
+  if (m == null) return null;
+  final token = m.group(1)!.replaceAllMapped(
+    RegExp('[０-９]'),
+    (d) => String.fromCharCode(d[0]!.codeUnitAt(0) - 0xFEE0),
+  );
+  final arabic = int.tryParse(token);
+  if (arabic != null) return arabic;
+  var total = 0, section = 0, digit = 0;
+  for (final ch in token.split('')) {
+    final d = _cnDigits[ch];
+    if (d != null) {
+      digit = d;
+      continue;
+    }
+    final unit = _cnUnits[ch];
+    if (unit == null) return null;
+    if (unit == 10000) {
+      total += (section + digit) * unit;
+      section = 0;
+    } else {
+      section += (digit == 0 ? 1 : digit) * unit;
+    }
+    digit = 0;
+  }
+  return total + section + digit;
+}
 final _volumeNumber = RegExp(
   '(?:卷[ \\t　]*$_numberSpan|[章节節回囘话話幕折部集篇][ \\t　]*之?[ \\t　]*$_numberRange(?=\$|[ \\t　:：、.．—\\-–）)】\\]]))',
 );
@@ -733,13 +774,42 @@ class ChapterTextIndex {
             )
             .toList()
           ..sort((a, b) => b.value.compareTo(a.value));
+    final mainFamily = dominant.isEmpty ? null : dominant.first.key;
+    // A minority-style heading ("第13节" among "第N章") is still a chapter when
+    // its number continues the main sequence on either side.
+    bool continuesMainSequence(int index) {
+      if (mainFamily == null) return false;
+      final own = headingOrdinal(_headings[index].title);
+      if (own == null) return false;
+      int? neighbour(int step) {
+        for (var j = index + step; j >= 0 && j < _headings.length; j += step) {
+          if (_headings[j].family == mainFamily) {
+            return headingOrdinal(_headings[j].title);
+          }
+        }
+        return null;
+      }
+
+      final before = neighbour(-1), after = neighbour(1);
+      return (before != null && before + 1 == own) ||
+          (after != null && own + 1 == after);
+    }
+
+    var index = -1;
     var headings = _headings.where((h) {
-      if (h.weak && (weakEvidence[h.family] ?? 0) < 2) return false;
+      index++;
+      if (h.weak && (weakEvidence[h.family] ?? 0) < 2) {
+        return h.wordsAfter < (index + 1 < _headings.length
+                ? _headings[index + 1].wordsBefore
+                : _words) &&
+            continuesMainSequence(index);
+      }
       if (dominant.isNotEmpty &&
           dominant.first.value >= 8 &&
           ['回', '节', '部', '集'].contains(h.family) &&
           (families[h.family] ?? 0) < 2 &&
-          h.family != dominant.first.key) {
+          h.family != dominant.first.key &&
+          !continuesMainSequence(index)) {
         return false;
       }
       return true;

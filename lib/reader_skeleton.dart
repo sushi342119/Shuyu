@@ -418,6 +418,39 @@ class ReaderScaffold extends StatelessWidget {
         Positioned.fill(
           child: ReaderEdgeBlur(animation: chrome, blurBottom: blurBottom),
         ),
+        // Paper scrim so body text never reads through the bottom controls.
+        // A plain gradient (no backdrop sampling) keeps scrolling cheap.
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: media.bottom + 190,
+          child: IgnorePointer(
+            child: AnimatedBuilder(
+              animation: chrome,
+              builder: (context, _) {
+                final t = Curves.easeOut.transform(chrome.value);
+                if (t == 0) return const SizedBox.shrink();
+                final paper = Theme.of(context).colorScheme.surface;
+                return DecoratedBox(
+                  key: const ValueKey('reader-bottom-scrim'),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      stops: const [0, .28, 1],
+                      colors: [
+                        paper.withValues(alpha: 0),
+                        paper.withValues(alpha: .95 * t),
+                        paper.withValues(alpha: .98 * t),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
         Positioned(
           top: 0,
           left: 0,
