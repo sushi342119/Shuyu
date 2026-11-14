@@ -8,6 +8,7 @@ import '../local_library.dart';
 import '../text_anchor.dart';
 import '../offline_repository.dart';
 import '../reader_content.dart';
+import '../reader_purification.dart';
 import 'cache.dart';
 import 'models.dart';
 import 'store.dart';
@@ -490,10 +491,29 @@ class ListeningController {
           ? const ReaderContent([])
           : await ReaderContent.parse(source);
       if (!_valid(generation)) return;
-      _bodyParagraphs = content.paragraphs;
+      await ReaderPurificationStore.shared.ensureLoaded();
+      if (!_valid(generation)) return;
+      final store = ReaderPurificationStore.shared;
+      final chapterTitle = novel.chapters[index].title;
+      final purifiedParagraphs =
+          (!store.hasEnabledRules && !store.hasChapterEdits(novel.id, index))
+          ? content.paragraphs
+          : [
+              for (var pIdx = 0; pIdx < content.paragraphs.length; pIdx++)
+                store.purifyParagraph(
+                  content.paragraphs[pIdx],
+                  bookId: novel.id,
+                  bookTitle: novel.title,
+                  chapterIndex: index,
+                  paragraphIndex: pIdx,
+                  chapterTitle: chapterTitle,
+                  isFirstParagraph: pIdx == 0,
+                ),
+            ];
+      _bodyParagraphs = purifiedParagraphs;
       var segments = source.length > 64 * 1024
-          ? await compute(speechSegments, content.paragraphs)
-          : speechSegments(content.paragraphs);
+          ? await compute(speechSegments, purifiedParagraphs)
+          : speechSegments(purifiedParagraphs);
       if (!_valid(generation)) return;
       if (segments.isEmpty) {
         paragraph = 0;

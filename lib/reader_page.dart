@@ -895,7 +895,16 @@ class _ReaderPageState extends State<ReaderPage>
                     setState(() {
                       _novel = updated;
                       catalogueRevision = _novel.chapters.first.revision;
-                      _chapter = _chapter.clamp(0, _novel.chapters.length - 1);
+                      final migratedPos = widget.state.positionFor(_novel.id);
+                      final targetChapter =
+                          migratedPos != null &&
+                              migratedPos.revision == catalogueRevision
+                          ? migratedPos.chapter
+                          : _chapter;
+                      _chapter = targetChapter.clamp(
+                        0,
+                        _novel.chapters.length - 1,
+                      );
                       _computeChapterWeights();
                       _content = _loadContent();
                     });
@@ -1162,6 +1171,143 @@ class _ReaderPageState extends State<ReaderPage>
     }
   }
 
+  PurifiedParagraph _purifyParagraphAt(
+    List<String> paragraphs,
+    int chapterIndex,
+    int paragraphIndex,
+  ) {
+    if (paragraphIndex < 0 || paragraphIndex >= paragraphs.length) {
+      return const PurifiedParagraph('');
+    }
+    return ReaderPurificationStore.shared.purifyParagraphWithMap(
+      paragraphs[paragraphIndex],
+      bookId: _novel.id,
+      bookTitle: _novel.title,
+      chapterIndex: chapterIndex,
+      paragraphIndex: paragraphIndex,
+      chapterTitle: chapterIndex >= 0 && chapterIndex < _novel.chapters.length
+          ? _novel.chapters[chapterIndex].title
+          : null,
+      isFirstParagraph: paragraphIndex == 0,
+    );
+  }
+
+  ReaderRichParagraph _projectRichParagraph(
+    ReaderRichParagraph format,
+    PurifiedParagraph purified,
+  ) {
+    if (purified.isIdentity ||
+        (format.emphasis.isEmpty &&
+            format.ruby.isEmpty &&
+            format.references.isEmpty)) {
+      return format;
+    }
+    return ReaderRichParagraph(
+      alignment: format.alignment,
+      writing: format.writing,
+      language: format.language,
+      opacity: format.opacity,
+      rule: format.rule,
+      breakBefore: format.breakBefore,
+      breakAfter: format.breakAfter,
+      spacing: format.spacing,
+      emphasis: [
+        for (final r in format.emphasis)
+          if (purified.purifiedRangeFor(r.start, r.end)
+              case (final int s, final int e))
+            ReaderEmphasis(s, e, r.mask),
+      ],
+      ruby: [
+        for (final r in format.ruby)
+          if (purified.purifiedRangeFor(r.start, r.end)
+              case (final int s, final int e))
+            ReaderRuby(s, e, r.text),
+      ],
+      references: [
+        for (final r in format.references)
+          if (purified.purifiedRangeFor(r.start, r.end)
+              case (final int s, final int e))
+            ReaderNoteReference(s, e, r.id),
+      ],
+    );
+  }
+
+  ReaderContent _purifyChapterContent(ReaderContent raw, int chapterIndex) {
+    final store = ReaderPurificationStore.shared;
+    if (!store.hasEnabledRules && !store.hasChapterEdits(_novel.id, chapterIndex)) {
+      return raw;
+    }
+    var changed = false;
+    final paragraphs = <String>[];
+    final projectedFormats = <int, ReaderRichParagraph>{};
+    for (var i = 0; i < raw.paragraphs.length; i++) {
+      final p = _purifyParagraphAt(raw.paragraphs, chapterIndex, i);
+      if (p.text != raw.paragraphs[i] || !p.isIdentity) {
+        changed = true;
+      }
+      paragraphs.add(p.text);
+      final rawFormat = raw.formats[i];
+      if (rawFormat != null) {
+        projectedFormats[i] = _projectRichParagraph(rawFormat, p);
+      }
+    }
+    if (!changed) return raw;
+    return ReaderContent(
+      List.unmodifiable(paragraphs),
+      readingOrder: raw.readingOrder,
+      inlineOwners: raw.inlineOwners,
+      placementIds: raw.placementIds,
+      formats: projectedFormats,
+      notes: raw.notes,
+      revision: raw.revision,
+      coordinateMap: raw.coordinateMap,
+      languageFilter: raw.languageFilter,
+    );
+  }
+
+  Widget _buildPagedIllustration(ReaderPageFragment fragment) {
+    final url = readerIllustrationUrl(fragment.text);
+    if (url != null) {
+      final illustrations = _currentContent?.illustrations ?? [url];
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(ArchiveDesign.panelRadius),
+        child: ReaderIllustration(
+          url: url,
+          fullScreen: true,
+          onOpen: () => pushNovelPage<void>(
+            context,
+            ReaderIllustrationGallery(urls: illustrations, initialUrl: url),
+            reduceMotion: widget.state.reduceMotion,
+          ),
+        ),
+      );
+    }
+    if (fragment.text.trim() == '[插图]') {
+      return _illustrationsRefreshing
+          ? const LoadingSkeleton(
+              layout: SkeletonLayout.cover,
+              label: '正在补全插图',
+            )
+          : ContentPanel(
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const ArchiveIcon(CupertinoIcons.photo),
+                    const SizedBox(height: 10),
+                    const Text('暂未取得本章插图地址'),
+                    GlassTextButton(
+                      onPressed: _refreshIllustrations,
+                      child: const Text('重试本章插图'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+    }
+    return const SizedBox.shrink();
+  }
+
   Widget _paragraphContent(
     List<String> paragraphs,
     int index,
@@ -1207,39 +1353,37 @@ class _ReaderPageState extends State<ReaderPage>
               ),
       );
     }
-    final purified = ReaderPurificationStore.shared.purifyParagraph(
-      paragraphs[index],
-      bookId: _novel.id,
-      bookTitle: _novel.title,
-      chapterIndex: _chapter,
-      paragraphIndex: index,
-      chapterTitle: _chapter >= 0 && _chapter < _novel.chapters.length
-          ? _novel.chapters[_chapter].title
-          : null,
-      isFirstParagraph: index == 0,
-    );
+    final purified = _purifyParagraphAt(paragraphs, _chapter, index);
     final chapterId = _chapter >= 0 && _chapter < _novel.chapters.length
         ? _novel.chapters[_chapter].id
         : null;
     return ReaderSelectionFragment(
       paragraph: index,
       chapter: chapterId,
-      text: purified,
+      text: purified.text,
       child: AnimatedBuilder(
         animation: widget.state.underlineChanges,
         builder: (context, _) {
-          final annotations = chapterId == null
+          final rawAnnotations = chapterId == null
               ? const <ReaderAnnotationRange>[]
               : widget.state.annotationsFor(_novel.id, chapterId: chapterId);
+          final annotations = rawAnnotations.isEmpty || purified.isIdentity
+              ? rawAnnotations
+              : ReaderPurificationStore.shared.mapAnnotationsToPurified(
+                  rawAnnotations,
+                  resolveParagraph: (pIdx) => pIdx == index
+                      ? purified
+                      : _purifyParagraphAt(paragraphs, _chapter, pIdx),
+                );
           final marks = annotations.isEmpty
               ? const <ReaderTextMark>[]
               : clipReaderParagraphMarks(
                   annotations,
                   paragraph: index,
-                  textLength: purified.length,
+                  textLength: purified.text.length,
                 );
           return ReaderHighlightText(
-            text: purified,
+            text: purified.text,
             index: index,
             match: _findMatch,
             style: style,
@@ -1465,18 +1609,22 @@ class _ReaderPageState extends State<ReaderPage>
           !_paginated && !widget.state.readerPreferences.hideSystemStatus,
       statusTextBuilder: (progress) {
         final pct = '${(progress * 100).round()}%';
+        final displayTitle = ReaderPurificationStore.shared.purifyTitle(
+          chapter.title,
+          bookId: _novel.id,
+          bookTitle: _novel.title,
+        );
         if (_paginated && _paged.pageCount > 0) {
           final page = (_paged.page + 1).clamp(1, _paged.pageCount);
-          return '${chapter.title} · $page/${_paged.pageCount}页 · $pct';
+          return '$displayTitle · $page/${_paged.pageCount}页 · $pct';
         }
-        return '${chapter.title} · $pct';
+        return '$displayTitle · $pct';
       },
     );
   }
 
   /// 横排翻页 body (design decision 6). Uses the paged engine that
-  /// shipped unused in v1.7.1; scroll-only features (find landing, listening
-  /// follow) stay in 上下滚动.
+  /// shipped unused in v1.7.1; listening follow stays in 上下滚动.
   Widget _pagedArticle(
     BuildContext context,
     ReaderContent content,
@@ -1513,21 +1661,36 @@ class _ReaderPageState extends State<ReaderPage>
     final restore = _pagedRestore;
     final chapterIndex = _chapter;
     final chapterId = _novel.chapters[chapterIndex].id;
+    final rawTitle = _novel.chapters[chapterIndex].title;
+    final purifiedTitle = ReaderPurificationStore.shared.purifyTitle(
+      rawTitle,
+      bookId: _novel.id,
+      bookTitle: _novel.title,
+    );
+    final purifiedContent = _purifyChapterContent(content, chapterIndex);
     final statusReserve = ReaderStatusLine.totalExtentFor(context) + 4;
     return AnimatedBuilder(
       animation: widget.state.underlineChanges,
       builder: (context, _) {
-        final annotations = widget.state.annotationsFor(
+        final rawAnnotations = widget.state.annotationsFor(
           _novel.id,
           chapterId: chapterId,
         );
+        final annotations =
+            rawAnnotations.isEmpty || identical(purifiedContent, content)
+            ? rawAnnotations
+            : ReaderPurificationStore.shared.mapAnnotationsToPurified(
+                rawAnnotations,
+                resolveParagraph: (pIdx) =>
+                    _purifyParagraphAt(content.paragraphs, chapterIndex, pIdx),
+              );
         return ReaderPagedView(
           key: ValueKey(('reader-paged', prefs.mode, _novel.id)),
-          content: content,
+          content: purifiedContent,
           preferences: prefs,
           style: style,
           controller: _paged,
-          title: _novel.chapters[chapterIndex].title,
+          title: purifiedTitle,
           bookTitle: _novel.title,
           chrome: _chrome,
           showBottomLocation: false,
@@ -1540,10 +1703,21 @@ class _ReaderPageState extends State<ReaderPage>
           pageBuilder: (page) => readerPageBody(
             page,
             style,
+            compressPunctuation: prefs.kinsokuCompression,
+            justify: prefs.justify,
+            formats: purifiedContent.formats,
             chapterId: chapterId,
             annotations: annotations,
+            imageBuilder: _buildPagedIllustration,
           ),
-          pageBuilderKey: (style, prefs.indent, annotations),
+          pageBuilderKey: (
+            style,
+            prefs.indent,
+            prefs.justify,
+            prefs.kinsokuCompression,
+            purifiedContent.paragraphs,
+            annotations,
+          ),
           chapterKey: (_novel.id, chapterIndex),
           chapterTurnDirection: _pagedTurn,
           position: restore,
@@ -1635,9 +1809,14 @@ class _ReaderPageState extends State<ReaderPage>
             if (ready && _lastMode != null && _lastMode != mode) {
               final saved =
                   _settingsPosition ?? widget.state.positionFor(_novel.id);
+              final sameChapterSaved =
+                  saved != null &&
+                      widget.state.chapterForPosition(_novel, saved) == _chapter
+                  ? saved
+                  : null;
               _restorePending ??= _lastMode!.paginated
-                  ? _pagedPosition()
-                  : (saved != null && saved.chapter == _chapter ? saved : null);
+                  ? (_pagedPosition() ?? sameChapterSaved)
+                  : sameChapterSaved;
               _restoreQueued = false;
             }
             if (ready) _lastMode = mode;
@@ -1660,6 +1839,12 @@ class _ReaderPageState extends State<ReaderPage>
             if (ready && _paginated) {
               return _pagedArticle(context, content, paragraphStyle);
             }
+            final displayChapterTitle = ReaderPurificationStore.shared
+                .purifyTitle(
+                  chapter.title,
+                  bookId: _novel.id,
+                  bookTitle: _novel.title,
+                );
             return NotificationListener<ScrollMetricsNotification>(
               onNotification: (notification) {
                 if (notification.depth == 0) {
@@ -1738,7 +1923,7 @@ class _ReaderPageState extends State<ReaderPage>
                             ),
                             const SizedBox(height: 12),
                             Text(
-                              chapter.title,
+                              displayChapterTitle,
                               style: const TextStyle(
                                 fontSize: 23,
                                 fontWeight: FontWeight.w700,
@@ -2022,11 +2207,12 @@ class _ReaderPageState extends State<ReaderPage>
     _suspendListeningFollow();
     _findOpen = true;
     final generation = _contentGeneration;
+    final purifiedContent = _purifyChapterContent(content, _chapter);
     try {
       final match = await showJellySheet<ReaderMatch>(
         context: context,
         reduceMotion: widget.state.reduceMotion,
-        builder: (_) => ReaderFindPanel(content: content),
+        builder: (_) => ReaderFindPanel(content: purifiedContent),
       );
       if (!mounted || match == null || generation != _contentGeneration) return;
       _highlightTimer?.cancel();
@@ -2036,6 +2222,12 @@ class _ReaderPageState extends State<ReaderPage>
       _highlightTimer = Timer(const Duration(seconds: 8), () {
         if (mounted) _findMatch.value = null;
       });
+      if (_paginated) {
+        _paged.reveal(ReaderTextAnchor(match.paragraph, match.start));
+        _savePosition(notify: false);
+        _showChrome(true);
+        return;
+      }
       final ticket = ++_restoreTicket;
       _restoring = true;
       try {

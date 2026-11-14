@@ -51,12 +51,15 @@ void _preflightZip(InputFileStream input, {bool lenient = false}) {
     if ((header.versionMadeBy >> 8) == 3 && (mode & 0xf000) == 0xa000) {
       throw StateError('不支持含符号链接的 EPUB');
     }
-    if (!lenient) {
-      if (header.uncompressedSize < 0 ||
-          header.uncompressedSize > epubMaxDecodedBytes - decodedTotal) {
+    final declared = header.uncompressedSize;
+    if (declared < 0 || (declared == 0xffffffff && !lenient)) {
+      throw StateError('EPUB 解压后大小超过上限');
+    }
+    if (declared != 0xffffffff) {
+      if (declared > epubMaxDecodedBytes - decodedTotal) {
         throw StateError('EPUB 解压后大小超过上限');
       }
-      decodedTotal += header.uncompressedSize;
+      decodedTotal += declared;
     }
   }
 }
@@ -423,11 +426,9 @@ class EpubPackage {
           throw StateError('不支持含符号链接的 EPUB');
         }
         if (!f.isFile) continue;
-        if (!lenient) {
-          decodedTotal += f.size;
-          if (decodedTotal > epubMaxDecodedBytes) {
-            throw StateError('EPUB 解压后大小超过上限');
-          }
+        decodedTotal += f.size;
+        if (decodedTotal > epubMaxDecodedBytes) {
+          throw StateError('EPUB 解压后大小超过上限');
         }
       }
       final entries = <String, ArchiveFile>{};
@@ -506,6 +507,7 @@ class EpubPackage {
     InputFileStream input,
     Map<String, ArchiveFile> entries, {
     bool lenient = false,
+    int nestedDepth = 0,
   }) async {
     Future<String> readText(String entry) async {
       final key = _resolveEntryKey(entries, entry);
@@ -564,7 +566,11 @@ class EpubPackage {
         .firstOrNull;
     if (opfPath == null) {
       if (lenient) {
-        return _parseArchiveWithoutOpf(input, entries);
+        return _parseArchiveWithoutOpf(
+          input,
+          entries,
+          nestedDepth: nestedDepth,
+        );
       }
       throw StateError('无效的 EPUB：找不到 OPF 文件');
     }
@@ -1407,22 +1413,33 @@ int _naturalPathCompare(String a, String b) {
 
 Future<EpubPackage> _parseArchiveWithoutOpf(
   InputFileStream input,
-  Map<String, ArchiveFile> entries,
-) async {
+  Map<String, ArchiveFile> entries, {
+  int nestedDepth = 0,
+}) async {
   // 1. 若压缩包内直接嵌了内层 .epub 文件（网文资源常见的“压缩包套壳改后缀”），直接解开内层 EPUB。
-  final nestedEpub = entries.entries
-      .where((e) => e.key.toLowerCase().endsWith('.epub'))
-      .map((e) => e.value)
-      .firstOrNull;
+  final nestedEpub = nestedDepth < 2
+      ? entries.entries
+            .where((e) => e.key.toLowerCase().endsWith('.epub'))
+            .map((e) => e.value)
+            .firstOrNull
+      : null;
   if (nestedEpub != null &&
       nestedEpub.size > 0 &&
-      nestedEpub.size <= 512 * 1024 * 1024) {
+      nestedEpub.size <= epubMaxDecodedBytes) {
     try {
       final nestedBytes = _extract(nestedEpub);
       final nestedArchive = ZipDecoder().decodeBytes(nestedBytes);
       final nestedEntries = <String, ArchiveFile>{};
+      var nestedDecodedTotal = 0;
       for (final f in nestedArchive.files) {
+        if (f.isSymbolicLink) {
+          throw StateError('不支持含符号链接的 EPUB');
+        }
         if (!f.isFile) continue;
+        nestedDecodedTotal += f.size;
+        if (nestedDecodedTotal > epubMaxDecodedBytes) {
+          throw StateError('EPUB 解压后大小超过上限');
+        }
         final normalized = f.name
             .replaceAll(r'\', '/')
             .replaceFirst(RegExp(r'^/+'), '')
@@ -1430,7 +1447,18 @@ Future<EpubPackage> _parseArchiveWithoutOpf(
         nestedEntries[normalized] = f;
         nestedEntries.putIfAbsent(f.name, () => f);
       }
-      return await EpubPackage._parse(input, nestedEntries, lenient: true);
+      return await EpubPackage._parse(
+        input,
+        nestedEntries,
+        lenient: true,
+        nestedDepth: nestedDepth + 1,
+      );
+    } on StateError catch (e) {
+      if (e.message == '不支持含符号链接的 EPUB' ||
+          e.message == 'EPUB 解压后大小超过上限') {
+        rethrow;
+      }
+      // Fallback to direct chapter discovery below.
     } on Object {
       // Fallback to direct chapter discovery below.
     }

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 const defaultChapterExtensionsEnabled = true;
 
@@ -892,9 +893,11 @@ class ChapterTextIndex {
                   .length
         : _words + _lineWords;
     final key = title.replaceAll(_headingKeyIgnored, '');
-    final contentUnits = (content - _lineStart).clamp(0, raw.length);
+    final contentUnits = (content - _lineStart - _indent).clamp(0, raw.length);
     final contentBytes = glued
-        ? _lineByteStart + utf8.encode(raw.substring(0, contentUnits)).length
+        ? _lineByteStart +
+              _indentBytes +
+              utf8.encode(raw.substring(0, contentUnits)).length
         : nextBytes;
     return _Heading(
       title,
@@ -1205,9 +1208,22 @@ List<LocalChapterIndex> subdivideOversizedChapters(
       if (newline < 0 || newline >= chapterEnd || newline - target > 2000) {
         newline = normalizedText.lastIndexOf('\n', target);
       }
-      final splitAt = (newline > cursor && newline < chapterEnd)
+      var splitAt = (newline > cursor && newline < chapterEnd)
           ? newline + 1
           : target;
+      if (splitAt > cursor && splitAt < chapterEnd) {
+        final prevUnit = normalizedText.codeUnitAt(splitAt - 1);
+        final nextUnit = normalizedText.codeUnitAt(splitAt);
+        if (prevUnit >= 0xD800 &&
+            prevUnit <= 0xDBFF &&
+            nextUnit >= 0xDC00 &&
+            nextUnit <= 0xDFFF) {
+          splitAt--;
+          if (splitAt <= cursor) {
+            splitAt = math.min(chapterEnd, target + 1);
+          }
+        }
+      }
       final slice = normalizedText.substring(cursor, splitAt);
       final sliceBytes = utf8.encode(slice).length;
       result.add(
@@ -1292,9 +1308,9 @@ List<LocalChapterIndex> splitLocalChaptersCustom(
         contentBytes: nextBytes,
       ));
     }
-    if (nl < 0) break;
     lineStart = nextStart;
     lineByteStart = nextBytes;
+    if (nl < 0) break;
   }
 
   final totalBytes = lineByteStart;

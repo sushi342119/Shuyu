@@ -767,6 +767,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
     if (widget.onChapterTurned == null ||
         !_adjacentLayouts.containsKey(direction.sign) ||
         _pager?.hasClients != true) {
+      widget.onBoundary(direction.sign);
       return false;
     }
     final spread = direction < 0 ? -1 : _spreadCount;
@@ -825,6 +826,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
     layout.key,
     _layoutStyle,
     widget.preferences.layoutKey,
+    widget.preferences.kinsokuCompression,
     scaler.scale(widget.style.fontSize ?? 19),
     (pageBreak?.paragraph, pageBreak?.offset),
   );
@@ -1089,6 +1091,12 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
             : 0);
     final spreadCount =
         ((result.pages.length + leadingPages) / bookLayout.count).ceil();
+    final backwardChapterLanding =
+        chapterChanged &&
+        widget.chapterTurnDirection < 0 &&
+        _pendingFraction == null &&
+        anchor == null &&
+        position == null;
     final page =
         (_pendingFraction != null
                 ? _pendingFraction == 1
@@ -1098,7 +1106,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
                             leadingPages
                 : anchor != null
                 ? anchorPage!
-                : position?.fraction == 1
+                : backwardChapterLanding || position?.fraction == 1
                 ? result.pages.length - 1
                 : ((position?.fraction ?? 0) * (spreadCount - 1)).round() *
                           bookLayout.count -

@@ -85,13 +85,19 @@ class ReaderControlsPlugin : FlutterPlugin, ActivityAware {
                     result.success(value.coerceIn(0f, 1f).toDouble()); return@setMethodCallHandler
                 }
                 if (call.method != "apply") { result.notImplemented(); return@setMethodCallHandler }
-                volumePaging = call.argument<Boolean>("volumePaging") == true
-                val brightness = call.argument<Number>("brightness")?.toFloat() ?: -1f
-                if (brightness != -1f && brightness !in 0f..1f) {
-                    result.error("brightness", "阅读亮度超出范围", null); return@setMethodCallHandler
+                if (call.hasArgument("volumePaging")) {
+                    volumePaging = call.argument<Boolean>("volumePaging") == true
                 }
-                activity?.window?.let { window -> val attrs = window.attributes; attrs.screenBrightness = brightness; window.attributes = attrs }
-                hideStatusBar(call.argument<Boolean>("hideStatusBar") == true)
+                if (call.hasArgument("brightness")) {
+                    val brightness = call.argument<Number>("brightness")?.toFloat() ?: -1f
+                    if (brightness != -1f && brightness !in 0f..1f) {
+                        result.error("brightness", "阅读亮度超出范围", null); return@setMethodCallHandler
+                    }
+                    activity?.window?.let { window -> val attrs = window.attributes; attrs.screenBrightness = brightness; window.attributes = attrs }
+                }
+                if (call.hasArgument("hideStatusBar")) {
+                    hideStatusBar(call.argument<Boolean>("hideStatusBar") == true)
+                }
                 result.success(null)
             }
         }

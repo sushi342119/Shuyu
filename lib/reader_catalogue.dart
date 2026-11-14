@@ -10,6 +10,7 @@ import 'catalog.dart';
 import 'chapter_splitter.dart' show TxtTocRulePreset;
 import 'library_state.dart';
 import 'offline_cache.dart';
+import 'regex_safety.dart';
 
 /// A bounded, lazy chapter picker using the existing glass drawer. The current
 /// chapter is the scroll origin, so locating it never lays out earlier rows.
@@ -125,6 +126,11 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
     if (callback == null || _applyingRule) return;
     final custom = _customRegex.text.trim();
     if (custom.isNotEmpty) {
+      final unsafe = detectUnsafeRegexPattern(custom);
+      if (unsafe != null) {
+        setState(() => _ruleError = unsafe);
+        return;
+      }
       try {
         RegExp(custom, multiLine: true);
       } on FormatException catch (e) {

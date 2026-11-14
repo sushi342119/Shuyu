@@ -23,6 +23,7 @@ import 'local_library.dart';
 import 'local_annotation_remap.dart';
 import 'recovery_archive.dart';
 import 'reader_underline.dart';
+import 'reader_rich_content.dart';
 import 'reader_annotation_range.dart';
 import 'reading_activity.dart';
 import 'reading_moments.dart';
@@ -1427,18 +1428,59 @@ class LibraryState extends ChangeNotifier {
           final end = (old.offset + old.length).clamp(start, oldText.length);
           final range = await oldText.trimmedRange(start, end);
           final bodyLength = range.end - range.start;
-          final local =
-              position.textOffset ??
-              (position.paragraphIndex != null
-                  ? (await oldText.paragraphAt(range.start, range.end,
-                        stopAt: position.paragraphIndex!)).start +
-                        withinParagraph
-                  : (position.fraction * bodyLength).floor());
+          int local;
+          if (position.textOffset != null) {
+            local = position.textOffset!;
+          } else if (position.paragraphIndex != null) {
+            final para = await oldText.paragraphAt(
+              range.start,
+              range.end,
+              stopAt: position.paragraphIndex!,
+            );
+            if (para.index == position.paragraphIndex! &&
+                para.start + withinParagraph <= bodyLength) {
+              local = para.start + withinParagraph;
+            } else if (bodyLength <= FileTextAnchor.maxSliceLength) {
+              final reflowed = reflowReaderParagraphsWithOffsets(
+                await oldText.slice(range.start, range.end),
+              );
+              if (position.paragraphIndex! >= 0 &&
+                  position.paragraphIndex! < reflowed.length) {
+                local = reflowed[position.paragraphIndex!].rawStart(
+                  withinParagraph,
+                );
+              } else {
+                throw const FormatException('旧阅读段落越界');
+              }
+            } else {
+              throw const FormatException('旧阅读段落越界');
+            }
+          } else {
+            local = (position.fraction * bodyLength).floor();
+          }
           final global = await newText.relocateFrom(
             oldText,
             range.start + local.clamp(0, bodyLength),
           );
           final target = await newText.locate(chapters, global);
+          int? mappedParagraph = target.paragraph;
+          if (target.chapter >= 0 && target.chapter < chapters.length) {
+            final dstChapter = chapters[target.chapter];
+            final dstBody = await newText.trimmedRange(
+              dstChapter.offset,
+              dstChapter.offset + dstChapter.length,
+            );
+            if (dstBody.end - dstBody.start <= FileTextAnchor.maxSliceLength) {
+              final dstSlice = await newText.slice(dstBody.start, dstBody.end);
+              if (!dstSlice.contains('\n\n') && dstSlice.contains('\n')) {
+                final reflowedDst = reflowReaderParagraphsWithOffsets(dstSlice);
+                mappedParagraph = locateReflowedStart(
+                  reflowedDst,
+                  (global - dstBody.start).clamp(0, dstSlice.length),
+                ).paragraph;
+              }
+            }
+          }
           return ReadingPosition(
             chapter: target.chapter,
             chapterId: target.chapter,
@@ -1448,7 +1490,7 @@ class LibraryState extends ChangeNotifier {
             width: 0,
             updatedAt: position.updatedAt,
             lineHeight: position.lineHeight,
-            paragraphIndex: target.paragraph,
+            paragraphIndex: mappedParagraph,
             paragraphFraction: position.paragraphFraction,
             textScale: position.textScale,
             typeface: position.typeface,
@@ -1512,6 +1554,7 @@ class LibraryState extends ChangeNotifier {
                   newChapters: chapters,
                   oldRevision: task.oldRevision,
                   newRevision: task.newRevision,
+                  quote: mark.quote,
                 );
                 if (ranges.isNotEmpty) {
                   final first = ranges.first;

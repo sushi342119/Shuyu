@@ -11,6 +11,183 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app_interactions.dart';
 import 'app_ui.dart';
 import 'reader_purification_import.dart';
+import 'reader_underline.dart';
+import 'regex_safety.dart' as regex_safety;
+export 'regex_safety.dart' show detectUnsafeRegexPattern;
+
+/// Purified display text together with an optional monotonic per-character
+/// `[rawStart, rawEnd)` interval map (`length == text.length * 2`) projecting
+/// purified code units back to the raw stored paragraph. When [toRaw] is `null`,
+/// offsets are 1:1.
+@immutable
+class PurifiedParagraph {
+  const PurifiedParagraph(this.text, {this.rawLength, this.toRaw});
+
+  final String text;
+  final int? rawLength;
+  final List<int>? toRaw;
+
+  int get sourceLength => rawLength ?? text.length;
+  bool get isIdentity => toRaw == null;
+
+  int rawOffsetFor(int purifiedOffset) {
+    final map = toRaw;
+    final srcLen = sourceLength;
+    if (map == null) return purifiedOffset.clamp(0, srcLen);
+    if (text.isEmpty || map.isEmpty) return 0;
+    if (purifiedOffset <= 0) return map[0].clamp(0, srcLen);
+    if (purifiedOffset >= text.length) {
+      return map[2 * (text.length - 1) + 1].clamp(0, srcLen);
+    }
+    return map[2 * purifiedOffset].clamp(0, srcLen);
+  }
+
+  (int, int) rawRangeFor(int purifiedStart, int purifiedEnd) {
+    final map = toRaw;
+    final srcLen = sourceLength;
+    if (map == null) {
+      final s = purifiedStart.clamp(0, srcLen);
+      final e = purifiedEnd.clamp(s, srcLen);
+      return (s, e);
+    }
+    if (text.isEmpty || map.isEmpty) return (0, 0);
+    final p0 = purifiedStart.clamp(0, text.length);
+    final p1 = purifiedEnd.clamp(p0, text.length);
+    if (p0 >= p1) {
+      final off = rawOffsetFor(p0);
+      return (off, off);
+    }
+    var s = map[2 * p0];
+    var e = map[2 * (p1 - 1) + 1];
+    if (e < s) {
+      final t = s;
+      s = e;
+      e = t;
+    }
+    if (e == s && srcLen > 0) {
+      if (s < srcLen) {
+        e = s + 1;
+      } else {
+        s = srcLen - 1;
+        e = srcLen;
+      }
+    }
+    return (s.clamp(0, srcLen), e.clamp(0, srcLen));
+  }
+
+  (int, int)? purifiedRangeFor(int rawStart, int rawEnd) {
+    if (rawEnd <= rawStart || text.isEmpty) return null;
+    final map = toRaw;
+    if (map == null) {
+      final s = rawStart.clamp(0, text.length);
+      final e = rawEnd.clamp(s, text.length);
+      return s < e ? (s, e) : null;
+    }
+    if (map.length < text.length * 2) return null;
+    var pStart = -1;
+    var pEnd = -1;
+    for (var i = 0; i < text.length; i++) {
+      final segStart = map[2 * i];
+      final segEnd = map[2 * i + 1];
+      final overlaps = segEnd > segStart
+          ? (segEnd > rawStart && segStart < rawEnd)
+          : (segStart >= rawStart && segStart < rawEnd);
+      if (overlaps) {
+        if (pStart < 0) pStart = i;
+        pEnd = i + 1;
+      }
+    }
+    if (pStart < 0 || pEnd <= pStart) return null;
+    return (pStart, pEnd);
+  }
+}
+
+List<int> _identityMap(int length) => List<int>.generate(
+  length * 2,
+  (idx) => (idx >> 1) + (idx & 1),
+  growable: false,
+);
+
+List<int> _mapReplacementSegments({
+  required List<int> prevMap,
+  required int prevLength,
+  required List<(int start, int end, int repLen)> edits,
+}) {
+  final out = <int>[];
+  var cursor = 0;
+  for (final (start, end, repLen) in edits) {
+    for (var i = cursor; i < start; i++) {
+      out
+        ..add(prevMap[2 * i])
+        ..add(prevMap[2 * i + 1]);
+    }
+    if (repLen > 0) {
+      if (start < end) {
+        final rawStart = prevMap[2 * start];
+        final rawEnd = prevMap[2 * (end - 1) + 1];
+        final rawSpan = rawEnd - rawStart;
+        for (var r = 0; r < repLen; r++) {
+          if (repLen == end - start) {
+            out
+              ..add(prevMap[2 * (start + r)])
+              ..add(prevMap[2 * (start + r) + 1]);
+          } else if (rawSpan <= 0) {
+            out
+              ..add(rawStart)
+              ..add(rawStart);
+          } else {
+            out
+              ..add(rawStart + ((r * rawSpan) ~/ repLen))
+              ..add(rawStart + (((r + 1) * rawSpan) ~/ repLen));
+          }
+        }
+      } else {
+        final anchor = start < prevLength
+            ? prevMap[2 * start]
+            : (prevLength > 0 ? prevMap[2 * (prevLength - 1) + 1] : 0);
+        for (var r = 0; r < repLen; r++) {
+          out
+            ..add(anchor)
+            ..add(anchor);
+        }
+      }
+    }
+    cursor = end;
+  }
+  for (var i = cursor; i < prevLength; i++) {
+    out
+      ..add(prevMap[2 * i])
+      ..add(prevMap[2 * i + 1]);
+  }
+  return out;
+}
+
+List<int> _mapManualEdit(String raw, String edited) {
+  if (raw == edited) return _identityMap(raw.length);
+  var prefix = 0;
+  final minLen = raw.length < edited.length ? raw.length : edited.length;
+  while (prefix < minLen &&
+      raw.codeUnitAt(prefix) == edited.codeUnitAt(prefix)) {
+    prefix++;
+  }
+  var suffix = 0;
+  while (suffix < (minLen - prefix) &&
+      raw.codeUnitAt(raw.length - 1 - suffix) ==
+          edited.codeUnitAt(edited.length - 1 - suffix)) {
+    suffix++;
+  }
+  return _mapReplacementSegments(
+    prevMap: _identityMap(raw.length),
+    prevLength: raw.length,
+    edits: [
+      (
+        prefix,
+        raw.length - suffix,
+        edited.length - prefix - suffix,
+      ),
+    ],
+  );
+}
 
 const _quoteChars = {0x0022, 0x201C, 0x201D}; // " “ ”
 const _sentenceEndChars = '。！？!?…~～';
@@ -62,16 +239,23 @@ String repairReaderQuotes(String input) {
   return buffer.toString();
 }
 
-/// Splits an overly dense wall-of-text paragraph at clear dialogue and
-/// sentence-group boundaries while keeping normal paragraphs intact.
-String reSegmentDialogueText(String input) {
-  if (input.length < 160 || input.contains('\n')) return input;
+(String, List<int>?) _reSegmentDialogueWithMap(
+  String input,
+  List<int>? prevMap,
+) {
+  if (input.length < 160 || input.contains('\n')) return (input, prevMap);
   final out = StringBuffer();
+  final mapOut = <int>[];
+  final baseMap = prevMap ?? _identityMap(input.length);
+  var changed = false;
   var sinceBreak = 0;
   var quoteDepth = 0;
   for (var i = 0; i < input.length; i++) {
     final ch = input[i];
     out.write(ch);
+    mapOut
+      ..add(baseMap[2 * i])
+      ..add(baseMap[2 * i + 1]);
     sinceBreak++;
     if (ch == '“' || ch == '「' || ch == '『') {
       quoteDepth++;
@@ -89,6 +273,13 @@ String reSegmentDialogueText(String input) {
                     !_closingFollowChars.contains(next) &&
                     !_speechVerbs.contains(next)))) {
           out.write('\n　　');
+          final anchor = baseMap[2 * (i + 1)];
+          for (var k = 0; k < 3; k++) {
+            mapOut
+              ..add(anchor)
+              ..add(anchor);
+          }
+          changed = true;
           sinceBreak = 0;
         }
       }
@@ -103,32 +294,62 @@ String reSegmentDialogueText(String input) {
           !_sentenceEndChars.contains(next) &&
           !_closingFollowChars.contains(next)) {
         out.write('\n　　');
+        final anchor = baseMap[2 * (i + 1)];
+        for (var k = 0; k < 3; k++) {
+          mapOut
+            ..add(anchor)
+            ..add(anchor);
+        }
+        changed = true;
         sinceBreak = 0;
       }
     }
   }
-  return out.toString();
+  if (!changed) return (input, prevMap);
+  return (out.toString(), mapOut);
 }
 
-/// Removes a leading duplicate chapter title from the first paragraph of a
-/// chapter when the body repeats the heading verbatim.
-String dedupLeadingChapterTitle(String paragraph, String? chapterTitle) {
-  if (chapterTitle == null || chapterTitle.trim().isEmpty) return paragraph;
+/// Splits an overly dense wall-of-text paragraph at clear dialogue and
+/// sentence-group boundaries while keeping normal paragraphs intact.
+String reSegmentDialogueText(String input) =>
+    _reSegmentDialogueWithMap(input, null).$1;
+
+(String, List<int>?) _dedupLeadingChapterTitleWithMap(
+  String paragraph,
+  String? chapterTitle,
+  List<int>? prevMap,
+) {
+  if (chapterTitle == null || chapterTitle.trim().isEmpty) {
+    return (paragraph, prevMap);
+  }
   final cleanTitle = chapterTitle.trim();
-  final trimmed = paragraph.trimLeft();
-  if (trimmed.isEmpty) return paragraph;
-  if (trimmed == cleanTitle) return '';
+  final leadTrimmedCount = paragraph.length - paragraph.trimLeft().length;
+  final trimmed = paragraph.substring(leadTrimmedCount);
+  if (trimmed.isEmpty) return (paragraph, prevMap);
+  if (trimmed == cleanTitle) {
+    return ('', const <int>[]);
+  }
   final escaped = RegExp.escape(cleanTitle);
   final match = RegExp(
     '^[$escaped\\s\\p{P}]*$escaped(?:[\\s　]*\\n|[\\s　]{2,})',
     unicode: true,
   ).firstMatch(trimmed);
   if (match != null) {
-    final rest = trimmed.substring(match.end).trimLeft();
-    return rest.isEmpty ? paragraph : rest;
+    final afterMatch = trimmed.substring(match.end);
+    final rest = afterMatch.trimLeft();
+    if (rest.isEmpty) return (paragraph, prevMap);
+    final cut =
+        leadTrimmedCount + match.end + (afterMatch.length - rest.length);
+    final baseMap = prevMap ?? _identityMap(paragraph.length);
+    return (rest, baseMap.sublist(2 * cut));
   }
-  return paragraph;
+  return (paragraph, prevMap);
 }
+
+/// Removes a leading duplicate chapter title from the first paragraph of a
+/// chapter when the body repeats the heading verbatim.
+String dedupLeadingChapterTitle(String paragraph, String? chapterTitle) =>
+    _dedupLeadingChapterTitleWithMap(paragraph, chapterTitle, null).$1;
 
 @immutable
 class ReaderPurificationRule {
@@ -224,20 +445,8 @@ class ReaderPurificationRule {
 
   /// Detects regex patterns prone to catastrophic backtracking (ReDoS) or
   /// excessive complexity before they can block the UI isolate.
-  static String? detectUnsafeRegexPattern(String pattern) {
-    if (pattern.length > 512) {
-      return '正则表达式过长，已禁用以防卡顿';
-    }
-    // Nested quantifiers inside a group followed by an outer quantifier, e.g.
-    // (a+)+, (.*)+, ([a-z]+)*, (?:a|aa)+, or adjacent unbounded wildcards .*.*
-    final nestedQuantifier = RegExp(
-      r'\((?:\?[:=!])?[^()]*[+*?\}][^()]*\)\s*(?:[+*?]|\{\d)|(?:\.\*){2,}|(?:\.\+){2,}',
-    );
-    if (nestedQuantifier.hasMatch(pattern)) {
-      return '正则表达式存在灾难性回溯风险，已自动禁用';
-    }
-    return null;
-  }
+  static String? detectUnsafeRegexPattern(String pattern) =>
+      regex_safety.detectUnsafeRegexPattern(pattern);
 
   static RegExp? _compile(String pattern) {
     if (detectUnsafeRegexPattern(pattern) != null) return null;
@@ -262,10 +471,11 @@ class ReaderPurificationRule {
             source.runes.any((r) => r > 0xffff);
         if (unicode) {
           // Java permits escaped non-ASCII punctuation; Unicode ECMAScript
-          // expects those same literal characters without an identity escape.
+          // expects those same literal characters without an identity escape,
+          // while preserving even pairs of literal backslashes (`\\`).
           source = source.replaceAllMapped(
-            RegExp(r'\\([^\x00-\x7f])'),
-            (m) => m[1]!,
+            RegExp(r'(?<!\\)((?:\\\\)*)\\([^\x00-\x7f])'),
+            (m) => '${m[1]!}${m[2]!}',
           );
         }
         regExp = RegExp(
@@ -281,6 +491,40 @@ class ReaderPurificationRule {
     } on FormatException {
       return null;
     }
+  }
+
+  String _expandRegexReplacement(Match match) {
+    // Dart replaceAll treats $1 literally; Legado uses Java-style groups.
+    final out = StringBuffer();
+    for (var i = 0; i < replacement.length; i++) {
+      final ch = replacement[i];
+      if (ch == r'\' && i + 1 < replacement.length) {
+        out.write(switch (replacement[++i]) {
+          'n' => '\n',
+          'r' => '\r',
+          't' => '\t',
+          final escaped => escaped,
+        });
+      } else if (ch == r'$' &&
+          i + 1 < replacement.length &&
+          RegExp(r'[0-9]').hasMatch(replacement[i + 1])) {
+        var group = int.parse(replacement[++i]);
+        if (group > match.groupCount) {
+          out.write('\$$group');
+          continue;
+        }
+        while (i + 1 < replacement.length) {
+          final digit = int.tryParse(replacement[i + 1]);
+          if (digit == null || group * 10 + digit > match.groupCount) break;
+          group = group * 10 + digit;
+          i++;
+        }
+        out.write(match.group(group) ?? '');
+      } else {
+        out.write(ch);
+      }
+    }
+    return out.toString();
   }
 
   bool matches(String input) {
@@ -304,71 +548,83 @@ class ReaderPurificationRule {
     final sw = Stopwatch()..start();
     final matched = regExp.hasMatch(input);
     sw.stop();
-    if (sw.elapsedMicroseconds > 8000) {
-      _trippedRuleIds.add(id);
+    if (sw.elapsedMicroseconds > 8000 && _trippedRuleIds.add(id)) {
+      ReaderPurificationStore.shared._invalidateCaches();
     }
     return matched;
   }
 
-  String apply(String input) {
+  String apply(String input) => applyWithMap(input, null).$1;
+
+  (String, List<int>?) applyWithMap(String input, List<int>? prevMap) {
     if (!enabled ||
         unsupportedReason != null ||
         _trippedRuleIds.contains(id) ||
         replacement.trimLeft().startsWith('@js:') ||
         input.isEmpty) {
-      return input;
+      return (input, prevMap);
     }
     if (id == 'builtin_smart_quotes') {
-      return repairReaderQuotes(input);
+      return (repairReaderQuotes(input), prevMap);
     }
     if (id == 'builtin_dialogue_resegment') {
-      return reSegmentDialogueText(input);
+      return _reSegmentDialogueWithMap(input, prevMap);
     }
-    if (pattern.isEmpty) return input;
+    if (pattern.isEmpty) return (input, prevMap);
     if (!isRegex) {
-      return input.replaceAll(pattern, replacement);
+      final firstIdx = input.indexOf(pattern);
+      if (firstIdx < 0) return (input, prevMap);
+      if (pattern.length == replacement.length) {
+        return (input.replaceAll(pattern, replacement), prevMap);
+      }
+      final edits = <(int, int, int)>[];
+      final out = StringBuffer();
+      var cursor = 0;
+      var idx = firstIdx;
+      while (idx >= 0) {
+        out.write(input.substring(cursor, idx));
+        out.write(replacement);
+        edits.add((idx, idx + pattern.length, replacement.length));
+        cursor = idx + pattern.length;
+        idx = input.indexOf(pattern, cursor);
+      }
+      out.write(input.substring(cursor));
+      final nextMap = _mapReplacementSegments(
+        prevMap: prevMap ?? _identityMap(input.length),
+        prevLength: input.length,
+        edits: edits,
+      );
+      return (out.toString(), nextMap);
     }
     final regExp = _compile(pattern);
-    if (regExp == null) return input;
+    if (regExp == null) return (input, prevMap);
     final sw = Stopwatch()..start();
-    final result = input.replaceAllMapped(regExp, (match) {
-      // Dart replaceAll treats $1 literally; Legado uses Java-style groups.
-      final out = StringBuffer();
-      for (var i = 0; i < replacement.length; i++) {
-        final ch = replacement[i];
-        if (ch == r'\' && i + 1 < replacement.length) {
-          out.write(switch (replacement[++i]) {
-            'n' => '\n',
-            'r' => '\r',
-            't' => '\t',
-            final escaped => escaped,
-          });
-        } else if (ch == r'$' &&
-            i + 1 < replacement.length &&
-            RegExp(r'[0-9]').hasMatch(replacement[i + 1])) {
-          var group = int.parse(replacement[++i]);
-          if (group > match.groupCount) {
-            out.write('\$$group');
-            continue;
-          }
-          while (i + 1 < replacement.length) {
-            final digit = int.tryParse(replacement[i + 1]);
-            if (digit == null || group * 10 + digit > match.groupCount) break;
-            group = group * 10 + digit;
-            i++;
-          }
-          out.write(match.group(group) ?? '');
-        } else {
-          out.write(ch);
-        }
+    final edits = <(int, int, int)>[];
+    final out = StringBuffer();
+    var cursor = 0;
+    for (final match in regExp.allMatches(input)) {
+      out.write(input.substring(cursor, match.start));
+      final rep = _expandRegexReplacement(match);
+      out.write(rep);
+      if (rep.length != match.end - match.start || prevMap != null) {
+        edits.add((match.start, match.end, rep.length));
       }
-      return out.toString();
-    });
-    sw.stop();
-    if (sw.elapsedMicroseconds > 8000) {
-      _trippedRuleIds.add(id);
+      cursor = match.end;
     }
-    return result;
+    sw.stop();
+    if (sw.elapsedMicroseconds > 8000 && _trippedRuleIds.add(id)) {
+      ReaderPurificationStore.shared._invalidateCaches();
+    }
+    if (cursor == 0 && edits.isEmpty) return (input, prevMap);
+    out.write(input.substring(cursor));
+    final result = out.toString();
+    if (edits.isEmpty) return (result, prevMap);
+    final nextMap = _mapReplacementSegments(
+      prevMap: prevMap ?? _identityMap(input.length),
+      prevLength: input.length,
+      edits: edits,
+    );
+    return (result, nextMap);
   }
 
   Map<String, Object?> toJson() => {
@@ -528,7 +784,8 @@ class ReaderPurificationStore extends ChangeNotifier {
 
   List<ReaderPurificationRule> _rules = [...builtInPresets];
   List<ReaderPurificationRule>? _cachedEnabledRules;
-  final Map<String, String> _paragraphCache = <String, String>{};
+  final Map<String, PurifiedParagraph> _paragraphCache =
+      <String, PurifiedParagraph>{};
   final Map<String, List<ReaderPurificationRule>> _chapterEffectiveCache =
       <String, List<ReaderPurificationRule>>{};
   Map<String, String> _paragraphEdits = {};
@@ -1149,7 +1406,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     final cacheKey =
         '${bookId ?? ''}\x00${bookTitle ?? ''}\x00${chapterTitle ?? ''}\x00'
         '${paragraphList.length}\x00'
-        '${paragraphList.isEmpty ? 0 : Object.hash(paragraphList.first, paragraphList.last)}';
+        '${paragraphList.isEmpty ? 0 : Object.hashAll(paragraphList)}';
     final cached = _chapterEffectiveCache[cacheKey];
     if (cached != null) return cached;
 
@@ -1188,7 +1445,29 @@ class ReaderPurificationStore extends ChangeNotifier {
     return unmodifiable;
   }
 
-  String purifyParagraph(
+  bool hasChapterEdits(int bookId, int chapterIndex) {
+    if (_paragraphEdits.isEmpty) return false;
+    final prefix = '$bookId:$chapterIndex:';
+    return _paragraphEdits.keys.any((key) => key.startsWith(prefix));
+  }
+
+  String purifyTitle(
+    String title, {
+    int? bookId,
+    String? bookTitle,
+  }) {
+    if (!hasEnabledRules || title.isEmpty) return title;
+    var current = title;
+    for (final rule in _enabledRules) {
+      if (!rule.applyToTitle) continue;
+      if (!rule.appliesToBook(bookId, bookTitle: bookTitle)) continue;
+      if (rule.id == 'builtin_dedup_chapter_title') continue;
+      current = rule.apply(current);
+    }
+    return current;
+  }
+
+  PurifiedParagraph purifyParagraphWithMap(
     String text, {
     int? bookId,
     String? bookTitle,
@@ -1199,39 +1478,161 @@ class ReaderPurificationStore extends ChangeNotifier {
   }) {
     if (bookId != null && chapterIndex != null && paragraphIndex != null) {
       final edited = paragraphEditFor(bookId, chapterIndex, paragraphIndex);
-      if (edited != null) return edited;
+      if (edited != null) {
+        return edited == text
+            ? PurifiedParagraph(text)
+            : PurifiedParagraph(
+                edited,
+                rawLength: text.length,
+                toRaw: _mapManualEdit(text, edited),
+              );
+      }
     }
-    if (!hasEnabledRules || text.isEmpty) return text;
+    if (!hasEnabledRules || text.isEmpty) return PurifiedParagraph(text);
     final trimmed = text.trim();
     if (trimmed == '[插图]' ||
+        trimmed.startsWith('<!--image-->') ||
         trimmed.startsWith('http://') ||
         trimmed.startsWith('https://')) {
-      return text;
+      return PurifiedParagraph(text);
     }
     final cacheKey =
         '${bookId ?? ''}\x00${bookTitle ?? ''}\x00'
-        '${isFirstParagraph ? (chapterTitle ?? '') : ''}\x00$text';
+        '${isFirstParagraph ? (chapterTitle ?? '') : ''}\x00'
+        '${text.length}\x00$text';
     final cached = _paragraphCache[cacheKey];
     if (cached != null) return cached;
 
     var current = text;
+    List<int>? map;
     for (final rule in _enabledRules) {
       if (!rule.appliesToBook(bookId, bookTitle: bookTitle)) {
         continue;
       }
       if (rule.id == 'builtin_dedup_chapter_title') {
         if (isFirstParagraph && chapterTitle != null) {
-          current = dedupLeadingChapterTitle(current, chapterTitle);
+          final (next, nextMap) = _dedupLeadingChapterTitleWithMap(
+            current,
+            chapterTitle,
+            map,
+          );
+          current = next;
+          map = nextMap;
         }
         continue;
       }
-      if (rule.applyToContent) current = rule.apply(current);
+      if (rule.applyToContent) {
+        final (next, nextMap) = rule.applyWithMap(current, map);
+        current = next;
+        map = nextMap;
+      }
     }
+    final result = map == null && current == text
+        ? PurifiedParagraph(text)
+        : PurifiedParagraph(current, rawLength: text.length, toRaw: map);
     if (_paragraphCache.length >= 2048) {
       _paragraphCache.remove(_paragraphCache.keys.first);
     }
-    _paragraphCache[cacheKey] = current;
-    return current;
+    _paragraphCache[cacheKey] = result;
+    return result;
+  }
+
+  String purifyParagraph(
+    String text, {
+    int? bookId,
+    String? bookTitle,
+    int? chapterIndex,
+    int? paragraphIndex,
+    String? chapterTitle,
+    bool isFirstParagraph = false,
+  }) => purifyParagraphWithMap(
+    text,
+    bookId: bookId,
+    bookTitle: bookTitle,
+    chapterIndex: chapterIndex,
+    paragraphIndex: paragraphIndex,
+    chapterTitle: chapterTitle,
+    isFirstParagraph: isFirstParagraph,
+  ).text;
+
+  List<ReaderAnnotationRange> mapAnnotationsToPurified(
+    Iterable<ReaderAnnotationRange> annotations, {
+    required PurifiedParagraph Function(int paragraphIndex) resolveParagraph,
+  }) {
+    final mapped = <ReaderAnnotationRange>[];
+    for (final item in annotations) {
+      final r = item.range;
+      if (r.startParagraph == r.endParagraph) {
+        final p = resolveParagraph(r.startParagraph);
+        if (p.isIdentity) {
+          mapped.add(item);
+          continue;
+        }
+        final projected = p.purifiedRangeFor(r.startOffset, r.endOffset);
+        if (projected == null) continue;
+        final nextRange = ReaderUnderlineRange(
+          chapterId: r.chapterId,
+          startParagraph: r.startParagraph,
+          startOffset: projected.$1,
+          endParagraph: r.endParagraph,
+          endOffset: projected.$2,
+          contentRevision: r.contentRevision,
+        );
+        if (nextRange.isValid) {
+          mapped.add(
+            ReaderAnnotationRange(
+              nextRange,
+              item.style,
+              item.color,
+              bookmarkId: item.bookmarkId,
+            ),
+          );
+        }
+      } else {
+        final startP = resolveParagraph(r.startParagraph);
+        final endP = resolveParagraph(r.endParagraph);
+        if (startP.isIdentity && endP.isIdentity) {
+          mapped.add(item);
+          continue;
+        }
+        final projStart = startP.purifiedRangeFor(
+          r.startOffset,
+          startP.sourceLength,
+        );
+        final projEnd = endP.purifiedRangeFor(0, r.endOffset);
+        var sPara = r.startParagraph;
+        var sOff = projStart?.$1 ?? startP.text.length;
+        var ePara = r.endParagraph;
+        var eOff = projEnd?.$2 ?? 0;
+        if (projStart == null && sPara < ePara) {
+          sPara++;
+          sOff = 0;
+        }
+        if (projEnd == null && ePara > sPara) {
+          ePara--;
+          eOff = resolveParagraph(ePara).text.length;
+        }
+        final nextRange = ReaderUnderlineRange(
+          chapterId: r.chapterId,
+          startParagraph: sPara,
+          startOffset: sOff,
+          endParagraph: ePara,
+          endOffset: eOff,
+          contentRevision: r.contentRevision,
+        );
+        if (nextRange.isValid) {
+          mapped.add(
+            ReaderAnnotationRange(
+              nextRange,
+              item.style,
+              item.color,
+              bookmarkId: item.bookmarkId,
+            ),
+          );
+        }
+      }
+    }
+    return mapped;
   }
 }
 
@@ -1378,10 +1779,8 @@ class _ReaderPurificationSheetState extends State<_ReaderPurificationSheet> {
         setState(() => _error = unsafeReason);
         return;
       }
-      try {
-        RegExp(pattern, multiLine: true);
-      } on FormatException catch (e) {
-        setState(() => _error = '正则表达式语法有误：${e.message}');
+      if (ReaderPurificationRule._compile(pattern) == null) {
+        setState(() => _error = '正则表达式语法有误或不兼容');
         return;
       }
     }

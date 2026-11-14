@@ -33,8 +33,15 @@ import 'reader_skeleton.dart';
 import 'library_filter.dart';
 import 'reader_preferences.dart' show ReaderPaper, ReaderMode;
 import 'reader_paged_view.dart' show ReaderPagedController, ReaderPagedView;
+import 'reader_pagination.dart' show ReaderPageFragment, ReaderTextAnchor;
 import 'reader_paging.dart';
 import 'reader_content.dart';
+import 'reader_rich_content.dart'
+    show
+        ReaderRichParagraph,
+        ReaderEmphasis,
+        ReaderRuby,
+        ReaderNoteReference;
 import 'reader_illustrations.dart';
 import 'reader_find.dart';
 import 'reader_purification.dart';

@@ -570,6 +570,244 @@ bool _shouldJoinSingleNewline(String prev, String nextRaw) {
   return _cjkEndPattern.hasMatch(p) && _cjkOrPunctStartPattern.hasMatch(n);
 }
 
+class ReflowedReaderParagraph {
+  const ReflowedReaderParagraph(
+    this.text,
+    this.charStarts,
+    this.charEnds, {
+    this.origin = 0,
+  });
+
+  factory ReflowedReaderParagraph.contiguous(String text, int start) =>
+      ReflowedReaderParagraph(
+        text,
+        List<int>.generate(text.length, (i) => start + i, growable: false),
+        List<int>.generate(text.length, (i) => start + i + 1, growable: false),
+        origin: start,
+      );
+
+  final String text;
+  final List<int> charStarts;
+  final List<int> charEnds;
+  final int origin;
+
+  int rawStart(int offset) {
+    if (text.isEmpty) return origin;
+    if (offset <= 0) return charStarts.first;
+    if (offset >= text.length) return charEnds.last;
+    return charStarts[offset];
+  }
+
+  int rawEnd(int offset) {
+    if (text.isEmpty) return origin;
+    if (offset <= 0) return charStarts.first;
+    if (offset >= text.length) return charEnds.last;
+    return charEnds[offset - 1];
+  }
+}
+
+ReflowedReaderParagraph _joinReflowedParagraph(
+  ReflowedReaderParagraph prev,
+  ReflowedReaderParagraph next,
+) {
+  final p = prev.text.trimRight();
+  final n = next.text.trimLeft();
+  if (p.isEmpty) return next;
+  if (n.isEmpty) return prev;
+  final pLen = p.length;
+  final nDrop = next.text.length - n.length;
+  final needsSpace =
+      _asciiWordEndPattern.hasMatch(p) && _asciiWordStartPattern.hasMatch(n);
+  if (!needsSpace) {
+    return ReflowedReaderParagraph(
+      '$p$n',
+      [
+        ...prev.charStarts.sublist(0, pLen),
+        ...next.charStarts.sublist(nDrop),
+      ],
+      [
+        ...prev.charEnds.sublist(0, pLen),
+        ...next.charEnds.sublist(nDrop),
+      ],
+      origin: prev.origin,
+    );
+  }
+  return ReflowedReaderParagraph(
+    '$p $n',
+    [
+      ...prev.charStarts.sublist(0, pLen),
+      prev.charEnds[pLen - 1],
+      ...next.charStarts.sublist(nDrop),
+    ],
+    [
+      ...prev.charEnds.sublist(0, pLen),
+      next.charStarts[nDrop],
+      ...next.charEnds.sublist(nDrop),
+    ],
+    origin: prev.origin,
+  );
+}
+
+ReflowedReaderParagraph _stripLeadingIndent(ReflowedReaderParagraph input) {
+  final match = _indentStartPattern.firstMatch(input.text);
+  final drop = match?.end ?? 0;
+  if (drop <= 0) return input;
+  return ReflowedReaderParagraph(
+    input.text.substring(drop),
+    input.charStarts.sublist(drop),
+    input.charEnds.sublist(drop),
+    origin: drop < input.charStarts.length
+        ? input.charStarts[drop]
+        : input.rawEnd(input.text.length),
+  );
+}
+
+/// Reflows plain-text novel paragraphs while recording exact UTF-16 source
+/// character boundaries for every character in each reflowed paragraph.
+List<ReflowedReaderParagraph> reflowReaderParagraphsWithOffsets(String source) {
+  final expanded = <ReflowedReaderParagraph>[];
+  var blockStart = 0;
+  while (true) {
+    final sep = source.indexOf('\n\n', blockStart);
+    final blockEnd = sep < 0 ? source.length : sep;
+    final block = source.substring(blockStart, blockEnd);
+    if (!block.contains('\n')) {
+      expanded.add(ReflowedReaderParagraph.contiguous(block, blockStart));
+    } else {
+      final lines = <ReflowedReaderParagraph>[];
+      var lineStart = blockStart;
+      while (lineStart <= blockEnd) {
+        final nl = source.indexOf('\n', lineStart);
+        final lineEnd = (nl < 0 || nl > blockEnd) ? blockEnd : nl;
+        final rawLine = source.substring(lineStart, lineEnd);
+        final trimmed = rawLine.trimRight();
+        if (trimmed.trim().isNotEmpty) {
+          lines.add(ReflowedReaderParagraph.contiguous(trimmed, lineStart));
+        }
+        if (nl < 0 || nl >= blockEnd) break;
+        lineStart = nl + 1;
+      }
+      if (lines.isEmpty) {
+        expanded.add(ReflowedReaderParagraph.contiguous(block, blockStart));
+      } else {
+        var current = lines.first;
+        for (var i = 1; i < lines.length; i++) {
+          final next = lines[i];
+          if (_shouldJoinSingleNewline(current.text, next.text)) {
+            current = _joinReflowedParagraph(current, next);
+          } else {
+            expanded.add(current);
+            current = _stripLeadingIndent(next);
+          }
+        }
+        expanded.add(current);
+      }
+    }
+    if (sep < 0) break;
+    blockStart = sep + 2;
+  }
+  if (expanded.length <= 1) return expanded;
+  final merged = <ReflowedReaderParagraph>[expanded.first];
+  for (var i = 1; i < expanded.length; i++) {
+    final next = expanded[i];
+    if (shouldMergeBrokenParagraph(merged.last.text, next.text)) {
+      merged[merged.length - 1] = _joinReflowedParagraph(merged.last, next);
+    } else {
+      merged.add(next);
+    }
+  }
+  return merged;
+}
+
+({int paragraph, int offset}) locateReflowedStart(
+  List<ReflowedReaderParagraph> paragraphs,
+  int localOffset,
+) {
+  if (paragraphs.isEmpty) return (paragraph: 0, offset: 0);
+  for (var p = 0; p < paragraphs.length; p++) {
+    final item = paragraphs[p];
+    if (item.text.isEmpty) {
+      if (item.origin >= localOffset) return (paragraph: p, offset: 0);
+      continue;
+    }
+    if (item.charEnds.last <= localOffset) continue;
+    var low = 0;
+    var high = item.charEnds.length;
+    while (low < high) {
+      final mid = (low + high) ~/ 2;
+      if (item.charEnds[mid] <= localOffset) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return (paragraph: p, offset: low.clamp(0, item.text.length));
+  }
+  final last = paragraphs.length - 1;
+  return (paragraph: last, offset: paragraphs[last].text.length);
+}
+
+({int paragraph, int offset}) locateReflowedEnd(
+  List<ReflowedReaderParagraph> paragraphs,
+  int localEnd,
+) {
+  if (paragraphs.isEmpty) return (paragraph: 0, offset: 0);
+  for (var p = paragraphs.length - 1; p >= 0; p--) {
+    final item = paragraphs[p];
+    if (item.text.isEmpty) {
+      if (item.origin <= localEnd) return (paragraph: p, offset: 0);
+      continue;
+    }
+    if (item.charStarts.first >= localEnd) continue;
+    var low = 0;
+    var high = item.charStarts.length;
+    while (low < high) {
+      final mid = (low + high) ~/ 2;
+      if (item.charStarts[mid] < localEnd) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    final idx = low - 1;
+    final endOffset = localEnd >= item.charEnds[idx] ? idx + 1 : idx;
+    return (paragraph: p, offset: endOffset.clamp(0, item.text.length));
+  }
+  return (paragraph: 0, offset: 0);
+}
+
+String extractReflowedRangeText(
+  List<ReflowedReaderParagraph> paragraphs,
+  int startParagraph,
+  int startOffset,
+  int endParagraph,
+  int endOffset,
+) {
+  if (startParagraph < 0 ||
+      endParagraph < startParagraph ||
+      endParagraph >= paragraphs.length) {
+    return '';
+  }
+  if (startParagraph == endParagraph) {
+    final text = paragraphs[startParagraph].text;
+    if (startOffset < 0 || endOffset < startOffset || endOffset > text.length) {
+      return '';
+    }
+    return text.substring(startOffset, endOffset);
+  }
+  final buffer = StringBuffer();
+  for (var p = startParagraph; p <= endParagraph; p++) {
+    final text = paragraphs[p].text;
+    final from = p == startParagraph ? startOffset.clamp(0, text.length) : 0;
+    final to = p == endParagraph
+        ? endOffset.clamp(from, text.length)
+        : text.length;
+    if (p > startParagraph) buffer.write('\n');
+    buffer.write(text.substring(from, to));
+  }
+  return buffer.toString();
+}
+
 /// Reflows plain-text novel paragraphs by repairing hard-wrapped single/double
 /// newlines inside a sentence while keeping genuine paragraphs separate.
 List<String> reflowReaderParagraphs(String source) {

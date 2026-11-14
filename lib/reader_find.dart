@@ -193,8 +193,18 @@ class _ReaderFindPanelState extends State<ReaderFindPanel> {
               itemBuilder: (context, index) {
                 final match = _result.matches[index];
                 final text = widget.content.paragraphs[match.paragraph];
-                final start = math.max(0, match.start - 24);
-                final end = math.min(text.length, match.end + 56);
+                var start = math.max(0, match.start - 24);
+                if (start > 0 &&
+                    start < text.length &&
+                    (text.codeUnitAt(start) & 0xFC00) == 0xDC00) {
+                  start--;
+                }
+                var end = math.min(text.length, match.end + 56);
+                if (end > start &&
+                    end < text.length &&
+                    (text.codeUnitAt(end - 1) & 0xFC00) == 0xD800) {
+                  end++;
+                }
                 return JellyTapSurface(
                   key: ValueKey('reader-find-result-$index'),
                   onTap: () {
