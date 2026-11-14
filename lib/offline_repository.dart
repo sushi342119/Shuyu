@@ -53,6 +53,34 @@ class _ChapterRequest {
   Future<String>? response;
 }
 
+const _localNovelIdMin = 0x40000000;
+const _localNovelIdMax = 0x7fffffff;
+
+/// Unwraps [OfflineNovelRepository] through repository decorators such as
+/// `CompositeNovelRepository`.
+OfflineNovelRepository? offlineRepositoryOf(NovelRepository? repository) {
+  var current = repository;
+  var depth = 0;
+  while (current != null && depth < 8) {
+    if (current is OfflineNovelRepository) return current;
+    current = current.remoteRepository;
+    depth++;
+  }
+  return null;
+}
+
+/// Returns the [OfflineNovelRepository] only when [bookId] is an online book.
+OfflineNovelRepository? offlineRepositoryForBook(
+  NovelRepository? repository,
+  int bookId,
+) {
+  if (bookId <= 0 ||
+      (bookId >= _localNovelIdMin && bookId <= _localNovelIdMax)) {
+    return null;
+  }
+  return offlineRepositoryOf(repository);
+}
+
 /// Adds persistent offline reading without changing the remote request contract.
 /// Download notifications are independent of appearance/reader state updates.
 class OfflineNovelRepository extends FrameChangeNotifier
@@ -62,6 +90,8 @@ class OfflineNovelRepository extends FrameChangeNotifier
   }
 
   final NovelRepository remote;
+  @override
+  NovelRepository? get remoteRepository => remote;
   final OfflineCacheStore cache;
   final Map<int, Novel> _known = {};
   final Set<int> _offlineDirectories = {};

@@ -61,7 +61,8 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
 
   Future<void> _seedFromCache() async {
     final generation = _loadGeneration;
-    if (widget.repository case final OfflineNovelRepository offline) {
+    if (offlineRepositoryForBook(widget.repository, widget.novel.id)
+        case final offline?) {
       try {
         final cached = await offline
             .cachedBook(widget.novel.id)
@@ -178,10 +179,9 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
       loadError: _cached == null ? snapshot.error : null,
       fromCache:
           (_cached != null && !snapshot.hasData) ||
-          (widget.repository is OfflineNovelRepository &&
-              (widget.repository as OfflineNovelRepository).isDirectoryOffline(
-                widget.novel.id,
-              )),
+          (offlineRepositoryForBook(widget.repository, widget.novel.id)
+                  ?.isDirectoryOffline(widget.novel.id) ??
+              false),
       onRetry: () => setState(() {
         _loaded = _load();
       }),
@@ -232,6 +232,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   bool _shelfChanging = false;
   bool _reverseChapters = false;
   int? _resumeChapter;
+  bool _hasRead = false;
 
   /// 当前显示的书籍（编辑后更新，刷新详情页）。
   Novel? _novelOverride;
@@ -250,6 +251,23 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   VoidCallback? get onRetry => widget.onRetry;
   bool get _reduceMotion =>
       state.reduceMotion || MediaQuery.disableAnimationsOf(context);
+
+  @override
+  void initState() {
+    super.initState();
+    widget.state.historyChanges.addListener(_onHistoryChanged);
+  }
+
+  void _onHistoryChanged() {
+    if (!mounted) return;
+    final nextRead = state.hasRead(novel.id);
+    final nextResume = nextRead && novel.chapters.isNotEmpty
+        ? state.chapterForNovel(novel)
+        : null;
+    if (nextRead != _hasRead || nextResume != _resumeChapter) {
+      setState(() {});
+    }
+  }
 
   @override
   void didChangeDependencies() {
@@ -299,6 +317,10 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   @override
   void didUpdateWidget(DetailPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.state != widget.state) {
+      oldWidget.state.historyChanges.removeListener(_onHistoryChanged);
+      widget.state.historyChanges.addListener(_onHistoryChanged);
+    }
     if (_novelOverride != null && widget.novel.chapters.isNotEmpty) {
       _novelOverride = _novelOverride!.withChapters(widget.novel.chapters);
     }
@@ -317,6 +339,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    widget.state.historyChanges.removeListener(_onHistoryChanged);
     _routeAnimation?.removeStatusListener(_routeChanged);
     _intro.dispose();
     _contentIntro.dispose();
@@ -327,11 +350,13 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     // Resolve a stable chapter ID once for the lazily built directory, not once
     // per visible row or once per animation/scroll frame.
-    _resumeChapter = state.hasRead(novel.id) && novel.chapters.isNotEmpty
+    _hasRead = state.hasRead(novel.id);
+    _resumeChapter = _hasRead && novel.chapters.isNotEmpty
         ? state.chapterForNovel(novel)
         : null;
     final local = localLibraryOf(repository);
     final localBook = local?.bookFor(novel.id);
+    final chapterUnit = localBook?.kind == LocalBookKind.pdf ? '页' : '章';
     final scheme = Theme.of(context).colorScheme;
     final authorEmpty = novel.author.trim().isEmpty;
     return Scaffold(
@@ -520,7 +545,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                                   Text(
                                                     loadError != null
                                                         ? '目录暂未载入'
-                                                        : '${novel.isComplete ? '已完结' : '连载中'}  ·  ${novel.chapters.length} 章',
+                                                        : '${novel.isComplete ? '已完结' : '连载中'}  ·  ${novel.chapters.length} $chapterUnit',
                                                     style: TextStyle(
                                                       color: Theme.of(context)
                                                           .colorScheme
@@ -538,9 +563,11 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                               ],
                                             ),
                                           ),
-                                          if (repository
-                                              case final OfflineNovelRepository
-                                                  offline) ...[
+                                          if (offlineRepositoryForBook(
+                                                repository,
+                                                novel.id,
+                                              )
+                                              case final offline?) ...[
                                             const SizedBox(height: 8),
                                             if (isLoading)
                                               const InlineSkeleton(
@@ -683,7 +710,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                               '目录',
                                               novel.chapters.isEmpty
                                                   ? ''
-                                                  : '共 ${novel.chapters.length} 章',
+                                                  : '共 ${novel.chapters.length} $chapterUnit',
                                             ),
                                           ),
                                           if (novel.chapters.length > 1) ...[
@@ -814,9 +841,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       builder: (_) => ReaderCatalogue(
         novel: novel,
         currentChapter: state.chapterForNovel(novel),
-        cache: repository is OfflineNovelRepository
-            ? (repository as OfflineNovelRepository).cache
-            : null,
+        cache: offlineRepositoryForBook(repository, novel.id)?.cache,
       ),
     );
     if (!context.mounted || picked == null) return;
@@ -907,34 +932,36 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     );
   }
 
-  Widget _header(BuildContext context) => Row(
-    children: [
-      GlassIconButton(
-        icon: CupertinoIcons.back,
-        label: '返回',
-        onPressed: () => Navigator.pop(context),
-      ),
-      if (repository is OfflineNovelRepository) const SizedBox(width: 46),
-      Expanded(
-        child: ArchiveRouteTitle(
-          title: '图书详情',
-          code: ArchiveDesign.fileCode(novel.id),
+  Widget _header(BuildContext context) {
+    final offline = offlineRepositoryForBook(repository, novel.id);
+    return Row(
+      children: [
+        GlassIconButton(
+          icon: CupertinoIcons.back,
+          label: '返回',
+          onPressed: () => Navigator.pop(context),
         ),
-      ),
-      if (repository case final OfflineNovelRepository offline)
-        if (isLoading || loadError != null || novel.chapters.isEmpty)
-          const GlassIconButton(
-            icon: CupertinoIcons.cloud_download,
-            label: '下载与缓存',
-            onPressed: null,
-          )
-        else
-          OfflineBookMenu(
-            repository: offline,
-            novel: novel,
-            startChapter: state.chapterForNovel(novel),
-            reduceMotion: state.reduceMotion,
+        if (offline != null) const SizedBox(width: 46),
+        Expanded(
+          child: ArchiveRouteTitle(
+            title: '图书详情',
+            code: ArchiveDesign.fileCode(novel.id),
           ),
+        ),
+        if (offline != null)
+          if (isLoading || loadError != null || novel.chapters.isEmpty)
+            const GlassIconButton(
+              icon: CupertinoIcons.cloud_download,
+              label: '下载与缓存',
+              onPressed: null,
+            )
+          else
+            OfflineBookMenu(
+              repository: offline,
+              novel: novel,
+              startChapter: state.chapterForNovel(novel),
+              reduceMotion: state.reduceMotion,
+            ),
       AnimatedBuilder(
         animation: state,
         builder: (context, child) => GlassIconButton(
@@ -962,8 +989,9 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
           label: '更多操作',
           onPressed: () => _detailMenu(context),
         ),
-    ],
-  );
+      ],
+    );
+  }
 
   /// 详情页的本地书操作菜单：删除文件。
   Future<void> _detailMenu(BuildContext context) async {

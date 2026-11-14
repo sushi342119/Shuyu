@@ -340,6 +340,7 @@ extension _ReaderPagePersistence on _ReaderPageState {
     // Explicit save/restore/exit supersedes any delayed copy of that position.
     _idleSave?.cancel();
     _idleSave = null;
+    if (_openedForBookmarkInspection) return;
     if (_local != null &&
         (_novel.chapters.isEmpty ||
             !_local!.acceptsChapter(_novel.id, _novel.chapters[_chapter]))) {
@@ -624,6 +625,7 @@ extension _ReaderPagePersistence on _ReaderPageState {
   }
 
   Future<ReaderBookmark?> _addBookmark() async {
+    _openedForBookmarkInspection = false;
     final position = _currentPosition(bookmark: true);
     if (position == null) return null;
     _savePosition(notify: false);
@@ -677,6 +679,7 @@ extension _ReaderPagePersistence on _ReaderPageState {
   }
 
   Future<void> _seekProgress(double fraction) async {
+    _openedForBookmarkInspection = false;
     _suspendListeningFollow();
     if (_paginated) {
       if (_ready) _paged.seek(fraction.clamp(0.0, 1.0));

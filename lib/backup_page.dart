@@ -23,7 +23,10 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
   String? _busy;
   String? _error;
   LibraryBackup? _preview;
+  LibraryBackupOptions _exportOptions = LibraryBackupOptions.all;
   bool _preferences = false;
+  bool _importPurification = true;
+  bool _importReadingStats = true;
   bool _clipboardPreview = false;
   late final CloudSourceSettings _cloudSources = CloudSourceSettings()..load();
   late final BookSync _bookSync = BookSync(
@@ -49,8 +52,17 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
     context: context,
     reduceMotion: widget.state.reduceMotion,
     preferences: widget.state.preferences,
+    initialOptions: _exportOptions,
+    onOptionsChanged: (options) {
+      if (mounted) setState(() => _exportOptions = options);
+    },
     createBackupJson: () async {
-      final backup = await widget.state.createBackup();
+      final backup = await widget.state.createBackup(options: _exportOptions);
+      return backup.encode();
+    },
+    createScopedBackupJson: (options) async {
+      if (mounted) setState(() => _exportOptions = options);
+      final backup = await widget.state.createBackup(options: options);
       return backup.encode();
     },
     onRestoreBackupJson: (jsonText) => _run('正在解析云端备份…', () async {
@@ -59,6 +71,8 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
         setState(() {
           _preview = backup;
           _preferences = false;
+          _importPurification = backup.hasPurification;
+          _importReadingStats = backup.hasReadingStats;
           _clipboardPreview = false;
         });
       }
@@ -86,29 +100,36 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
     }
   }
 
-  Future<void> _export({bool clipboard = false, bool beforeRestore = false}) => _run('正在生成备份…', () async {
-    final backup = beforeRestore ? null : await widget.state.createBackup();
-    final text = beforeRestore ? widget.state.preRestoreBackup : await backup!.encode();
-    final omitted = backup?.omittedCoverKeys.length ?? 0;
-    final coverNotice = omitted == 0 ? '' : '；已省略 $omitted 个不支持的封面，阅读记录已保留';
-    if (text == null) throw const FormatException('尚无恢复前备份');
-    if (clipboard) {
-      if (text.length > 256 * 1024) throw const FormatException('备份较大，请使用文件导出');
-      if (LocalPlatform.android) {
-        await LocalPlatform.setSensitiveClipboard(text);
-      } else {
-        await Clipboard.setData(ClipboardData(text: text));
-      }
-      if (mounted) showNovelFeedback(context, '备份已复制$coverNotice');
-    } else {
-      final date = DateTime.now().toIso8601String().substring(0, 10);
-      final saved = await LocalPlatform.exportBackup(
-        text,
-        'wenku8-backup-${beforeRestore ? 'before-restore-' : ''}$date.json',
-      );
-      if (mounted && saved) showNovelFeedback(context, '备份文件已保存$coverNotice');
-    }
-  });
+  Future<void> _export({bool clipboard = false, bool beforeRestore = false}) =>
+      _run('正在生成备份…', () async {
+        final backup = beforeRestore
+            ? null
+            : await widget.state.createBackup(options: _exportOptions);
+        final text = beforeRestore
+            ? widget.state.preRestoreBackup
+            : await backup!.encode();
+        final omitted = backup?.omittedCoverKeys.length ?? 0;
+        final coverNotice = omitted == 0 ? '' : '；已省略 $omitted 个不支持的封面，阅读记录已保留';
+        if (text == null) throw const FormatException('尚无恢复前备份');
+        if (clipboard) {
+          if (text.length > 256 * 1024) {
+            throw const FormatException('备份较大，请使用文件导出');
+          }
+          if (LocalPlatform.android) {
+            await LocalPlatform.setSensitiveClipboard(text);
+          } else {
+            await Clipboard.setData(ClipboardData(text: text));
+          }
+          if (mounted) showNovelFeedback(context, '备份已复制$coverNotice');
+        } else {
+          final date = DateTime.now().toIso8601String().substring(0, 10);
+          final saved = await LocalPlatform.exportBackup(
+            text,
+            'wenku8-backup-${beforeRestore ? 'before-restore-' : ''}$date.json',
+          );
+          if (mounted && saved) showNovelFeedback(context, '备份文件已保存$coverNotice');
+        }
+      });
 
   Future<void> _import({bool clipboard = false}) => _run('正在读取备份…', () async {
     final text = clipboard
@@ -123,6 +144,8 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
       setState(() {
         _preview = backup;
         _preferences = false;
+        _importPurification = backup.hasPurification;
+        _importReadingStats = backup.hasReadingStats;
         _clipboardPreview = clipboard;
       });
     }
@@ -131,7 +154,12 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
   Future<void> _restore() => _run('正在合并本地记录…', () async {
     final backup = _preview;
     if (backup == null) return;
-    await widget.state.restoreBackup(backup, importPreferences: _preferences);
+    await widget.state.restoreBackup(
+      backup,
+      importPreferences: _preferences && backup.hasPreferences,
+      importPurification: _importPurification && backup.hasPurification,
+      importReadingStats: _importReadingStats && backup.hasReadingStats,
+    );
     if (mounted) {
       final fromClipboard = _clipboardPreview;
       setState(() {
@@ -146,6 +174,35 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
       );
     }
   });
+
+  Widget _scopeToggle({
+    required Key switchKey,
+    required String title,
+    required bool value,
+    required ValueChanged<bool>? onChanged,
+  }) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      children: [
+        Expanded(child: Text(title)),
+        CupertinoSwitch(
+          key: switchKey,
+          value: value,
+          activeTrackColor: Theme.of(context).colorScheme.primary,
+          onChanged: onChanged,
+        ),
+      ],
+    ),
+  );
+
+  String _optionalPackSummary(LibraryBackup backup) {
+    final items = <String>[
+      if (backup.hasPreferences) '外观与阅读偏好',
+      if (backup.hasPurification) '正文净化与段落纠错',
+      if (backup.hasReadingStats) '阅读统计与时刻',
+    ];
+    return items.isEmpty ? '仅包含核心书架、进度、书签与标签' : '包含附加项：${items.join(' · ')}';
+  }
 
   @override
   Widget build(BuildContext context) => PopScope<void>(
@@ -197,7 +254,9 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
                   style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 12),
-                const Text('备份书架、阅读进度、书签、阅读历史、最近搜索和偏好。离线正文与账号信息不包含在备份中。'),
+                const Text(
+                  '备份书架、阅读进度、书签与标签，并可按需选择打包外观偏好、正文净化规则与阅读统计。离线正文与账号信息不包含在备份中。',
+                ),
                 if (!LocalPlatform.android)
                   const Text('此平台仅支持剪贴板导入和导出，单次导出上限为 256 Ki 字符。恢复前请先导出当前记录。'),
                 const SizedBox(height: 24),
@@ -205,11 +264,67 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      const Text(
+                        '打包附加内容',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '书架、阅读进度、书签划线与标签始终包含。',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      _scopeToggle(
+                        switchKey: const ValueKey('backup-option-preferences'),
+                        title: '包含外观与阅读偏好',
+                        value: _exportOptions.includePreferences,
+                        onChanged: _busy == null
+                            ? (v) => setState(
+                                () => _exportOptions = _exportOptions.copyWith(
+                                  includePreferences: v,
+                                ),
+                              )
+                            : null,
+                      ),
+                      _scopeToggle(
+                        switchKey: const ValueKey('backup-option-purification'),
+                        title: '包含正文净化与纠错规则',
+                        value: _exportOptions.includePurification,
+                        onChanged: _busy == null
+                            ? (v) => setState(
+                                () => _exportOptions = _exportOptions.copyWith(
+                                  includePurification: v,
+                                ),
+                              )
+                            : null,
+                      ),
+                      _scopeToggle(
+                        switchKey: const ValueKey('backup-option-stats'),
+                        title: '包含阅读统计与时刻',
+                        value: _exportOptions.includeReadingStats,
+                        onChanged: _busy == null
+                            ? (v) => setState(
+                                () => _exportOptions = _exportOptions.copyWith(
+                                  includeReadingStats: v,
+                                ),
+                              )
+                            : null,
+                      ),
+                      const Divider(height: 24),
                       if (widget.state.preRestoreBackup != null)
                         GlassTextButton(
-                          onPressed: _busy == null ? () => _export(
-                            beforeRestore: true, clipboard: !LocalPlatform.android) : null,
-                          child: Text(LocalPlatform.android ? '导出恢复前备份' : '复制恢复前备份'),
+                          onPressed: _busy == null
+                              ? () => _export(
+                                  beforeRestore: true,
+                                  clipboard: !LocalPlatform.android,
+                                )
+                              : null,
+                          child: Text(
+                            LocalPlatform.android ? '导出恢复前备份' : '复制恢复前备份',
+                          ),
                         ),
                       if (LocalPlatform.android) ...[
                         GlassTextButton(
@@ -231,7 +346,9 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
                             : null,
                         child: const Text('复制备份文本'),
                       ),
-                      const Text('复制备份会把书架、阅读历史和最近搜索放入系统剪贴板；内容可能被其他应用读取，使用后请清空。'),
+                      const Text(
+                        '复制备份会把书架、阅读历史和最近搜索放入系统剪贴板；内容可能被其他应用读取，使用后请清空。',
+                      ),
                       GlassTextButton(
                         key: const ValueKey('backup-paste'),
                         onPressed: _busy == null
@@ -292,27 +409,55 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
                           Text(
                             '${backup.shelfCount} 本书架收藏 · ${backup.positionCount} 条阅读进度\n${backup.bookmarkCount} 个书签 · ${backup.historyCount} 本阅读记录 · ${backup.tagCount} 本书有标签',
                           ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _optionalPackSummary(backup),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                            ),
+                          ),
                           const SizedBox(height: 14),
                           const Text('恢复将合并到本机，不清空已有书架和书签；同一本书保留更新时间较新的进度。'),
                           const Divider(height: 24),
-                          Row(
-                            children: [
-                              const Expanded(child: Text('同时恢复外观与阅读偏好')),
-                              CupertinoSwitch(
-                                key: const ValueKey(
-                                  'backup-import-preferences',
-                                ),
-                                value: _preferences,
-                                activeTrackColor: Theme.of(
-                                  context,
-                                ).colorScheme.primary,
-                                onChanged: _busy == null
-                                    ? (value) =>
-                                          setState(() => _preferences = value)
-                                    : null,
+                          if (backup.hasPreferences)
+                            _scopeToggle(
+                              switchKey: const ValueKey(
+                                'backup-import-preferences',
                               ),
-                            ],
-                          ),
+                              title: '同时恢复外观与阅读偏好',
+                              value: _preferences,
+                              onChanged: _busy == null
+                                  ? (value) =>
+                                        setState(() => _preferences = value)
+                                  : null,
+                            ),
+                          if (backup.hasPurification)
+                            _scopeToggle(
+                              switchKey: const ValueKey(
+                                'backup-import-purification',
+                              ),
+                              title: '合并正文净化与纠错规则',
+                              value: _importPurification,
+                              onChanged: _busy == null
+                                  ? (value) => setState(
+                                      () => _importPurification = value,
+                                    )
+                                  : null,
+                            ),
+                          if (backup.hasReadingStats)
+                            _scopeToggle(
+                              switchKey: const ValueKey('backup-import-stats'),
+                              title: '合并阅读统计与时刻',
+                              value: _importReadingStats,
+                              onChanged: _busy == null
+                                  ? (value) => setState(
+                                      () => _importReadingStats = value,
+                                    )
+                                  : null,
+                            ),
                           const SizedBox(height: 12),
                           GlassTextButton(
                             key: const ValueKey('backup-confirm'),

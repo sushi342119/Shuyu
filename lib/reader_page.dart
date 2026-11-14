@@ -22,7 +22,8 @@ class ReaderPage extends StatefulWidget {
 class _ReaderPageState extends State<ReaderPage>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   late Novel _novel = widget.novel;
-  LocalLibraryStore? get _local => localLibraryOf(widget.repository);
+  LocalLibraryStore? get _local =>
+      isLocalNovelId(_novel.id) ? localLibraryOf(widget.repository) : null;
   bool _reloadingLocal = false;
   bool _localReloadPending = false;
 
@@ -65,6 +66,7 @@ class _ReaderPageState extends State<ReaderPage>
         return (content: null, error: const StaleLocalChapterException());
       }
       final saved = widget.state.positionFor(_novel.id);
+      final initialMark = initial ? widget.initialBookmark : null;
       final freshSelection =
           initial &&
           _novel.chapters.isNotEmpty &&
@@ -74,12 +76,24 @@ class _ReaderPageState extends State<ReaderPage>
       final savedIndex = saved == null
           ? null
           : widget.state.chapterForPosition(_novel, saved);
-      final index = freshSelection ? widget.initialChapter : savedIndex ?? 0;
+      final markIndex = initialMark == null
+          ? null
+          : widget.state.chapterForPosition(_novel, initialMark.position);
+      final index =
+          markIndex ?? (freshSelection ? widget.initialChapter : savedIndex ?? 0);
       if (index < 0 || index >= chapters.length) {
         throw const StaleLocalChapterException();
       }
       _chapter = index;
-      _restorePending = savedIndex == index ? saved : null;
+      if (initialMark != null && markIndex == index) {
+        _restorePending = initialMark.position;
+        _bookmarkLandingPending = true;
+        if (!initialMark.isUnderline && initialMark.quote.isEmpty) {
+          _activeBookmarkId = initialMark.id;
+        }
+      } else {
+        _restorePending = savedIndex == index ? saved : null;
+      }
       _restoreQueued = false;
       _restoring = false;
       _computeChapterWeights();
@@ -107,6 +121,7 @@ class _ReaderPageState extends State<ReaderPage>
   final _bookmarkLanding = ValueNotifier<int?>(null);
   Timer? _bookmarkLandingTimer;
   bool _bookmarkLandingPending = false;
+  bool _openedForBookmarkInspection = false;
   Timer? _highlightTimer;
   // Stable chapter IDs/paragraph anchors own restoration; do not also walk
   // PageStorage and persist the viewport on every interrupted fling.
@@ -361,7 +376,18 @@ class _ReaderPageState extends State<ReaderPage>
     );
     WidgetsBinding.instance.addObserver(this);
     final saved = widget.state.positionFor(_novel.id);
-    if (saved != null &&
+    if (widget.initialBookmark case final mark?) {
+      _openedForBookmarkInspection = saved != null;
+      final markChapter = _novel.chapters.isEmpty
+          ? null
+          : widget.state.chapterForPosition(_novel, mark.position);
+      if (markChapter != null) _chapter = markChapter;
+      _restorePending = mark.position;
+      _bookmarkLandingPending = true;
+      if (!mark.isUnderline && mark.quote.isEmpty) {
+        _activeBookmarkId = mark.id;
+      }
+    } else if (saved != null &&
         _novel.chapters.isNotEmpty &&
         (saved.chapterId > 0
             ? saved.chapterId == _novel.chapters[_chapter].id
@@ -780,6 +806,7 @@ class _ReaderPageState extends State<ReaderPage>
     if (index < 0 || index >= _novel.chapters.length) {
       return;
     }
+    _openedForBookmarkInspection = false;
     _selection.clear();
     _pagedTurn = 0;
     if (!listeningFollow) _suspendListeningFollow();
@@ -847,13 +874,7 @@ class _ReaderPageState extends State<ReaderPage>
           state: widget.state,
           novel: _novel,
           currentChapter: _chapter,
-          cache: switch (widget.repository) {
-            final OfflineNovelRepository o => o.cache,
-            CompositeNovelRepository(:final remote)
-                when remote is OfflineNovelRepository =>
-              remote.cache,
-            _ => null,
-          },
+          cache: offlineRepositoryForBook(widget.repository, _novel.id)?.cache,
           onPickUnderline: _ready && _currentContent != null
               ? () => _pickChapterTextInMarksSheet(sheetContext: sheetContext)
               : null,
@@ -935,7 +956,8 @@ class _ReaderPageState extends State<ReaderPage>
             _listeningTarget = null;
             _listeningChanged();
             if (content.paragraphs.any((p) => p.trim() == '[插图]') &&
-                widget.repository is OfflineNovelRepository) {
+                offlineRepositoryForBook(widget.repository, _novel.id) !=
+                    null) {
               unawaited(_refreshIllustrations(automatic: true));
             }
           }
@@ -1055,6 +1077,7 @@ class _ReaderPageState extends State<ReaderPage>
           !_catalogueOpen &&
           !_listeningOpen &&
           !_findOpen) {
+        _openedForBookmarkInspection = false;
         _suspendListeningFollow();
         _paged.pageBy(direction);
       }
@@ -1068,6 +1091,7 @@ class _ReaderPageState extends State<ReaderPage>
         _findOpen) {
       return;
     }
+    _openedForBookmarkInspection = false;
     _suspendListeningFollow();
     final position = _scroll.position;
     final readableViewport =
@@ -1093,7 +1117,8 @@ class _ReaderPageState extends State<ReaderPage>
 
   Future<String> _requestContent(int index, {bool refresh = false}) async {
     if (_novel.chapters.isEmpty) throw const FormatException('目录为空');
-    if (widget.repository case final OfflineNovelRepository offline) {
+    if (offlineRepositoryForBook(widget.repository, _novel.id)
+        case final offline?) {
       await offline.rememberDirectory(_novel);
       if (refresh) {
         return offline.refreshChapterContent(_novel.id, _novel.chapters[index]);
@@ -1109,8 +1134,11 @@ class _ReaderPageState extends State<ReaderPage>
     setState(() => _illustrationsRefreshing = true);
     try {
       final body = automatic
-          ? await (widget.repository as OfflineNovelRepository)
-                .repairChapterIllustrations(_novel.id, _novel.chapters[chapter])
+          ? await offlineRepositoryForBook(widget.repository, _novel.id)
+                ?.repairChapterIllustrations(
+                  _novel.id,
+                  _novel.chapters[chapter],
+                )
           : await _requestContent(chapter, refresh: true);
       if (body == null) return;
       final content = await ReaderContent.parse(body);
@@ -1543,6 +1571,7 @@ class _ReaderPageState extends State<ReaderPage>
             });
           },
           onUserScroll: () {
+            _openedForBookmarkInspection = false;
             _selection.clear();
             _suspendListeningFollow(userDrag: true);
             _clearBookmarkLanding();
@@ -1644,6 +1673,7 @@ class _ReaderPageState extends State<ReaderPage>
                     if (notification is ScrollStartNotification) {
                       _idleSave?.cancel();
                       if (notification.dragDetails != null) {
+                        _openedForBookmarkInspection = false;
                         _suspendListeningFollow(userDrag: true);
                         _clearBookmarkLanding();
                         _restoreTicket++;

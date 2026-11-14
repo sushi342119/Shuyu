@@ -4,12 +4,17 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'app_palette.dart';
 import 'catalog.dart';
 import 'haptic_preferences.dart';
 import 'performance_preferences.dart';
 import 'reader_preferences.dart';
+import 'reader_underline.dart';
+import 'reading_activity.dart';
+import 'reading_moments.dart';
 import 'recovery_archive.dart';
 import 'ui_preferences.dart';
+import 'user_fonts.dart';
 
 const localTextEncodingOptions = {
   'auto': '自动识别',
@@ -20,6 +25,51 @@ const localTextEncodingOptions = {
   'UTF-16LE': 'UTF-16 LE',
   'UTF-16BE': 'UTF-16 BE',
 };
+
+const shelfSortValues = {
+  'recentRead',
+  'recentAdded',
+  'title',
+  'progress',
+  'chapters',
+};
+
+const backupPurificationKeys = {
+  'reader_purification_rules_v1',
+  'reader_purification_enabled_v1',
+  'reader_paragraph_edits_v1',
+};
+
+const backupReadingStatsKeys = {
+  ReadingActivityStore.preferenceKey,
+  ReadingMomentsStore.preferenceKey,
+};
+
+/// 用户在生成备份或上传 WebDAV 时可勾选的附加数据范围。
+@immutable
+class LibraryBackupOptions {
+  const LibraryBackupOptions({
+    this.includePreferences = true,
+    this.includePurification = true,
+    this.includeReadingStats = true,
+  });
+
+  static const all = LibraryBackupOptions();
+
+  final bool includePreferences;
+  final bool includePurification;
+  final bool includeReadingStats;
+
+  LibraryBackupOptions copyWith({
+    bool? includePreferences,
+    bool? includePurification,
+    bool? includeReadingStats,
+  }) => LibraryBackupOptions(
+    includePreferences: includePreferences ?? this.includePreferences,
+    includePurification: includePurification ?? this.includePurification,
+    includeReadingStats: includeReadingStats ?? this.includeReadingStats,
+  );
+}
 
 final backupPreferenceKeys = <String>{
   'theme',
@@ -33,6 +83,8 @@ final backupPreferenceKeys = <String>{
   'checkAppUpdates',
   'appTypeface',
   'appFontId',
+  'readerTypeface',
+  AppPalettePreferences.key,
   'shelfSort',
   'shelfFilter',
   'localTxtEncoding',
@@ -49,9 +101,14 @@ const restoreJournalQuarantineKey = 'library_restore_journal_quarantine_v1';
 final _recordKey = RegExp(
   r'^(chapter|shelf_added|novel_meta|reading_position|reader_bookmarks)_([1-9][0-9]{0,9})$',
 );
+final _paragraphEditKey = RegExp(
+  r'^([1-9][0-9]{0,9}):([0-9]{1,6}):([0-9]{1,7})$',
+);
 
 bool isLibraryRecordKey(String key) =>
     backupPreferenceKeys.contains(key) ||
+    backupPurificationKeys.contains(key) ||
+    backupReadingStatsKeys.contains(key) ||
     _listKeys.contains(key) ||
     _tagRecordKeys.contains(key) ||
     (_recordKey.hasMatch(key) &&
@@ -91,6 +148,9 @@ class LibraryBackup {
       .map((key) => key.substring(key.lastIndexOf('_') + 1))
       .toSet()
       .length;
+  bool get hasPreferences => records.keys.any(backupPreferenceKeys.contains);
+  bool get hasPurification => records.keys.any(backupPurificationKeys.contains);
+  bool get hasReadingStats => records.keys.any(backupReadingStatsKeys.contains);
 
   /// 有标签归属的书籍数量（用于备份预览确认）。
   int get tagCount {
@@ -237,8 +297,9 @@ Map<String, Object> _validateRecordValues(Map<String, dynamic> input) {
           'taiwan',
         ].contains(value),
         HapticPreferences.preferenceKey => _validHaptics(value),
+        AppPalettePreferences.key => _validAppPalette(value),
         'localTxtEncoding' => localTextEncodingOptions.containsKey(value),
-        'shelfSort' => ['recentRead', 'recentAdded', 'title'].contains(value),
+        'shelfSort' => shelfSortValues.contains(value),
         'shelfFilter' => [
           'all',
           'unread',
@@ -249,8 +310,8 @@ Map<String, Object> _validateRecordValues(Map<String, dynamic> input) {
         'reduceMotion' ||
         'readerKeepScreenOn' ||
         'checkAppUpdates' => value is bool,
-        'appTypeface' => value == 'system' || value == 'sourceHanSerif',
-        'appFontId' => value is String && value.isNotEmpty,
+        'appTypeface' || 'appFontId' => validFontChoice(value),
+        'readerTypeface' => validFontChoice(value, follow: true),
         // Widened from 15–27 to the reader's 14–30 range; old values fit.
         'readerFontSize' => _number(
           value,
@@ -272,6 +333,10 @@ Map<String, Object> _validateRecordValues(Map<String, dynamic> input) {
       };
       if (!valid) throw const FormatException('偏好设置格式有误');
       output[key] = value is num ? value.toDouble() : value as Object;
+    } else if (backupPurificationKeys.contains(key)) {
+      output[key] = _validatePurificationRecord(key, value);
+    } else if (backupReadingStatsKeys.contains(key)) {
+      output[key] = _validateReadingStatsRecord(key, value);
     } else if (key.startsWith('chapter_') || key.startsWith('shelf_added_')) {
       if (value is! int ||
           value < 0 ||
@@ -324,7 +389,7 @@ Map<String, Object> _validateRecordValues(Map<String, dynamic> input) {
       }
       output[key] = value;
     } else {
-      if (value is! String || value.length > 256 * 1024) {
+      if (value is! String || value.length > 512 * 1024) {
         throw const FormatException('书籍记录格式有误');
       }
       final record = jsonDecode(value);
@@ -377,18 +442,7 @@ Map<String, Object> _validateRecordValues(Map<String, dynamic> input) {
         }
         final seen = <String>{};
         for (final mark in record) {
-          if (mark is! Map ||
-              mark['id'] is! String ||
-              (mark['id'] as String).isEmpty ||
-              (mark['id'] as String).length > 128 ||
-              RegExp(r'[\x00-\x1f]').hasMatch(mark['id'] as String) ||
-              !seen.add(mark['id']) ||
-              mark['chapterTitle'] is! String ||
-              (mark['chapterTitle'] as String).length > 2048 ||
-              RegExp(r'[\x00-\x1f]').hasMatch(mark['chapterTitle'] as String)) {
-            throw const FormatException('书签格式有误');
-          }
-          _validatePosition(mark['position']);
+          _validateBookmark(mark, seen);
         }
         output[key] = jsonEncode(record);
       }
@@ -407,6 +461,129 @@ bool _validHaptics(Object? value) {
   } on FormatException {
     return false;
   }
+}
+
+bool _validAppPalette(Object? value) {
+  if (value is! String) return false;
+  try {
+    AppPalettePreferences.decode(value);
+    return true;
+  } on FormatException {
+    return false;
+  }
+}
+
+Object _validatePurificationRecord(String key, Object? value) {
+  if (key == 'reader_purification_enabled_v1') {
+    if (value is! bool) throw const FormatException('净化设置格式有误');
+    return value;
+  }
+  if (value is! String || utf8.encode(value).length > 2 * 1024 * 1024) {
+    throw const FormatException('净化规则记录过大或格式有误');
+  }
+  final decoded = jsonDecode(value);
+  if (key == 'reader_purification_rules_v1') {
+    if (decoded is! List || decoded.length > 5000) {
+      throw const FormatException('净化规则数量过多或格式有误');
+    }
+    for (final item in decoded) {
+      if (item is! Map) throw const FormatException('净化规则格式有误');
+      final id = item['id'];
+      final name = item['name'];
+      final pattern = item['pattern'];
+      final replacement = item['replacement'];
+      final scopeBookId = item['scopeBookId'];
+      if ((id != null && (id is! String || id.isEmpty || id.length > 256)) ||
+          name is! String ||
+          name.trim().isEmpty ||
+          name.length > 512 ||
+          pattern is! String ||
+          pattern.isEmpty ||
+          pattern.length > 16384 ||
+          (replacement != null &&
+              (replacement is! String || replacement.length > 16384)) ||
+          (scopeBookId != null &&
+              (scopeBookId is! int ||
+                  scopeBookId <= 0 ||
+                  scopeBookId > 0x7fffffff))) {
+        throw const FormatException('净化规则字段格式有误');
+      }
+    }
+    return value;
+  }
+  if (decoded is! Map || decoded.length > 10000) {
+    throw const FormatException('段落纠错记录格式有误');
+  }
+  for (final entry in decoded.entries) {
+    final k = entry.key;
+    final v = entry.value;
+    final match = k is String ? _paragraphEditKey.firstMatch(k) : null;
+    if (match == null ||
+        int.parse(match.group(1)!) > 0x7fffffff ||
+        v is! String ||
+        v.length > 65536) {
+      throw const FormatException('段落纠错条目格式有误');
+    }
+  }
+  return value;
+}
+
+String _validateReadingStatsRecord(String key, Object? value) {
+  if (value is! String || utf8.encode(value).length > 4 * 1024 * 1024) {
+    throw const FormatException('阅读统计记录过大或格式有误');
+  }
+  return key == ReadingActivityStore.preferenceKey
+      ? ReadingActivityStore.validateRecord(value)
+      : ReadingMomentsStore.validateRecord(value);
+}
+
+void _validateBookmark(Object? mark, Set<String> seen) {
+  if (mark is! Map) throw const FormatException('书签格式有误');
+  final id = mark['id'];
+  final title = mark['chapterTitle'];
+  final position = mark['position'];
+  final quote = mark['quote'] ?? '';
+  final category = mark['category'] ?? '';
+  final createdAt = mark['createdAt'] is String
+      ? DateTime.tryParse(mark['createdAt'] as String)
+      : null;
+  final createdOffset = mark['createdOffsetMinutes'];
+  final rangeUpdatedAt = mark['rangeUpdatedAt'];
+  final categoryAt = mark['categoryAt'];
+  if (id is! String ||
+      id.isEmpty ||
+      id.length > 128 ||
+      RegExp(r'[\x00-\x1f]').hasMatch(id) ||
+      !seen.add(id) ||
+      title is! String ||
+      title.length > 2048 ||
+      RegExp(r'[\x00-\x1f]').hasMatch(title) ||
+      position is! Map ||
+      quote is! String ||
+      quote.length > 12000 ||
+      category is! String ||
+      category.length > 30 ||
+      (mark['createdAt'] != null && (createdAt == null || !createdAt.isUtc)) ||
+      (createdOffset != null &&
+          (createdOffset is! int ||
+              createdOffset < -840 ||
+              createdOffset > 840 ||
+              createdAt == null)) ||
+      (rangeUpdatedAt != null &&
+          (rangeUpdatedAt is! int ||
+              rangeUpdatedAt < 0 ||
+              rangeUpdatedAt > 1000000000000000)) ||
+      (categoryAt != null &&
+          (categoryAt is! int ||
+              categoryAt < 0 ||
+              categoryAt > 1000000000000000))) {
+    throw const FormatException('书签格式有误');
+  }
+  _validatePosition(position);
+  if (mark['annotation'] != null) {
+    ReaderAnnotationData.fromJson(mark['annotation']);
+  }
+  decodeReaderUnderlineRanges(mark['underlineRanges'], position: position);
 }
 
 bool _isAllowedCoverUrl(Uri url) {
@@ -439,7 +616,7 @@ void _validatePosition(Object? record) {
           !_number(record['lineHeight'], 1.3, 2.2)) ||
       (record['textScale'] != null && !_number(record['textScale'], .5, 5)) ||
       (record['typeface'] != null &&
-          !const {'system', 'sourceHanSerif'}.contains(record['typeface'])) ||
+          !validFontChoice(record['typeface'], follow: true)) ||
       (record['paragraphIndex'] != null &&
           (record['paragraphIndex'] is! int ||
               !_number(record['paragraphIndex'], 0, 1000000))) ||

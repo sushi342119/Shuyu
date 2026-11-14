@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_ui.dart';
 import 'cloud_sources.dart';
+import 'library_backup.dart';
 import 'webdav_transport.dart';
 
 const String _webDavConfigStorageKey = 'webdav.backup.config.v1';
@@ -350,6 +352,9 @@ Future<void> showWebDavBackupSheet({
   required SharedPreferences? preferences,
   required Future<String> Function() createBackupJson,
   required Future<void> Function(String jsonText) onRestoreBackupJson,
+  LibraryBackupOptions initialOptions = LibraryBackupOptions.all,
+  ValueChanged<LibraryBackupOptions>? onOptionsChanged,
+  Future<String> Function(LibraryBackupOptions options)? createScopedBackupJson,
 }) => showJellySheet<void>(
   context: context,
   reduceMotion: reduceMotion,
@@ -357,6 +362,9 @@ Future<void> showWebDavBackupSheet({
     preferences: preferences,
     createBackupJson: createBackupJson,
     onRestoreBackupJson: onRestoreBackupJson,
+    initialOptions: initialOptions,
+    onOptionsChanged: onOptionsChanged,
+    createScopedBackupJson: createScopedBackupJson,
   ),
 );
 
@@ -365,11 +373,18 @@ class _WebDavBackupSheet extends StatefulWidget {
     required this.preferences,
     required this.createBackupJson,
     required this.onRestoreBackupJson,
+    this.initialOptions = LibraryBackupOptions.all,
+    this.onOptionsChanged,
+    this.createScopedBackupJson,
   });
 
   final SharedPreferences? preferences;
   final Future<String> Function() createBackupJson;
   final Future<void> Function(String jsonText) onRestoreBackupJson;
+  final LibraryBackupOptions initialOptions;
+  final ValueChanged<LibraryBackupOptions>? onOptionsChanged;
+  final Future<String> Function(LibraryBackupOptions options)?
+  createScopedBackupJson;
 
   @override
   State<_WebDavBackupSheet> createState() => _WebDavBackupSheetState();
@@ -377,6 +392,7 @@ class _WebDavBackupSheet extends StatefulWidget {
 
 class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
   late WebDavBackupConfig _config = WebDavBackupConfig.load(widget.preferences);
+  late LibraryBackupOptions _options = widget.initialOptions;
   late final _urlController = TextEditingController(text: _config.serverUrl);
   late final _userController = TextEditingController(text: _config.username);
   late final _passController = TextEditingController(text: _config.password);
@@ -411,6 +427,26 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
     _folderController.dispose();
     super.dispose();
   }
+
+  void _updateOptions(LibraryBackupOptions next) {
+    setState(() => _options = next);
+    widget.onOptionsChanged?.call(next);
+  }
+
+  Widget _scopeRow({
+    required Key switchKey,
+    required String label,
+    required bool value,
+    required ValueChanged<bool>? onChanged,
+  }) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 2),
+    child: Row(
+      children: [
+        Expanded(child: Text(label, style: const TextStyle(fontSize: 13))),
+        CupertinoSwitch(key: switchKey, value: value, onChanged: onChanged),
+      ],
+    ),
+  );
 
   Future<WebDavBackupConfig> _saveCurrentConfig() async {
     final next = _config.copyWith(
@@ -481,7 +517,7 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
             ),
             const SizedBox(height: 6),
             Text(
-              '支持坚果云、Nextcloud、Alist / OpenList 等标准 WebDAV 网盘，将书架、阅读进度、书签与净化规则一键备份到云端。',
+              '支持坚果云、Nextcloud、Alist / OpenList 等标准 WebDAV 网盘，将书架、阅读进度、书签与所选附加配置一键备份到云端。',
               style: TextStyle(
                 fontSize: 12,
                 height: 1.5,
@@ -535,7 +571,47 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
                 isDense: true,
               ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
+            Text(
+              '本次上传打包内容（书架、进度、书签与标签始终包含）',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 4),
+            _scopeRow(
+              switchKey: const ValueKey('webdav-option-preferences'),
+              label: '包含外观与阅读偏好',
+              value: _options.includePreferences,
+              onChanged: _busy == null
+                  ? (v) => _updateOptions(
+                      _options.copyWith(includePreferences: v),
+                    )
+                  : null,
+            ),
+            _scopeRow(
+              switchKey: const ValueKey('webdav-option-purification'),
+              label: '包含正文净化与纠错规则',
+              value: _options.includePurification,
+              onChanged: _busy == null
+                  ? (v) => _updateOptions(
+                      _options.copyWith(includePurification: v),
+                    )
+                  : null,
+            ),
+            _scopeRow(
+              switchKey: const ValueKey('webdav-option-stats'),
+              label: '包含阅读统计与时刻',
+              value: _options.includeReadingStats,
+              onChanged: _busy == null
+                  ? (v) => _updateOptions(
+                      _options.copyWith(includeReadingStats: v),
+                    )
+                  : null,
+            ),
+            const SizedBox(height: 12),
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -545,8 +621,11 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
                   onPressed: _busy == null
                       ? () => _runTask('正在上传备份到 WebDAV…', () async {
                           final client = WebDavBackupClient(await _saveCurrentConfig());
+                          final payloadJson = widget.createScopedBackupJson != null
+                              ? await widget.createScopedBackupJson!(_options)
+                              : await widget.createBackupJson();
                           final fileName = await client.uploadBackup(
-                            await widget.createBackupJson(),
+                            payloadJson,
                           );
                           final files = await client.listBackups();
                           if (mounted) {

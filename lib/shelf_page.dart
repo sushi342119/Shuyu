@@ -270,7 +270,8 @@ class _ShelfPageState extends State<ShelfPage> {
                     ),
                     const SizedBox(height: 10),
                     SizedBox(
-                      height: 34,
+                      height: (MediaQuery.textScalerOf(context).scale(14) + 20)
+                          .clamp(34.0, 52.0),
                       child: ListView(
                         key: const ValueKey('shelf-scope-chips'),
                         scrollDirection: Axis.horizontal,
@@ -302,7 +303,9 @@ class _ShelfPageState extends State<ShelfPage> {
                     if (TagStore.shared.tags.isNotEmpty) ...[
                       const SizedBox(height: 10),
                       SizedBox(
-                        height: 34,
+                        height:
+                            (MediaQuery.textScalerOf(context).scale(14) + 20)
+                                .clamp(34.0, 52.0),
                         child: ListView(
                           scrollDirection: Axis.horizontal,
                           children: [
@@ -352,6 +355,11 @@ class _ShelfPageState extends State<ShelfPage> {
                               }),
                               onDeleted: () =>
                                   state.setShelfView(filter: 'all'),
+                            ),
+                          if (_filter.untaggedOnly)
+                            InputChip(
+                              label: const Text('标签：未设标签'),
+                              onDeleted: _filter.toggleUntagged,
                             ),
                           for (final id in _filter.tagIds)
                             if (TagStore.shared.tagById(id) case final tag?)
@@ -549,9 +557,20 @@ class _ShelfPageState extends State<ShelfPage> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         child: Row(
           children: [
-            Expanded(child: Text('已选 ${_selection.length} 本')),
+            Expanded(
+              child: Text(
+                '已选 ${_selection.length} 本',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
             TextButton(
               key: const ValueKey('shelf-batch-tag'),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 36),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
               onPressed: TagStore.shared.tags.isEmpty
                   ? () => showNovelFeedback(context, '还没有标签，请先在“标签管理”中新建')
                   : () => _batchTag(context),
@@ -559,16 +578,27 @@ class _ShelfPageState extends State<ShelfPage> {
             ),
             TextButton(
               key: const ValueKey('shelf-batch-remove'),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 36),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
               onPressed: () => _batchRemove(context),
               child: const Text('移出'),
             ),
             TextButton(
               key: const ValueKey('shelf-batch-finish'),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 36),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
               onPressed: () => _batchFinish(context),
               child: const Text('标为已读'),
             ),
             IconButton(
               tooltip: '退出多选',
+              visualDensity: VisualDensity.compact,
               icon: const ArchiveIcon(CupertinoIcons.xmark),
               onPressed: () => setState(_selection.clear),
             ),
@@ -691,16 +721,28 @@ class _ShelfPageState extends State<ShelfPage> {
         Novel book = resolved;
         if (book.chapters.isEmpty) {
           try {
-            book = await widget.repository.detail(book);
+            final loaded = await widget.repository.chapters(book.id);
+            if (loaded.isNotEmpty) {
+              book = book.withChapters(loaded);
+            }
           } catch (_) {}
         }
         if (book.chapters.isEmpty) {
+          try {
+            final detailed = await widget.repository.detail(book);
+            if (detailed.chapters.isNotEmpty || detailed.chapterCount > 0) {
+              book = detailed;
+            }
+          } catch (_) {}
+        }
+        if (book.chapters.isEmpty && !isLocalNovelId(book.id)) {
           final count = math.max(1, book.chapterCount);
           book = book.withChapters([
             for (var i = 0; i < count; i++)
-              NovelChapter('第 ${i + 1} 章', '', id: book.id * 1000 + i + 1),
+              NovelChapter('第 ${i + 1} 章', '', id: 0),
           ]);
         }
+        if (book.chapters.isEmpty) continue;
         await state.savePosition(
           novel: book,
           chapter: book.chapters.length - 1,
@@ -798,11 +840,14 @@ class _ShelfPageState extends State<ShelfPage> {
             ),
             if (progress != null) ...[
               const SizedBox(height: 4),
-              LinearProgressIndicator(
-                value: progress,
-                minHeight: 3,
-                color: Theme.of(context).colorScheme.secondary,
-                backgroundColor: Theme.of(context).dividerColor,
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 104),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 3,
+                  color: Theme.of(context).colorScheme.secondary,
+                  backgroundColor: Theme.of(context).dividerColor,
+                ),
               ),
             ],
           ],

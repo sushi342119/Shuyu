@@ -101,6 +101,7 @@ class NovelChapter {
 
 abstract class NovelRepository {
   const NovelRepository();
+  NovelRepository? get remoteRepository => null;
   Future<List<Novel>> list();
   Future<Novel?> find(int id);
   Future<List<Novel>> search(String query);
