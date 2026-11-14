@@ -102,6 +102,34 @@ const currentAppBuild = int.fromEnvironment(
         self.assertIn("defaultValue: 2", synced)
         self.assertIn("const currentReleaseNotes = '''\n- 新功能\n''';", synced)
 
+    def test_sync_dart_defaults_escapes_triple_quotes_and_interpolation(self):
+        dart = self.root / "lib/updates/app_updates.dart"
+        dart.write_text(
+            "const currentAppVersion = String.fromEnvironment(\n"
+            "  'APP_VERSION',\n"
+            "  defaultValue: '0.1.0',\n"
+            ");\n"
+            "const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 1);\n"
+            "const currentReleaseNotes = '''\n"
+            "旧版本说明\n"
+            "''';\n"
+        )
+        tricky_notes = "- 支持 '''三引号''' 与 $HOME 及 C:\\path\n"
+        sync_dart_defaults(self.root, "0.2.0", 2, tricky_notes)
+        synced = dart.read_text()
+        self.assertIn(r"\'\'\'三引号\'\'\'", synced)
+        self.assertIn(r"\$HOME", synced)
+        self.assertIn(r"C:\\path", synced)
+        # Re-syncing over an already escaped literal must cleanly replace the whole block.
+        sync_dart_defaults(self.root, "0.2.1", 3, "- 第二次更新'\n")
+        resynced = dart.read_text()
+        self.assertNotIn("三引号", resynced)
+        self.assertIn("const currentReleaseNotes = '''\n- 第二次更新'\n''';", resynced)
+        # Trailing quote without trailing newline must not merge into closing '''.
+        sync_dart_defaults(self.root, "0.2.2", 4, "- 末尾单引号'")
+        trailing = dart.read_text()
+        self.assertIn(r"- 末尾单引号\''''", trailing)
+
     def test_multi_digit_semver_segments_are_supported(self):
         self.assertEqual(next_version("1.8.9", 56), ("1.8.10", 57))
         self.assertEqual(next_version("1.9.9", 83), ("1.9.10", 84))

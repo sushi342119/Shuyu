@@ -6,6 +6,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'app_interactions.dart';
 import 'archive_icons.dart';
 import 'archive_random_pick_card.dart';
 import 'book_tags.dart';
@@ -179,8 +180,9 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
     });
     final saved = await _persistDrawCounts();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(saved ? '已重置抽取记录' : '已重置抽取记录，但保存失败')),
+    showNovelFeedback(
+      context,
+      saved ? '已重置抽取记录' : '已重置抽取记录，但保存失败',
     );
   }
 

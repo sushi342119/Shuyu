@@ -68,7 +68,14 @@ class SpeechAudioCache implements SpeechAudioSource {
 
   @override
   Future<List<SpeechVoice>> offlineVoices() => _native(() async {
-    final engines = await system.invokeListMethod<dynamic>('engines') ?? [];
+    final List<dynamic> engines;
+    try {
+      engines = await system.invokeListMethod<dynamic>('engines') ?? [];
+    } on MissingPluginException {
+      return const <SpeechVoice>[];
+    } on PlatformException {
+      return const <SpeechVoice>[];
+    }
     final found = <SpeechVoice>[];
     for (final raw in engines) {
       if (raw is! Map || raw['id'] is! String) continue;

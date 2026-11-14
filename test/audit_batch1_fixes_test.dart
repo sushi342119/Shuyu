@@ -652,11 +652,18 @@ void main() {
       final prefSwitch = find.byKey(const ValueKey('backup-option-preferences'));
       final purSwitch = find.byKey(const ValueKey('backup-option-purification'));
       final statsSwitch = find.byKey(const ValueKey('backup-option-stats'));
+      final scrollable = find
+          .descendant(
+            of: find.byKey(const ValueKey('backup-scroll')),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      await tester.scrollUntilVisible(purSwitch, 120, scrollable: scrollable);
+      await tester.pumpAndSettle();
       expect(prefSwitch, findsOneWidget);
       expect(purSwitch, findsOneWidget);
       expect(statsSwitch, findsOneWidget);
 
-      await tester.ensureVisible(purSwitch);
       await tester.tap(purSwitch);
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);

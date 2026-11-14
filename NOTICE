@@ -27,7 +27,7 @@ Source Han Serif CN Regular and Bold: Copyright Adobe, SIL Open Font License
 
 Edge read-aloud v2 protocol adaptation: rany2/edge-tts,
 Copyright (c) 2025- rany <rany@riseup.net>, LGPL version 3.
-Ported to Dart and modified 2026-10-15 in lib/listening/edge_protocol.dart.
+Ported to Dart and modified 2026-10-15 in lib/listening/edge_tts.dart.
 Upstream commit: bd44c1d1aaebdc1db7f47456ee12431b42ec7cac.
 Full upstream notice: assets/licenses/edge-tts.txt.
 

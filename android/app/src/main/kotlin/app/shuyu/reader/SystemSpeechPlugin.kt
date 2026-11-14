@@ -133,11 +133,17 @@ class SystemSpeechPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 completeInit(null, "系统语音初始化超时，请检查该引擎的语音数据")
             }
         }.also { main.postDelayed(it, 15_000) }
-        session = TextToSpeech(context, { status -> main.post {
-            if (!initializing || closed || epoch != initEpoch) return@post
-            if (status == TextToSpeech.SUCCESS) completeInit(session, null)
+        var created: TextToSpeech? = null
+        created = TextToSpeech(context, { status -> main.post {
+            val bound = created
+            if (!initializing || closed || epoch != initEpoch || session !== bound) {
+                if (bound != null) speechWorker.execute { runCatching { bound.shutdown() } }
+                return@post
+            }
+            if (status == TextToSpeech.SUCCESS) completeInit(bound, null)
             else { shutdownSession(); session = null; completeInit(null, "系统语音引擎初始化失败") }
         } }, id)
+        session = created
     }
     private fun completeInit(tts: TextToSpeech?, error: String?) {
         initTimeout?.let(main::removeCallbacks)

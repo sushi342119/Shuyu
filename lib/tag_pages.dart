@@ -129,17 +129,21 @@ class _TagEditorDialogState extends State<_TagEditorDialog> {
               children: [
                 const Expanded(child: Text('书籍标签')),
                 if (_selected.isNotEmpty)
-                  GestureDetector(
-                    key: const ValueKey('book-edit-clear-tags'),
-                    onTap: _busy || _creatingTag
-                        ? null
-                        : () => setState(_selected.clear),
-                    child: Text(
-                      '清空已选 (${_selected.length})',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: scheme.primary,
+                  Flexible(
+                    child: GestureDetector(
+                      key: const ValueKey('book-edit-clear-tags'),
+                      onTap: _busy || _creatingTag
+                          ? null
+                          : () => setState(_selected.clear),
+                      child: Text(
+                        '清空已选 (${_selected.length})',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: scheme.primary,
+                        ),
                       ),
                     ),
                   ),
@@ -297,12 +301,14 @@ class _FilenameChangeNotice extends StatelessWidget {
                 color: scheme.primary,
               ),
               const SizedBox(width: 6),
-              Text(
-                '保存将修改源文件名',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: scheme.primary,
-                  fontWeight: FontWeight.w600,
+              Expanded(
+                child: Text(
+                  '保存将修改源文件名',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],

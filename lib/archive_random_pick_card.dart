@@ -174,6 +174,10 @@ class _ArchiveRandomPickCardState<T extends Object>
   void didUpdateWidget(covariant ArchiveRandomPickCard<T> oldWidget) {
     super.didUpdateWidget(oldWidget);
 
+    if (widget.totalDuration != oldWidget.totalDuration) {
+      _controller.duration = Duration(milliseconds: _durationMs);
+    }
+
     if (_booksChanged()) {
       _captureSnapshot();
 

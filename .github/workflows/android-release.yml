@@ -1,6 +1,12 @@
 name: Prepare Release
 on:
   workflow_dispatch:
+    inputs:
+      require_api_runtime:
+        description: 'Require ANDROID_API_RUNTIME_ARM64_BASE64 (fail if missing)'
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths: ['pubspec.yaml']
@@ -14,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check public source policy
+        run: python3 tools/check_public_source.py
       - name: Validate release metadata
         run: |
           RAW_VERSION="$(sed -n 's/^version: *//p' pubspec.yaml)"
@@ -56,6 +64,10 @@ jobs:
           if-no-files-found: ignore
       - name: Verify release tooling
         run: python3 -m unittest discover -s tools -p 'test_*.py'
+      - name: Run Android native unit tests
+        run: |
+          flutter build apk --config-only
+          ./android/gradlew -p android testDebugUnitTest --no-daemon
       - name: Configure persistent release signing
         if: github.event_name != 'pull_request'
         env:
@@ -69,7 +81,16 @@ jobs:
         if: github.event_name != 'pull_request'
         env:
           ANDROID_API_RUNTIME_BASE64: ${{ secrets.ANDROID_API_RUNTIME_ARM64_BASE64 }}
-        run: python3 tools/verify_apk_runtime.py --provision --abi arm64-v8a --allow-missing-source
+          REQUIRE_API_RUNTIME: ${{ inputs.require_api_runtime == true && '1' || '0' }}
+        run: |
+          if [[ -n "${ANDROID_API_RUNTIME_BASE64:-}" || "$REQUIRE_API_RUNTIME" == "1" ]]; then
+            echo "STRICT_API_RUNTIME=1" >> "$GITHUB_ENV"
+            python3 tools/verify_apk_runtime.py --provision --abi arm64-v8a
+          else
+            echo "STRICT_API_RUNTIME=0" >> "$GITHUB_ENV"
+            echo "::notice::ANDROID_API_RUNTIME_ARM64_BASE64 not configured; building local-only APK without legacy libcpp.so"
+            python3 tools/verify_apk_runtime.py --provision --abi arm64-v8a --allow-missing-source
+          fi
       - name: Build signed APK
         if: github.event_name != 'pull_request'
         run: |
@@ -79,7 +100,12 @@ jobs:
             --dart-define=APP_BUILD=${{ env.APP_BUILD }}
       - name: Verify packaged API runtime
         if: github.event_name != 'pull_request'
-        run: python3 tools/verify_apk_runtime.py build/app/outputs/flutter-apk/app-release.apk --abi arm64-v8a --allow-missing-source
+        run: |
+          if [[ "${STRICT_API_RUNTIME:-0}" == "1" ]]; then
+            python3 tools/verify_apk_runtime.py build/app/outputs/flutter-apk/app-release.apk --abi arm64-v8a
+          else
+            python3 tools/verify_apk_runtime.py build/app/outputs/flutter-apk/app-release.apk --abi arm64-v8a --allow-missing-source
+          fi
       - name: Verify update identity against published APK
         env:
           GH_TOKEN: ${{ github.token }}

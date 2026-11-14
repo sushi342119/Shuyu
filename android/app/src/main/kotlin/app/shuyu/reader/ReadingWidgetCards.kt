@@ -8,6 +8,8 @@ import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.Icon
 import android.os.Build
@@ -70,14 +72,31 @@ internal object ReadingWidgetCards {
         Intent(c, MainActivity::class.java).setAction("reading.$route.$id")
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             .putExtra("wenku_reading_surface", route), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    private fun decodeBoundedBitmap(file: File, maxDimension: Int): Bitmap {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        require(bounds.outWidth > 0 && bounds.outHeight > 0)
+        var sample = 1
+        while (bounds.outWidth / sample > maxDimension || bounds.outHeight / sample > maxDimension) {
+            sample *= 2
+        }
+        val options = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+            inSampleSize = sample
+        }
+        return checkNotNull(BitmapFactory.decodeFile(file.path, options))
+    }
     fun render(c: Context, manager: AppWidgetManager, id: Int, family: Int): RemoteViews? {
         val card = card(c, id) ?: return null
         val size = listOf("small", "medium", "large")[family]; val appearance = card.optString("appearance", "system")
         val dark = appearance == "dark" || appearance == "system" && c.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+        val cardsRoot = File(c.filesDir, "reading-cards").canonicalFile
+        val maxDimension = if (family == 0) 480 else 720
         fun icon(mode: String): Icon {
             val path = card.getJSONObject("images").getString("${size}_$mode")
-            require(File(path).parentFile == File(c.filesDir, "reading-cards"))
-            val bytes = File(path).readBytes(); return Icon.createWithData(bytes, 0, bytes.size)
+            val file = File(path).canonicalFile
+            require(file.parentFile == cardsRoot && file.isFile)
+            return Icon.createWithBitmap(decodeBoundedBitmap(file, maxDimension))
         }
         return runCatching {
             val views = RemoteViews(c.packageName, R.layout.reading_widget_rendered)
@@ -100,8 +119,8 @@ internal object ReadingWidgetCards {
                 val quotes = card.optJSONArray("quotes") ?: JSONArray(); val selected = prefs(c).getString("quote_$id", null)
                 val quote = all(quotes).firstOrNull { it.optString("id") == selected } ?: quotes.optJSONObject(0)
                 val bounds = manager.getAppWidgetOptions(id)
-                val width = bounds.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, if (family == 0) 170 else 364)
-                val height = bounds.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, if (family == 2) 382 else 170)
+                val width = bounds.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, if (family == 0) 170 else 364).coerceIn(120, 1024)
+                val height = bounds.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, if (family == 2) 382 else 170).coerceIn(120, 1024)
                 val sx = width / (if (family == 0) 170f else 364f); val sy = height / (if (family == 2) 382f else 170f)
                 fun px(v: Float) = (v * c.resources.displayMetrics.density).toInt()
                 views.setViewVisibility(R.id.widget_quote_panel, View.VISIBLE)

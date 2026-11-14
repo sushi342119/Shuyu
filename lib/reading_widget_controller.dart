@@ -95,8 +95,7 @@ ReadingWidgetSnapshot readingWidgetSnapshot(
 
 abstract final class ReadingWidgetBridge {
   static const channel = MethodChannel('org.mewx.wenku8/reading_widgets');
-  static bool get supported =>
-      LocalPlatform.android || LocalPlatform.ios || LocalPlatform.harmony;
+  static bool get supported => LocalPlatform.android || LocalPlatform.harmony;
 
   static Future<void> start(ValueChanged<String> onOpen) async {
     if (!supported) return;

@@ -4,19 +4,19 @@
 
 ## 日常验证
 
-主分支提交与 PR 执行静态检查、Flutter 测试和 Python 工具测试。主分支还使用固定证书构建 ARM64 APK，见 Build Local APK 的 Artifacts。PR 不接触签名密钥。
+主分支提交与 PR 执行公开源码洁净度检查（`tools/check_public_source.py`）、静态检查、Flutter 测试、Python 工具测试以及 Android 原生 JUnit 单元测试（`./gradlew testDebugUnitTest`）。主分支还使用固定证书构建 ARM64 APK，见 Build Local APK 的 Artifacts。PR 不接触签名密钥。
 
 ## 正式发布
 
 1. 同步更新 `pubspec.yaml`、`lib/updates/app_updates.dart` 中的版本、构建号及说明，以及 `CHANGELOG.md`。遵循标准语义化版本号（SemVer），构建号必须严格大于已发布版本。
-2. 配置 `ANDROID_KEYSTORE_BASE64`、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 四项签名 Secrets，以及经核实授权的 `ANDROID_API_RUNTIME_ARM64_BASE64` 运行库 Secret。使用现有长期密钥，保留安全备份。
-3. 执行 `flutter pub get`、`flutter analyze`、`flutter test` 和 Python 工具测试。
-4. 将包含 `pubspec.yaml` 版本更新的提交推送到 `main` 分支（或在 Actions 中手动运行 `Prepare Release`，可指定 `main` 或匹配版本的 `v*` 标签）。`Prepare Release` 会验证版本、注入并校验 `libcpp.so`、构建固定签名的 ARM64 APK、校验同包名升级身份、导出匹配源码并创建草稿 Release（`--draft`）。
+2. 配置 `ANDROID_KEYSTORE_BASE64`、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 四项签名 Secrets；如需打包遗留联网运行库，还需配置经核实授权的 `ANDROID_API_RUNTIME_ARM64_BASE64` 运行库 Secret。使用现有长期密钥，保留安全备份。
+3. 执行 `python3 tools/check_public_source.py`、`flutter pub get`、`flutter analyze`、`flutter test`、`./gradlew testDebugUnitTest` 和 Python 工具测试。
+4. 将包含 `pubspec.yaml` 版本更新的提交推送到 `main` 分支（或在 Actions 中手动运行 `Prepare Release`，可勾选 `require_api_runtime` 强制要求运行库）。`Prepare Release` 会验证版本、按配置注入并校验 `libcpp.so`（未配置 Secret 且未勾选强制要求时构建纯本地版并校验未混入未知运行库）、构建固定签名的 ARM64 APK、校验同包名升级身份、导出匹配源码并创建草稿 Release（`--draft`）。
 5. 检查草稿附件、许可条件与真机覆盖安装效果后，在 GitHub 手动发布草稿。只有已发布的正式 Release 会进入应用更新检查；工作流不直接监听 tag push，避免发布草稿生成标签时重复触发构建。
 
 主分支 `pubspec.yaml` 推送及手动触发均只创建草稿（`gh release create --draft`），不会直接公开正式版。已有同名 Release（包括草稿）时创建步骤会失败，不会替换已有附件。需要修订附件时增加构建号，生成新的版本与标签。
 
-`Prepare Release` 在创建草稿前使用 Android SDK 验证候选 APK 与已发布的同包名基准版 `v1.8.14+61`（`shuyu-v1.8.14+61-arm64-v8a.apk`，包名均为 `app.shuyu.reader`）的实际包名和签名证书一致，且版本与本次配置匹配、构建号递增，同时通过 `tools/verify_apk_runtime.py` 检查最终 APK 内嵌的 `lib/arm64-v8a/libcpp.so` 未缺失且未被剥离符号。基准包下载失败、运行库缺失、签名无效或身份不兼容时停止发布。该检查不替代真机数据与覆盖安装验收。
+`Prepare Release` 在创建草稿前使用 Android SDK 验证候选 APK 与已发布的同包名基准版 `v1.8.14+61`（`shuyu-v1.8.14+61-arm64-v8a.apk`，包名均为 `app.shuyu.reader`）的实际包名和签名证书一致，且版本与本次配置匹配、构建号递增；当配置了 `ANDROID_API_RUNTIME_ARM64_BASE64` 或手动启用 `require_api_runtime` 时，通过 `tools/verify_apk_runtime.py` 严格校验最终 APK 内嵌的 `lib/arm64-v8a/libcpp.so` 未缺失且未被剥离符号（未配置时则校验 APK 为纯本地构建）。基准包下载失败、强制模式下运行库缺失、签名无效或身份不兼容时停止发布。该检查不替代真机数据与覆盖安装验收。
 
 ## 应用身份与签名
 
@@ -35,7 +35,7 @@
 
 ### 备份与换包限制
 
-普通 JSON 备份包含书架、书籍元数据快照（`novel_meta_<id>`）、阅读进度、书签批注、标签及阅读设置，不包含本地书库 `local_books/index.json`、ID 分配状态 `local_library_next`、小说原书文件或离线正文缓存，也不能转移 Android 文件夹授权。
+普通 JSON 备份默认包含书架、书籍元数据快照（`novel_meta_<id>`）、阅读进度、书签批注、标签，并允许在导出或上传 WebDAV 时按需勾选阅读时长统计、阅读留白纪念、正文净化规则与段落修订以及应用外观与阅读偏好；备份不包含本地书库 `local_books/index.json`、ID 分配状态 `local_library_next`、小说原书文件或离线正文缓存，也不能转移 Android 文件夹授权。
 
 更换 `applicationId` 或在新设备安装会创建独立应用，新应用不能自动读取旧应用的私有数据。重新扫描本地文件夹可能分配新的本地书籍数字 ID；恢复备份时，若目标设备已导入并扫描同书名与作者的本地书籍，备份恢复会按 `novel_meta_<id>` 中的书名与作者自动将进度、书签、书架与标签重映射到新本地书籍 ID，并跳过与其它无关本地书发生 ID 冲突的未导入记录。但备份本身仍不携带原书文件，跨包名或跨设备恢复前需先重新授权并扫描导入对应原书文件。
 

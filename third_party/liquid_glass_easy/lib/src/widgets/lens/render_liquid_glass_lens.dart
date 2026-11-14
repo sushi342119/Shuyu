@@ -1251,6 +1251,7 @@ class RenderLiquidGlassLens extends RenderProxyBox
       }
     } else {
       _skiaBlurClipLayerHandle.layer = null;
+      _skiaBlurClipPathLayerHandle.layer = null;
       _blurLayerHandle.layer = null;
     }
 

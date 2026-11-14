@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check public source policy
+        run: python3 tools/check_public_source.py
       - name: Validate release metadata
         run: |
           RAW_VERSION="$(sed -n 's/^version: *//p' pubspec.yaml)"
@@ -53,6 +55,10 @@ jobs:
           path: build/flutter-tests.log
           if-no-files-found: ignore
       - run: python3 -m unittest discover -s tools -p 'test_*.py'
+      - name: Run Android native unit tests
+        run: |
+          flutter build apk --config-only
+          ./android/gradlew -p android testDebugUnitTest --no-daemon
       - name: Configure persistent release signing
         if: github.event_name != 'pull_request'
         env:
