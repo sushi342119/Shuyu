@@ -40,6 +40,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   bool _scanning = false;
   bool _picking = false;
   String? _folderUri;
+  String? _mangaFolderUri;
   late final CloudSourceSettings _cloudSources = CloudSourceSettings()..load();
 
   @override
@@ -47,6 +48,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     super.initState();
     widget.state.bindLocalChapters(widget.local);
     _folderUri = widget.local.folderUri;
+    _mangaFolderUri = widget.local.mangaFolderUri;
     localScanProgressFor(widget.local).addListener(_onLocalProgressChanged);
     if (widget.pickFolderOnOpen) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -64,6 +66,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       ).removeListener(_onLocalProgressChanged);
       widget.state.bindLocalChapters(widget.local);
       _folderUri = widget.local.folderUri;
+      _mangaFolderUri = widget.local.mangaFolderUri;
       localScanProgressFor(widget.local).addListener(_onLocalProgressChanged);
     }
   }
@@ -72,6 +75,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     if (!mounted) return;
     setState(() {
       _folderUri = widget.local.folderUri;
+      _mangaFolderUri = widget.local.mangaFolderUri;
     });
   }
 
@@ -94,6 +98,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       } else if (returnOnCancel) {
         Navigator.of(context).pop();
       }
+    } on StateError catch (error) {
+      if (mounted) showNovelFeedback(context, error.message);
     } on PlatformException catch (error) {
       if (mounted) {
         _showDebugDialog(
@@ -106,6 +112,37 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         _showDebugDialog(
           '选择失败',
           describeSafeError(e, fallback: '文件夹选择失败'),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _picking = false);
+    }
+  }
+
+  Future<void> _pickMangaFolder() async {
+    if (_scanning || _picking) return;
+    setState(() => _picking = true);
+    try {
+      final uri = await widget.local.pickMangaFolder();
+      if (!mounted) return;
+      if (uri != null && uri.isNotEmpty) {
+        setState(() => _mangaFolderUri = uri);
+        showNovelFeedback(context, '已选择漫画文件夹，可开始扫描');
+      }
+    } on StateError catch (error) {
+      if (mounted) showNovelFeedback(context, error.message);
+    } on PlatformException catch (error) {
+      if (mounted) {
+        _showDebugDialog(
+          '选择失败',
+          describeSafeError(error, fallback: '漫画文件夹选择失败'),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        _showDebugDialog(
+          '选择失败',
+          describeSafeError(e, fallback: '漫画文件夹选择失败'),
         );
       }
     } finally {
@@ -136,12 +173,13 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   Future<void> _scan() async {
     if (_scanning || _picking) return;
-    if (_folderUri == null) {
+    if (_folderUri == null && _mangaFolderUri == null) {
       await _pickFolder();
-      if (_folderUri == null || !mounted) return;
+      if ((_folderUri == null && _mangaFolderUri == null) || !mounted) return;
     }
     setState(() => _scanning = true);
     final scanningFolder = widget.local.folderUri;
+    final scanningMangaFolder = widget.local.mangaFolderUri;
     try {
       final result = await widget.local.scan();
       // 章节迁移按队列顺序执行，完成后一次提交确认和失败状态。
@@ -238,9 +276,15 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             ? '文件夹授权已失效，请重新选择文件夹'
             : '扫描失败，请重试',
       );
-      if (error.code == 'permission' && widget.local.folderUri == scanningFolder) {
-        setState(() => _folderUri = null);
-        await widget.local.forgetFolder();
+      if (error.code == 'permission') {
+        if (scanningFolder != null && widget.local.folderUri == scanningFolder) {
+          setState(() => _folderUri = null);
+          await widget.local.forgetFolder();
+        } else if (scanningMangaFolder != null &&
+            widget.local.mangaFolderUri == scanningMangaFolder) {
+          setState(() => _mangaFolderUri = null);
+          await widget.local.forgetMangaFolder();
+        }
       }
     } catch (_) {
       if (mounted) showNovelFeedback(context, '扫描失败，请重试');
@@ -272,6 +316,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         padding: featurePadding(context),
         children: [
           ContentPanel(
+            key: const ValueKey('local-library-novel-folder'),
             onTap: isScanning || _picking ? null : _pickFolder,
             child: Row(
               children: [
@@ -282,7 +327,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        '小说与漫画文件夹',
+                        '小说文件夹',
                         style: TextStyle(fontWeight: FontWeight.w600),
                       ),
                       const SizedBox(height: 2),
@@ -300,11 +345,44 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
               ],
             ),
           ),
+          const SizedBox(height: 12),
+          ContentPanel(
+            key: const ValueKey('local-library-manga-folder'),
+            onTap: isScanning || _picking ? null : _pickMangaFolder,
+            child: Row(
+              children: [
+                const ArchiveIcon(CupertinoIcons.photo_on_rectangle, size: 21),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '漫画文件夹',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _mangaFolderUri == null
+                            ? '尚未选择，点击授权漫画目录'
+                            : '已授权，点击可更换 · 同目录分卷自动合并',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const ArchiveIcon(CupertinoIcons.chevron_right, size: 14),
+              ],
+            ),
+          ),
           const SizedBox(height: 14),
           FeatureEntry(
             key: const ValueKey('local-library-scan'),
             title: scanTitle,
-            subtitle: '自动导入小说、CBZ/ZIP 与图片文件夹漫画（共 ${books.length} 本）',
+            subtitle: '自动识别小说与漫画、合并同目录分卷漫画（共 ${books.length} 本）',
             icon: CupertinoIcons.doc_text_search,
             onTap: isScanning || _picking ? () {} : _scan,
           ),

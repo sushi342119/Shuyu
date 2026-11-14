@@ -519,5 +519,297 @@ void main() {
       expect(book.isRtlProgression, isTrue);
       expect(state.isMangaModeForBook(book.id, book: book), isTrue);
     });
+
+    test('同目录乱序 14 卷 PDF 漫画自动合并为单本多卷漫画，并自动清理旧版散落分卷记录', () async {
+      final coverPng = await _solidPngBytes(color: const Color(0xFFE07A5F));
+      final vol14Png = await _solidPngBytes(color: const Color(0xFF3D405B));
+      final renderedCoverFile = File('${root.path}/rendered_mgf_01.png');
+      final renderedVol14File = File('${root.path}/rendered_mgf_14.png');
+      await renderedCoverFile.writeAsBytes(coverPng);
+      await renderedVol14File.writeAsBytes(vol14Png);
+
+      const folderDir = '迷宫饭[AI全彩][2080×3000]PDF';
+      const scrambledOrder = [11, 13, 12, 14, 10, 9, 8, 7, 6, 2, 1, 3, 4, 5];
+
+      // 模拟升级前书库中已散落导入了 14 本独立 PDF 记录
+      final legacyBooksDir = Directory('${root.path}/local_books');
+      await legacyBooksDir.create(recursive: true);
+      final legacyBooksJson = <Map<String, Object?>>[
+        for (var i = 0; i < scrambledOrder.length; i++)
+          LocalBook(
+            id: localNovelIdBase + 100 + i,
+            title: 'Mgf_${scrambledOrder[i].toString().padLeft(2, '0')}',
+            author: '',
+            fileUri:
+                '$tree/document/mgf_${scrambledOrder[i].toString().padLeft(2, '0')}.pdf',
+            fileName:
+                'Mgf_${scrambledOrder[i].toString().padLeft(2, '0')}.pdf',
+            kind: LocalBookKind.pdf,
+            size: 150 * 1024 * 1024,
+            modified: 2000,
+            chapters: const [],
+            pageCount: 180 + scrambledOrder[i],
+            sourceId: 'saf:$tree',
+            sourceKey:
+                '$tree/document/mgf_${scrambledOrder[i].toString().padLeft(2, '0')}.pdf',
+          ).toJson(),
+      ];
+      await File('${legacyBooksDir.path}/index.json').writeAsString(
+        jsonEncode({'books': legacyBooksJson}),
+      );
+
+      messenger.setMockMethodCallHandler(LocalPlatform.channel, (call) async {
+        switch (call.method) {
+          case 'scanLocalFolder':
+            return {
+              'complete': true,
+              'rootName': 'Downloads',
+              'dirUris': {folderDir: '$tree/document/mgf_dir'},
+              'entries': [
+                for (final vol in scrambledOrder)
+                  {
+                    'uri':
+                        '$tree/document/mgf_${vol.toString().padLeft(2, '0')}.pdf',
+                    'name': 'Mgf_${vol.toString().padLeft(2, '0')}.pdf',
+                    'relPath':
+                        '$folderDir/Mgf_${vol.toString().padLeft(2, '0')}.pdf',
+                    'size': 150 * 1024 * 1024,
+                    'modified': 2000,
+                  },
+              ],
+            };
+          case 'pdfPageCount':
+            final uri = (call.arguments as Map)['docUri'] as String;
+            final match = RegExp(r'mgf_(\d+)\.pdf$').firstMatch(uri);
+            final vol = int.parse(match!.group(1)!);
+            return 180 + vol;
+          case 'renderPdfPage':
+            final args = call.arguments as Map;
+            final uri = args['docUri'] as String;
+            return uri.endsWith('mgf_01.pdf')
+                ? renderedCoverFile.path
+                : renderedVol14File.path;
+          case 'clearPdfCache':
+            return null;
+        }
+        throw MissingPluginException(call.method);
+      });
+
+      final store = await LocalLibraryStore.load();
+      addTearDown(store.dispose);
+      final state = await LibraryState.load();
+      addTearDown(state.dispose);
+      state.bindLocalChapters(store);
+
+      expect(store.books, hasLength(14));
+
+      final scan = await store.scan();
+      expect(scan.removed, 14);
+      expect(scan.added, 1);
+      expect(store.books, hasLength(1));
+
+      final merged = store.books.single;
+      expect(merged.displayTitle, '迷宫饭');
+      expect(merged.kind, LocalBookKind.comic);
+      expect(merged.isComicSeries, isTrue);
+      expect(merged.isIntrinsicManga, isTrue);
+      expect(state.isMangaModeForBook(merged.id, book: merged), isTrue);
+      expect(merged.chapters, hasLength(14));
+      expect(
+        merged.chapters.map((c) => c.title).toList(),
+        [
+          for (var v = 1; v <= 14; v++)
+            'Mgf_${v.toString().padLeft(2, '0')}',
+        ],
+      );
+      final expectedPages = [for (var v = 1; v <= 14; v++) 180 + v].fold<int>(
+        0,
+        (a, b) => a + b,
+      );
+      expect(merged.pageCount, expectedPages);
+
+      final page0Bytes = await store.readComicSeriesPage(merged.id, 0);
+      expect(page0Bytes, coverPng);
+      final lastVolStart = merged.chapters.last.offset;
+      final lastVolFirstPage = await store.readComicSeriesPage(
+        merged.id,
+        lastVolStart,
+      );
+      expect(lastVolFirstPage, vol14Png);
+      expect(await LegacyCover.bytes(merged.id), coverPng);
+    });
+
+    test('小说文件夹与漫画文件夹独立绑定、分开扫描、更换漫画目录不误删小说且禁止选同一目录', () async {
+      const novelTree = 'content://com.android.externalstorage.documents/tree/primary%3ANovels';
+      const mangaTree = 'content://com.android.externalstorage.documents/tree/primary%3AManga';
+      const mangaTree2 = 'content://com.android.externalstorage.documents/tree/primary%3AManga2';
+
+      final p1 = await _solidPngBytes(color: const Color(0xFF457B9D));
+      final p2 = await _solidPngBytes(color: const Color(0xFFA8DADC));
+      final pdfThumb = File('${root.path}/bocchi_cover.png');
+      await pdfThumb.writeAsBytes(p1);
+      final vol1Cbz = _buildZipBytes({'001.png': p1, '002.png': p2});
+      final vol2Cbz = _buildZipBytes({'001.png': p2});
+      final txtTemp = File('${root.path}/lotm.txt');
+      await txtTemp.writeAsString('第一章 绯红\n愚者先生苏醒了。\n第二章 占卜家\n塔罗会召开。');
+
+      SharedPreferences.setMockInitialValues({
+        'local_library_folder': novelTree,
+        'local_library_manga_folder': mangaTree,
+      });
+      await TagStore.load();
+
+      String? nextPickedTree;
+      messenger.setMockMethodCallHandler(LocalPlatform.channel, (call) async {
+        switch (call.method) {
+          case 'pickLocalFolder':
+            return nextPickedTree;
+          case 'scanLocalFolder':
+            final requestedTree = (call.arguments as Map)['treeUri'] as String;
+            if (requestedTree == novelTree) {
+              return {
+                'complete': true,
+                'rootName': 'Novels',
+                'dirUris': const <String, String>{},
+                'entries': [
+                  {
+                    'uri': '$novelTree/document/lotm.txt',
+                    'name': '诡秘之主.txt',
+                    'relPath': '诡秘之主.txt',
+                    'size': await txtTemp.length(),
+                    'modified': 1000,
+                  },
+                  {
+                    'uri': '$novelTree/document/manual.pdf',
+                    'name': '手册.pdf',
+                    'relPath': '资料/手册.pdf',
+                    'size': 4096,
+                    'modified': 1000,
+                  },
+                  {
+                    'uri': '$novelTree/document/manual_copy.pdf',
+                    'name': '手册 (1).pdf',
+                    'relPath': '资料/手册 (1).pdf',
+                    'size': 4096,
+                    'modified': 1000,
+                  },
+                ],
+              };
+            }
+            if (requestedTree == mangaTree) {
+              return {
+                'complete': true,
+                'rootName': 'Manga',
+                'dirUris': {'葬送的芙莉莲': '$mangaTree/document/frieren'},
+                'entries': [
+                  {
+                    'uri': '$mangaTree/document/bocchi.pdf',
+                    'name': '孤独摇滚.pdf',
+                    'relPath': '单行本/孤独摇滚.pdf',
+                    'size': 8192,
+                    'modified': 1200,
+                  },
+                  {
+                    'uri': '$mangaTree/document/frieren_02.cbz',
+                    'name': 'Vol_02.cbz',
+                    'relPath': '葬送的芙莉莲/Vol_02.cbz',
+                    'size': vol2Cbz.length,
+                    'modified': 1200,
+                  },
+                  {
+                    'uri': '$mangaTree/document/frieren_01.cbz',
+                    'name': 'Vol_01.cbz',
+                    'relPath': '葬送的芙莉莲/Vol_01.cbz',
+                    'size': vol1Cbz.length,
+                    'modified': 1200,
+                  },
+                ],
+              };
+            }
+            if (requestedTree == mangaTree2) {
+              return {
+                'complete': true,
+                'rootName': 'Manga2',
+                'dirUris': const <String, String>{},
+                'entries': [
+                  {
+                    'uri': '$mangaTree2/document/chainsaw.pdf',
+                    'name': '电锯人.pdf',
+                    'relPath': '电锯人.pdf',
+                    'size': 8192,
+                    'modified': 1500,
+                  },
+                ],
+              };
+            }
+            throw StateError('unexpected tree: $requestedTree');
+          case 'prepareLocalText':
+            final copy = File(
+              '${root.path}/prepared_${DateTime.now().microsecondsSinceEpoch}.txt',
+            );
+            await txtTemp.copy(copy.path);
+            return {
+              'path': copy.path,
+              'fingerprint': 'lotm_sha256',
+            };
+          case 'pdfPageCount':
+            return 12;
+          case 'renderPdfPage':
+            return pdfThumb.path;
+          case 'copyDocumentToFile':
+            final args = call.arguments as Map;
+            final uri = args['docUri'] as String;
+            final dest = args['destPath'] as String;
+            await File(dest).writeAsBytes(
+              uri.endsWith('frieren_01.cbz') ? vol1Cbz : vol2Cbz,
+            );
+            return dest;
+          case 'clearPdfCache':
+            return null;
+        }
+        throw MissingPluginException(call.method);
+      });
+
+      final store = await LocalLibraryStore.load();
+      addTearDown(store.dispose);
+      final state = await LibraryState.load();
+      addTearDown(state.dispose);
+      state.bindLocalChapters(store);
+
+      // 禁止将漫画文件夹设为与小说文件夹相同的 URI
+      nextPickedTree = novelTree;
+      await expectLater(store.pickMangaFolder(), throwsA(isA<StateError>()));
+
+      final scan1 = await store.scan();
+      expect(scan1.failures, isEmpty);
+      // 小说目录: 诡秘之主.txt + 手册.pdf + 手册 (1).pdf (3本，副本不误合并)
+      // 漫画目录: 孤独摇滚.pdf (自动漫画模式) + 葬送的芙莉莲 (2卷合并为1本)
+      expect(store.books, hasLength(5));
+
+      final manualPdf = store.books.firstWhere((b) => b.fileName == '手册.pdf');
+      expect(manualPdf.isIntrinsicManga, isFalse);
+      expect(state.isMangaModeForBook(manualPdf.id, book: manualPdf), isFalse);
+
+      final bocchiPdf = store.books.firstWhere(
+        (b) => b.fileName == '孤独摇滚.pdf',
+      );
+      expect(bocchiPdf.isIntrinsicManga, isTrue);
+      expect(state.isMangaModeForBook(bocchiPdf.id, book: bocchiPdf), isTrue);
+
+      final frieren = store.books.firstWhere((b) => b.displayTitle == '葬送的芙莉莲');
+      expect(frieren.isComicSeries, isTrue);
+      expect(frieren.chapters.map((c) => c.title).toList(), ['Vol_01', 'Vol_02']);
+      expect(frieren.pageCount, 3);
+
+      // 更换漫画文件夹到 mangaTree2：仅移除旧漫画目录的 2 本，小说目录的 3 本完好无损！
+      nextPickedTree = mangaTree2;
+      final picked = await store.pickMangaFolder();
+      expect(picked, mangaTree2);
+      final scan2 = await store.scan();
+      expect(scan2.switchedRemovedIds, unorderedEquals([bocchiPdf.id, frieren.id]));
+      expect(store.books, hasLength(4));
+      expect(store.books.any((b) => b.displayTitle == '诡秘之主'), isTrue);
+      expect(store.books.any((b) => b.displayTitle == '电锯人'), isTrue);
+    });
   });
 }

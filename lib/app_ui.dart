@@ -3342,3 +3342,72 @@ class AppGlassSegments<T extends Object> extends StatelessWidget {
     },
   );
 }
+
+class MangaBadge extends StatelessWidget {
+  const MangaBadge({
+    super.key,
+    required this.label,
+    this.overlay = false,
+  });
+
+  final String label;
+  final bool overlay;
+
+  @override
+  Widget build(BuildContext context) {
+    if (overlay) {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(5),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.18),
+            width: 0.6,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 9.5,
+              height: 1.15,
+              fontWeight: FontWeight.w600,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+        ),
+      );
+    }
+    final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.primary.withValues(alpha: dark ? 0.22 : 0.11),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(
+          color: scheme.primary.withValues(alpha: dark ? 0.42 : 0.28),
+          width: 0.75,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 5.5, vertical: 1.5),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: scheme.primary,
+            fontSize: 10.5,
+            height: 1.15,
+            fontWeight: FontWeight.w600,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ),
+    );
+  }
+}

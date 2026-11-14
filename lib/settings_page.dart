@@ -653,12 +653,23 @@ class InlineSearchResults extends StatelessWidget {
             }
             if (index == books.length + 1) return FeedFooter(feed: feed);
             final book = books[index - 1];
+            final localBook = localLibraryOf(repository)?.bookFor(book.id);
+            final badgeText = mangaBadgeLabelForBook(
+              localBook,
+              isMangaMode: state.isMangaModeForBook(book.id, book: localBook),
+            );
             return LoadedContentItem(
               key: ValueKey(book.id),
               index: index,
               child: NovelRow(
                 novel: book,
                 coverHeroTag: CoverHeroTag(context, book.id),
+                badge: badgeText == null
+                    ? null
+                    : MangaBadge(
+                        key: ValueKey('search-manga-badge-${book.id}'),
+                        label: badgeText,
+                      ),
                 onTap: () {
                   onOpenBook();
                   openDetail(

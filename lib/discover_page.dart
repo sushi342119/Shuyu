@@ -1491,6 +1491,22 @@ class _FastScrollerState extends State<_FastScroller> {
   }
 }
 
+String? mangaBadgeLabelForBook(
+  LocalBook? book, {
+  required bool isMangaMode,
+}) {
+  if (!isMangaMode && !(book?.isIntrinsicManga ?? false)) return null;
+  if (book != null && book.isComicSeries && book.chapters.length > 1) {
+    return '漫画 · ${book.chapters.length} 卷';
+  }
+  if (book != null &&
+      book.kind == LocalBookKind.comic &&
+      book.chapters.length > 1) {
+    return '漫画 · ${book.chapters.length} 话';
+  }
+  return '漫画';
+}
+
 class NovelRow extends StatelessWidget {
   const NovelRow({
     super.key,
@@ -1498,6 +1514,7 @@ class NovelRow extends StatelessWidget {
     required this.onTap,
     this.trailing,
     this.coverHeroTag,
+    this.badge,
     this.tagRow,
     this.progress,
   });
@@ -1505,6 +1522,7 @@ class NovelRow extends StatelessWidget {
   final VoidCallback onTap;
   final Widget? trailing;
   final Object? coverHeroTag;
+  final Widget? badge;
 
   /// Optional 0–1 reading progress, drawn as a 3px accent bar.
   final double? progress;
@@ -1530,7 +1548,15 @@ class NovelRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                ArchiveCode(ArchiveDesign.fileCode(novel.id)),
+                Row(
+                  children: [
+                    ArchiveCode(ArchiveDesign.fileCode(novel.id)),
+                    if (badge != null) ...[
+                      const SizedBox(width: 6),
+                      Flexible(child: badge!),
+                    ],
+                  ],
+                ),
                 const SizedBox(height: 4),
                 Text(
                   novel.title,

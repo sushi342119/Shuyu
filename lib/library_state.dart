@@ -3326,7 +3326,7 @@ class LibraryState extends ChangeNotifier {
     final override = _readerStore.mangaBookModes[bookId];
     if (override == 'manga') return true;
     if (override == 'normal') return false;
-    return resolved?.isComicEpub ?? false;
+    return resolved?.isIntrinsicManga ?? false;
   }
 
   Future<void> setBookMangaModeOverride(int bookId, String? mode) {

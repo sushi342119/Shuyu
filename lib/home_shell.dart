@@ -23,7 +23,7 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
             .join('\n'),
       );
     }
-    if (local.folderUri == null) return;
+    if (local.folderUri == null && local.mangaFolderUri == null) return;
     try {
       final result = await local.scan(verifyUnchangedFingerprints: false);
       // 章节迁移按队列顺序执行，完成后一次提交确认和失败状态。

@@ -48,6 +48,13 @@ const _categoryFolderNames = <String>{
   '单行本',
   '單行本',
   '本子',
+  '连载',
+  '連載',
+  '完结',
+  '完結',
+  '全彩',
+  '小说',
+  '小說',
   'comic',
   'comics',
   'manga',
@@ -55,6 +62,12 @@ const _categoryFolderNames = <String>{
   'manhwa',
   'webtoon',
   'webtoons',
+  'novel',
+  'novels',
+  'pdf',
+  'cbz',
+  'epub',
+  'zip',
   'books',
   'book',
   '书库',
@@ -63,6 +76,20 @@ const _categoryFolderNames = <String>{
   'download',
   'downloads',
 };
+
+final _explicitComicHintPattern = RegExp(
+  r'(漫画|漫畫|条漫|條漫|四格漫|韩漫|韓漫|日漫|国漫|國漫|美漫|全彩|彩色版|黑白版|单行本|單行本|画集|畫集)'
+  r'|(?<![a-z0-9])(comic|comics|manga|manhua|manhwa|webtoon|webtoons)(?![a-z0-9])'
+  r'|\d{3,5}\s*[xX×]\s*\d{3,5}',
+  caseSensitive: false,
+);
+
+/// Returns true if [pathOrName] explicitly indicates comic/manga content
+/// (e.g. `漫画`, `全彩`, `manga`, or image dimensions like `[2080×3000]`).
+bool hasExplicitComicPathHint(String pathOrName) {
+  if (pathOrName.trim().isEmpty) return false;
+  return _explicitComicHintPattern.hasMatch(pathOrName);
+}
 
 const maxComicArchiveEntries = 20000;
 const maxComicPageBytes = 64 * 1024 * 1024;
@@ -1101,12 +1128,25 @@ bool _isPureChapterDirName(String leafName) {
 bool _isCategoryFolderName(String leafName) =>
     _categoryFolderNames.contains(leafName.trim().toLowerCase());
 
+final _leadingBracketTagsPattern = RegExp(
+  r'^(\s*[\[\(【（][^\]\)】）]*[\]\)】）]\s*)+',
+);
+
+String _stripLeadingBracketTags(String text) =>
+    text.replaceFirst(_leadingBracketTagsPattern, '').trim();
+
 String _sharedLeadingTitlePrefix(List<String> names) {
   if (names.length < 2) return '';
-  final first = names.first.trim();
+  final cleaned = [
+    for (final name in names)
+      (_stripLeadingBracketTags(name).isNotEmpty
+          ? _stripLeadingBracketTags(name)
+          : name.trim()),
+  ];
+  final first = cleaned.first;
   var prefixLen = first.length;
-  for (var i = 1; i < names.length && prefixLen > 0; i++) {
-    final other = names[i].trim();
+  for (var i = 1; i < cleaned.length && prefixLen > 0; i++) {
+    final other = cleaned[i];
     final limit = prefixLen < other.length ? prefixLen : other.length;
     var j = 0;
     while (j < limit && first.codeUnitAt(j) == other.codeUnitAt(j)) {
@@ -1115,9 +1155,7 @@ String _sharedLeadingTitlePrefix(List<String> names) {
     prefixLen = j;
   }
   final raw = first.substring(0, prefixLen).trim();
-  // Strip leading bracket group tags like "[漫猫]" when checking shared title stem.
-  final stripped = raw.replaceFirst(RegExp(r'^[\[\(【（][^\]\)】）]*[\]\)】）]\s*'), '');
-  return stripped.trim();
+  return _stripLeadingBracketTags(raw);
 }
 
 /// Groups scanned image files into single-volume or multi-chapter [ComicFolderManifest]
@@ -1437,3 +1475,550 @@ ComicFolderManifest applyMetadataToFolderManifest(
     coverPageIndex: resolvedCover,
   );
 }
+
+/// Persisted volume entry inside a [ComicSeriesManifest] (e.g. `Mgf_01.pdf` .. `Mgf_14.pdf`).
+class ComicSeriesVolumeEntry {
+  const ComicSeriesVolumeEntry({
+    required this.uri,
+    required this.name,
+    required this.relPath,
+    required this.kind,
+    required this.size,
+    required this.modifiedMs,
+    required this.startPage,
+    required this.pageCount,
+    this.title = '',
+    this.coverEntry,
+    this.epubPages = const <String>[],
+  });
+
+  final String uri;
+  final String name;
+  final String relPath;
+
+  /// `'pdf'`, `'cbz'`, or `'epub'`.
+  final String kind;
+  final int size;
+  final int modifiedMs;
+  final int startPage;
+  final int pageCount;
+  final String title;
+
+  /// Optional cover entry path inside CBZ/ZIP archive or EPUB package.
+  final String? coverEntry;
+
+  /// Ordered image entry paths inside an EPUB volume when `kind == 'epub'`.
+  final List<String> epubPages;
+
+  String get displayTitle =>
+      title.trim().isNotEmpty ? title.trim() : stripComicExtension(name);
+
+  Map<String, Object?> toJson() => {
+    'uri': uri,
+    'name': name,
+    'relPath': relPath,
+    'kind': kind,
+    'size': size,
+    'modifiedMs': modifiedMs,
+    'startPage': startPage,
+    'pageCount': pageCount,
+    if (title.isNotEmpty) 'title': title,
+    if (coverEntry != null && coverEntry!.isNotEmpty) 'coverEntry': coverEntry,
+    if (epubPages.isNotEmpty) 'epubPages': epubPages,
+  };
+
+  factory ComicSeriesVolumeEntry.fromJson(Map<String, dynamic> json) {
+    final rawEpubPages =
+        (json['epubPages'] as List<dynamic>? ?? const <dynamic>[])
+            .whereType<String>()
+            .where((s) => s.isNotEmpty)
+            .toList();
+    return ComicSeriesVolumeEntry(
+      uri: (json['uri'] as String?) ?? '',
+      name: (json['name'] as String?) ?? '',
+      relPath: (json['relPath'] as String?) ?? '',
+      kind: (json['kind'] as String?) ?? 'pdf',
+      size: (json['size'] as num?)?.toInt() ?? 0,
+      modifiedMs: (json['modifiedMs'] as num?)?.toInt() ?? 0,
+      startPage: (json['startPage'] as num?)?.toInt() ?? 0,
+      pageCount: (json['pageCount'] as num?)?.toInt() ?? 0,
+      title: (json['title'] as String?) ?? '',
+      coverEntry: json['coverEntry'] as String?,
+      epubPages: List<String>.unmodifiable(rawEpubPages),
+    );
+  }
+}
+
+/// Persisted manifest for a multi-volume comic series grouped from multiple
+/// `.pdf` / `.cbz` / `.zip` / `.epub` files in the same folder.
+class ComicSeriesManifest {
+  const ComicSeriesManifest({
+    required this.seriesKey,
+    required this.folderUri,
+    required this.title,
+    required this.author,
+    required this.summary,
+    required this.isRtl,
+    required this.volumes,
+    required this.chapters,
+    this.folderRelPath = '',
+    this.comicInfoUri,
+  });
+
+  final String seriesKey;
+  final String folderUri;
+  final String folderRelPath;
+  final String? comicInfoUri;
+  final String title;
+  final String author;
+  final String summary;
+  final bool? isRtl;
+  final List<ComicSeriesVolumeEntry> volumes;
+  final List<ComicChapterInfo> chapters;
+
+  int get pageCount => volumes.fold<int>(0, (sum, v) => sum + v.pageCount);
+
+  int get totalBytes => volumes.fold<int>(0, (sum, v) => sum + v.size);
+
+  int get latestModifiedMs => volumes.fold<int>(
+    0,
+    (maxMs, v) => v.modifiedMs > maxMs ? v.modifiedMs : maxMs,
+  );
+
+  /// Binary-searches the volume containing [globalPage] (0-indexed) and returns
+  /// `(volume, localPage)`. Returns `null` if [globalPage] is out of range.
+  ({ComicSeriesVolumeEntry volume, int localPage})? resolveGlobalPage(
+    int globalPage,
+  ) {
+    if (globalPage < 0 || volumes.isEmpty) return null;
+    var lo = 0;
+    var hi = volumes.length - 1;
+    while (lo <= hi) {
+      final mid = (lo + hi) >> 1;
+      final vol = volumes[mid];
+      if (globalPage < vol.startPage) {
+        hi = mid - 1;
+      } else if (globalPage >= vol.startPage + vol.pageCount) {
+        lo = mid + 1;
+      } else {
+        return (volume: vol, localPage: globalPage - vol.startPage);
+      }
+    }
+    return null;
+  }
+
+  Map<String, Object?> toJson() => {
+    'version': 1,
+    'seriesKey': seriesKey,
+    'folderUri': folderUri,
+    'folderRelPath': folderRelPath,
+    if (comicInfoUri != null && comicInfoUri!.isNotEmpty)
+      'comicInfoUri': comicInfoUri,
+    'title': title,
+    'author': author,
+    'summary': summary,
+    if (isRtl != null) 'isRtl': isRtl,
+    'chapters': [for (final c in chapters) c.toJson()],
+    'volumes': [for (final v in volumes) v.toJson()],
+  };
+
+  factory ComicSeriesManifest.fromJson(Map<String, dynamic> json) {
+    final rawVolumes =
+        (json['volumes'] as List<dynamic>? ?? const <dynamic>[])
+            .whereType<Map>()
+            .map(
+              (m) =>
+                  ComicSeriesVolumeEntry.fromJson(Map<String, dynamic>.from(m)),
+            )
+            .where((v) => v.uri.isNotEmpty && v.pageCount > 0)
+            .toList();
+    if (rawVolumes.isEmpty) {
+      throw const FormatException('多卷漫画清单为空');
+    }
+    final rawChapters =
+        (json['chapters'] as List<dynamic>? ?? const <dynamic>[])
+            .whereType<Map>()
+            .map((m) => ComicChapterInfo.fromJson(Map<String, dynamic>.from(m)))
+            .where((c) => c.pageCount > 0 && c.startPage >= 0)
+            .toList();
+    final chapters = rawChapters.isNotEmpty
+        ? rawChapters
+        : <ComicChapterInfo>[
+            for (final v in rawVolumes)
+              ComicChapterInfo(
+                title: v.displayTitle,
+                startPage: v.startPage,
+                pageCount: v.pageCount,
+              ),
+          ];
+    return ComicSeriesManifest(
+      seriesKey: (json['seriesKey'] as String?) ?? '',
+      folderUri: (json['folderUri'] as String?) ?? '',
+      folderRelPath: (json['folderRelPath'] as String?) ?? '',
+      comicInfoUri: json['comicInfoUri'] as String?,
+      title: (json['title'] as String?) ?? '本地漫画',
+      author: (json['author'] as String?) ?? '本地多卷漫画',
+      summary: (json['summary'] as String?) ?? '',
+      isRtl: json['isRtl'] as bool?,
+      volumes: List<ComicSeriesVolumeEntry>.unmodifiable(rawVolumes),
+      chapters: List<ComicChapterInfo>.unmodifiable(chapters),
+    );
+  }
+}
+
+/// Candidate multi-volume comic series grouped during folder scan before opening
+/// individual volume containers.
+class ComicSeriesCandidate {
+  const ComicSeriesCandidate({
+    required this.seriesKey,
+    required this.folderUri,
+    required this.folderRelPath,
+    required this.title,
+    required this.files,
+    this.comicInfoUri,
+  });
+
+  final String seriesKey;
+  final String folderUri;
+  final String folderRelPath;
+  final String title;
+  final List<ScannedFolderEntry> files;
+  final String? comicInfoUri;
+
+  int get totalBytes => files.fold<int>(0, (sum, f) => sum + f.size);
+
+  int get latestModifiedMs => files.fold<int>(
+    0,
+    (maxMs, f) => f.modifiedMs > maxMs ? f.modifiedMs : maxMs,
+  );
+}
+
+final _resolutionTagPattern = RegExp(r'\d{3,5}\s*[xX×]\s*\d{3,5}');
+final _copyDuplicateSuffixPattern = RegExp(r'^(.*\S)\s*\((\d{1,3})\)$');
+
+final _volumeMarkerPattern = RegExp(
+  r'第\s*[\d零〇一二两兩三四五六七八九十百千万]+(?:\.\d+)?\s*[话話章卷回集册冊季部篇]'
+  r'|[卷话話章回集册冊]\s*[\d零〇一二两兩三四五六七八九十百千万]+'
+  r'|[上中下前后全][卷篇册冊部集]$'
+  r'|(?<![a-z0-9])(vol|volume|ch|chap|chapter|ep|episode|part|book)[\s._#-]*\d+'
+  r'|(?:^|[\s._\-\[\(【（#vV])\d{1,4}(?:\.\d+)?(?:\s*[-~]\s*\d{1,4})?(?:[\]\)】）\s]|[话話章卷回集册冊]|$)'
+  r'|(?<=[\u4e00-\u9fff\u3040-\u30ff])\d{1,4}(?:\.\d+)?$',
+  caseSensitive: false,
+);
+
+final _trailingVolumeSuffixPattern = RegExp(
+  r'[\s._\-~·:：]*[\[\(【（]?\s*(?:'
+  r'第\s*[\d零〇一二两兩三四五六七八九十百千万]+(?:\.\d+)?\s*[话話章卷回集册冊季部篇].*'
+  r'|[卷话話章回集册冊]\s*[\d零〇一二两兩三四五六七八九十百千万]+.*'
+  r'|(?:vol|volume|ch|chap|chapter|ep|episode|part|book)[\s._#-]*\d+(?:\.\d+)?.*'
+  r'|[上中下前后][卷篇册冊部集]'
+  r'|\d{1,4}(?:\.\d+)?(?:\s*[-~]\s*\d{1,4})?\s*[话話章卷回集册冊]?'
+  r')\s*[\]\)】）]?\s*$',
+  caseSensitive: false,
+);
+
+String _cleanVolumeCandidateStem(String fileName) {
+  var stem = stripComicExtension(fileName).trim();
+  final tagIdx = stem.indexOf(' ✦');
+  if (tagIdx > 0) {
+    stem = stem.substring(0, tagIdx).trim();
+  }
+  return stem;
+}
+
+bool _hasVolumeOrChapterMarker(String stem, Set<String> lowerStemsInDir) {
+  final trimmed = stem.trim();
+  if (trimmed.isEmpty) return false;
+  // Exclude browser/OS duplicate copy names like `手册 (1)` when `手册` exists in the same folder.
+  final copyMatch = _copyDuplicateSuffixPattern.firstMatch(trimmed);
+  if (copyMatch != null) {
+    final base = copyMatch.group(1)!.trim().toLowerCase();
+    if (lowerStemsInDir.contains(base)) {
+      return false;
+    }
+  }
+  final withoutRes = trimmed.replaceAll(_resolutionTagPattern, ' ').trim();
+  if (withoutRes.isEmpty) return false;
+  if (_isPureChapterDirName(withoutRes) ||
+      _isPureChapterDirName(_stripLeadingBracketTags(withoutRes))) {
+    return true;
+  }
+  return _volumeMarkerPattern.hasMatch(withoutRes);
+}
+
+String _extractNormalizedSeriesStem(String stem) {
+  var cleaned = stem.replaceAll(_resolutionTagPattern, '').trim();
+  final withoutTags = _stripLeadingBracketTags(cleaned);
+  if (withoutTags.isNotEmpty) {
+    cleaned = withoutTags;
+  }
+  final stripped = cleaned.replaceFirst(_trailingVolumeSuffixPattern, '').trim();
+  return stripped
+      .replaceAll(RegExp(r'^[\s._\-~·:：]+|[\s._\-~·:：]+$'), '')
+      .trim();
+}
+
+String _cleanSeriesFolderTitle(String rawFolderName) {
+  final raw = rawFolderName.trim();
+  if (raw.isEmpty) return '本地漫画';
+  var cleaned = raw;
+  final withoutLeading = _stripLeadingBracketTags(cleaned).trim();
+  if (withoutLeading.isNotEmpty) {
+    cleaned = withoutLeading;
+  }
+  final trailingFormatPattern = RegExp(
+    r'(?:\s+|(?<=[\]】\)）]))(?:pdf|cbz|zip|epub|mobi|azw3)\s*$',
+    caseSensitive: false,
+  );
+  final trailingBracketTagsPattern = RegExp(
+    r'(?:\s*[\[【][^\]】]{1,48}[\]】])+\s*$',
+  );
+  for (var i = 0; i < 3; i++) {
+    final prev = cleaned;
+    final strippedFormat = cleaned.replaceFirst(trailingFormatPattern, '').trim();
+    if (strippedFormat.isNotEmpty) {
+      cleaned = strippedFormat;
+    }
+    final strippedBrackets = cleaned
+        .replaceFirst(trailingBracketTagsPattern, '')
+        .trim();
+    if (strippedBrackets.isNotEmpty) {
+      cleaned = strippedBrackets;
+    }
+    if (cleaned == prev) break;
+  }
+  cleaned = cleaned
+      .replaceAll(RegExp(r'^[\s._\-~·:：]+|[\s._\-~·:：]+$'), '')
+      .trim();
+  return cleaned.isNotEmpty ? cleaned : raw;
+}
+
+bool _isEligibleSeriesVolumeFile(
+  String leafName, {
+  required bool isMangaRoot,
+  required bool dirHasComicHint,
+}) {
+  final lower = leafName.toLowerCase();
+  if (lower.endsWith('.cbz')) return true;
+  if (lower.endsWith('.pdf') ||
+      lower.endsWith('.zip') ||
+      lower.endsWith('.epub')) {
+    return isMangaRoot || dirHasComicHint || hasExplicitComicPathHint(leafName);
+  }
+  return false;
+}
+
+/// Groups multiple comic volume files (`.pdf`, `.cbz`, `.zip`, `.epub`) inside the
+/// same series folder into ordered [ComicSeriesCandidate] entries and returns any
+/// remaining ungrouped files.
+({
+  List<ComicSeriesCandidate> seriesGroups,
+  List<ScannedFolderEntry> remainingEntries,
+})
+groupScannedComicVolumeSeries({
+  required List<ScannedFolderEntry> entries,
+  required bool isMangaRoot,
+  required String rootKeyPrefix,
+  required String rootFolderUri,
+  required String rootDisplayName,
+  Map<String, String> dirUrisByRelPath = const <String, String>{},
+  Map<String, String> comicInfoUrisByDir = const <String, String>{},
+}) {
+  if (entries.length < 2) {
+    return (seriesGroups: const [], remainingEntries: entries);
+  }
+
+  final comicInfoByDir = <String, String>{...comicInfoUrisByDir};
+  final candidatesByDir = <String, List<ScannedFolderEntry>>{};
+
+  for (final entry in entries) {
+    final rel = normalizeComicEntryPath(entry.relPath);
+    if (isIgnoredComicEntryPath(rel)) continue;
+    final dir = _parentDir(rel);
+    final leaf = entry.name.isNotEmpty ? entry.name : _leafName(rel);
+    if (isComicInfoFileName(leaf)) {
+      comicInfoByDir.putIfAbsent(dir, () => entry.uri);
+      continue;
+    }
+    if (entry.size <= 0) continue;
+    final dirHasHint =
+        dir.isNotEmpty &&
+        (hasExplicitComicPathHint(dir) || comicInfoByDir.containsKey(dir));
+    if (_isEligibleSeriesVolumeFile(
+      leaf,
+      isMangaRoot: isMangaRoot,
+      dirHasComicHint: dirHasHint,
+    )) {
+      candidatesByDir.putIfAbsent(dir, () => <ScannedFolderEntry>[]).add(entry);
+    }
+  }
+
+  if (candidatesByDir.isEmpty) {
+    return (seriesGroups: const [], remainingEntries: entries);
+  }
+
+  final consumedUris = <String>{};
+  final results = <ComicSeriesCandidate>[];
+  final sortedDirs = candidatesByDir.keys.toList()
+    ..sort((a, b) {
+      if (a.isEmpty) return -1;
+      if (b.isEmpty) return 1;
+      return compareComicEntryPaths(a, b);
+    });
+
+  for (final dir in sortedDirs) {
+    final dirFiles = candidatesByDir[dir]!;
+    if (dirFiles.length < 2) continue;
+
+    final parentLeaf = dir.isEmpty ? rootDisplayName : _leafName(dir);
+    final isCategory = _isCategoryFolderName(parentLeaf);
+    final stems = [
+      for (final f in dirFiles)
+        _cleanVolumeCandidateStem(f.name.isNotEmpty ? f.name : _leafName(f.relPath)),
+    ];
+    final lowerStemSet = {for (final s in stems) s.toLowerCase()};
+    final numberedFlags = [
+      for (final s in stems) _hasVolumeOrChapterMarker(s, lowerStemSet),
+    ];
+    final numberedCount = numberedFlags.where((v) => v).length;
+    final pureVolumeCount = stems
+        .where(
+          (s) =>
+              _isPureChapterDirName(s) ||
+              _isPureChapterDirName(_stripLeadingBracketTags(s)),
+        )
+        .length;
+    final majorityPureVolumes =
+        pureVolumeCount * 2 >= stems.length && pureVolumeCount >= 2;
+    final sharedPrefix = _sharedLeadingTitlePrefix(stems);
+    final lowerParentLeaf = parentLeaf.trim().toLowerCase();
+    final childrenMatchParentName =
+        lowerParentLeaf.length >= 2 &&
+        !isCategory &&
+        stems.where((s) => s.toLowerCase().contains(lowerParentLeaf)).length *
+                2 >=
+            stems.length;
+
+    // Pass 1: Dedicated non-category series directory (e.g. `迷宫饭[AI全彩][2080×3000]PDF/Mgf_01..14.pdf`).
+    final mergeWholeDir =
+        !isCategory &&
+        numberedCount >= 2 &&
+        numberedCount * 2 >= dirFiles.length &&
+        (majorityPureVolumes ||
+            sharedPrefix.length >= 2 ||
+            childrenMatchParentName ||
+            comicInfoByDir.containsKey(dir));
+
+    if (mergeWholeDir) {
+      final ordered = List<ScannedFolderEntry>.from(dirFiles)
+        ..sort((a, b) => compareComicNaturalOrder(a.name, b.name));
+      for (final f in ordered) {
+        consumedUris.add(f.uri);
+      }
+      final title = _cleanSeriesFolderTitle(parentLeaf);
+      final resolvedFolderUri =
+          dirUrisByRelPath[dir] ?? ordered.first.parentUri ?? rootFolderUri;
+      final seriesKey = dir.isEmpty
+          ? '$rootKeyPrefix#comic_series_root'
+          : '$rootKeyPrefix#comic_series:$dir';
+      results.add(
+        ComicSeriesCandidate(
+          seriesKey: seriesKey,
+          folderUri: resolvedFolderUri,
+          folderRelPath: dir,
+          title: title,
+          files: List<ScannedFolderEntry>.unmodifiable(ordered),
+          comicInfoUri: comicInfoByDir[dir],
+        ),
+      );
+      continue;
+    }
+
+    // Pass 2: Mixed/category folder containing multiple distinct numbered series
+    // (e.g. `漫画/迷宫饭 01.cbz`, `漫画/迷宫饭 02.cbz`, `漫画/孤独摇滚 01.cbz`, `漫画/孤独摇滚 02.cbz`).
+    final byStem = <String, List<(ScannedFolderEntry, bool, String)>>{};
+    for (var i = 0; i < dirFiles.length; i++) {
+      final normStem = _extractNormalizedSeriesStem(stems[i]);
+      if (normStem.length < 2 || _isCategoryFolderName(normStem)) continue;
+      final key = normStem.toLowerCase();
+      byStem
+          .putIfAbsent(key, () => <(ScannedFolderEntry, bool, String)>[])
+          .add((dirFiles[i], numberedFlags[i], normStem));
+    }
+
+    final stemKeys = byStem.keys.toList()..sort(compareComicNaturalOrder);
+    for (final key in stemKeys) {
+      final group = byStem[key]!;
+      if (group.length < 2) continue;
+      final groupNumbered = group.where((g) => g.$2).length;
+      if (groupNumbered < 2 || groupNumbered * 2 < group.length) continue;
+
+      final ordered = [for (final g in group) g.$1]
+        ..sort((a, b) => compareComicNaturalOrder(a.name, b.name));
+      for (final f in ordered) {
+        consumedUris.add(f.uri);
+      }
+      final displayTitle = group.first.$3;
+      final resolvedFolderUri =
+          dirUrisByRelPath[dir] ?? ordered.first.parentUri ?? rootFolderUri;
+      final relKey = dir.isEmpty ? key : '$dir/$key';
+      results.add(
+        ComicSeriesCandidate(
+          seriesKey: '$rootKeyPrefix#comic_series_stem:$relKey',
+          folderUri: resolvedFolderUri,
+          folderRelPath: dir,
+          title: displayTitle,
+          files: List<ScannedFolderEntry>.unmodifiable(ordered),
+        ),
+      );
+    }
+  }
+
+  if (results.isEmpty) {
+    return (seriesGroups: const [], remainingEntries: entries);
+  }
+
+  final remaining = [
+    for (final e in entries)
+      if (!consumedUris.contains(e.uri) &&
+          !isComicInfoFileName(
+            e.name.isNotEmpty ? e.name : _leafName(e.relPath),
+          ))
+        e,
+  ];
+  return (seriesGroups: results, remainingEntries: remaining);
+}
+
+/// Applies parsed [ComicInfoMetadata] onto a [ComicSeriesManifest].
+ComicSeriesManifest applyMetadataToSeriesManifest(
+  ComicSeriesManifest base,
+  ComicInfoMetadata metadata, {
+  bool preferFolderTitle = true,
+}) {
+  final seriesName = metadata.series?.trim();
+  final resolvedTitle = (seriesName != null && seriesName.isNotEmpty)
+      ? seriesName
+      : (!preferFolderTitle &&
+            (metadata.displayTitle?.trim().isNotEmpty ?? false))
+      ? metadata.displayTitle!.trim()
+      : base.title;
+  final resolvedAuthor = (metadata.writer?.trim().isNotEmpty ?? false)
+      ? metadata.writer!.trim()
+      : base.author;
+  final resolvedSummary = (metadata.summary?.trim().isNotEmpty ?? false)
+      ? metadata.summary!.trim()
+      : base.summary;
+  return ComicSeriesManifest(
+    seriesKey: base.seriesKey,
+    folderUri: base.folderUri,
+    folderRelPath: base.folderRelPath,
+    comicInfoUri: base.comicInfoUri,
+    title: resolvedTitle,
+    author: resolvedAuthor,
+    summary: resolvedSummary,
+    isRtl: metadata.isMangaRtl ?? base.isRtl,
+    volumes: base.volumes,
+    chapters: base.chapters,
+  );
+}
+
