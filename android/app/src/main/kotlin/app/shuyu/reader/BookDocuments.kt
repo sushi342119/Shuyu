@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.ContentResolver
 import android.content.Intent
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import io.flutter.plugin.common.MethodCall
@@ -13,17 +15,22 @@ import java.util.concurrent.Executors
 
 /** SAF picker for custom fonts/images and cloud sync files. */
 class BookDocuments internal constructor(
-    private val activity: Activity,
+    private var activity: Activity,
 ) : MethodChannel.MethodCallHandler {
+    fun attachActivity(activity: Activity) {
+        this.activity = activity
+    }
+    private val appContext = activity.applicationContext
+    private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
-    private val preferences = activity.getSharedPreferences("book_documents", 0)
+    private val preferences = appContext.getSharedPreferences("book_documents", 0)
     private data class Pending(val method: String, val result: MethodChannel.Result)
     private var pending: Pending? = null
     private var closed = false
-    private val root = File(activity.cacheDir, "book-documents").apply { mkdirs() }
+    private val root = File(appContext.cacheDir, "book-documents").apply { mkdirs() }
     companion object { private const val REQUEST = 8020; private const val MAX_SYNC = 256L * 1024 * 1024 }
 
-    private fun name(uri: Uri, fallback: String = "wenku8.wenku8sync"): String = activity.contentResolver.query(uri,
+    private fun name(uri: Uri, fallback: String = "wenku8.wenku8sync"): String = appContext.contentResolver.query(uri,
         arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
         if (it.moveToFirst()) it.getString(0) else null
     } ?: fallback
@@ -31,13 +38,13 @@ class BookDocuments internal constructor(
     private fun selected(): Uri = preferences.getString("sync_uri", null)?.let(Uri::parse)
         ?: throw IllegalStateException("请先选择云同步文件")
 
-    private fun canWrite(uri: Uri): Boolean = activity.contentResolver.query(uri,
+    private fun canWrite(uri: Uri): Boolean = appContext.contentResolver.query(uri,
         arrayOf(DocumentsContract.Document.COLUMN_FLAGS), null, null, null)?.use {
         it.moveToFirst() && (it.getInt(0) and DocumentsContract.Document.FLAG_SUPPORTS_WRITE) != 0
     } ?: false
 
     private fun copy(uri: Uri, target: File, max: Long) =
-        copySelectedBookDocument(activity.contentResolver, uri, target, max)
+        copySelectedBookDocument(appContext.contentResolver, uri, target, max)
 
     private fun file(path: String): File {
         val candidate = File(path).canonicalFile
@@ -61,10 +68,19 @@ class BookDocuments internal constructor(
     private fun background(result: MethodChannel.Result, action: () -> Any?) {
         if (closed) { result.error("closed", "文件页面已关闭，请返回文库后重试", null); return }
         io.execute {
-            try { val value = action(); activity.runOnUiThread {
-                if (closed) result.error("closed", "文件页面已关闭，请返回文库后重试", null) else result.success(value)
-            } }
-            catch (error: Exception) { activity.runOnUiThread { result.error("document", error.message ?: "文件操作失败，请重试", nativeErrorDetails(error)) } }
+            try {
+                val value = action()
+                main.post {
+                    if (closed) result.error("closed", "文件页面已关闭，请返回文库后重试", null)
+                    else result.success(value)
+                }
+            } catch (error: OutOfMemoryError) {
+                main.post { result.error("memory", "内存不足，无法处理所选文件", null) }
+            } catch (error: Exception) {
+                main.post { result.error("document", error.message ?: "文件操作失败，请重试", nativeErrorDetails(error)) }
+            } catch (_: Throwable) {
+                main.post { result.error("document", "文件操作失败，请重试", null) }
+            }
         }
     }
 

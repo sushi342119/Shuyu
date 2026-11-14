@@ -144,15 +144,22 @@ class _ReaderStatusFooterState extends State<ReaderStatusFooter>
     if (state == AppLifecycleState.resumed) {
       _listen();
     } else {
-      _subscription?.cancel();
+      final sub = _subscription;
       _subscription = null;
+      if (sub != null) {
+        unawaited(sub.cancel().catchError((Object _) {}));
+      }
     }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _subscription?.cancel();
+    final sub = _subscription;
+    _subscription = null;
+    if (sub != null) {
+      unawaited(sub.cancel().catchError((Object _) {}));
+    }
     super.dispose();
   }
 

@@ -9,6 +9,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.TypedValue
 import android.view.View
 import android.widget.RemoteViews
@@ -20,6 +22,8 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 private const val widgetChannel = "org.mewx.wenku8/reading_widgets"
 private const val widgetPreferences = "reading_widgets_v1"
@@ -60,16 +64,22 @@ private enum class ReadingWidgetTheme(
 class ReadingWidgetsPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     ActivityAware, PluginRegistry.NewIntentListener {
     private lateinit var context: Context
+    private val main = Handler(Looper.getMainLooper())
+    private var widgetExecutor: ExecutorService? = null
     private var channel: MethodChannel? = null
     private var activity: ActivityPluginBinding? = null
     private val inbox = ReadingWidgetOpenInbox()
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
+        widgetExecutor = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "shuyu-reading-widgets").apply { isDaemon = true }
+        }
         channel = MethodChannel(binding.binaryMessenger, widgetChannel).also { it.setMethodCallHandler(this) }
     }
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel?.setMethodCallHandler(null); channel = null
+        widgetExecutor?.shutdown(); widgetExecutor = null
         inbox.pause()
     }
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
@@ -100,6 +110,31 @@ class ReadingWidgetsPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
     }
 
+    private fun runWidgetIo(
+        result: MethodChannel.Result,
+        errorCode: String,
+        fallbackMessage: String,
+        action: () -> Unit,
+    ) {
+        val executor = widgetExecutor
+        if (executor == null || executor.isShutdown) {
+            result.error(errorCode, fallbackMessage, null)
+            return
+        }
+        try {
+            executor.execute {
+                try {
+                    action()
+                    main.post { result.success(null) }
+                } catch (_: Throwable) {
+                    main.post { result.error(errorCode, fallbackMessage, null) }
+                }
+            }
+        } catch (_: Exception) {
+            result.error(errorCode, fallbackMessage, null)
+        }
+    }
+
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "cardsSupported" -> result.success(true)
@@ -109,47 +144,54 @@ class ReadingWidgetsPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 result.success(null)
                 if (handled) activity?.activity?.moveTaskToBack(true)
             } catch (_: Exception) { result.error("WIDGET_CONFIGURATION_FAILED", "小组件配置未能完成", null) }
-            "publishCards" -> try {
-                ReadingWidgetCards.publish(context, org.json.JSONArray(call.argument<List<Any>>("cards") ?: emptyList<Any>()).toString())
-                result.success(null)
-            } catch (_: Exception) { result.error("WIDGET_WRITE_FAILED", "小组件暂未更新", null) }
-            "bindCard" -> try {
-                ReadingWidgetCards.bind(context, requireNotNull(call.argument<String>("widgetId")).toInt(), requireNotNull(call.argument<String>("cardId")))
-                result.success(null)
-            } catch (_: Exception) { result.error("WIDGET_BIND_FAILED", "小组件未能设置", null) }
+            "publishCards" -> {
+                val rawCards = call.argument<List<Any>>("cards") ?: emptyList<Any>()
+                runWidgetIo(result, "WIDGET_WRITE_FAILED", "小组件暂未更新") {
+                    ReadingWidgetCards.publish(context, org.json.JSONArray(rawCards).toString())
+                }
+            }
+            "bindCard" -> {
+                val widgetIdRaw = call.argument<String>("widgetId")
+                val cardId = call.argument<String>("cardId")
+                runWidgetIo(result, "WIDGET_BIND_FAILED", "小组件未能设置") {
+                    ReadingWidgetCards.bind(context, requireNotNull(widgetIdRaw).toInt(), requireNotNull(cardId))
+                }
+            }
             "consumeOpenRequest" -> result.success(inbox.consume())
-            "publishSnapshot" -> try {
-                val json = JSONObject(requireNotNull(call.argument<String>("json")))
-                require(json.getInt("version") == 1 && json.getJSONArray("week").length() == 7)
-                // Privacy is enforced at the host boundary as well as in Dart.
-                if (!json.optBoolean("showBookDetails")) json.put("currentBook", JSONObject.NULL)
-                if (!json.optBoolean("showBookDetails")) json.optJSONObject("latestCompletion")?.let {
-                    for (key in listOf("bookId", "title", "author", "coverPath")) it.put(key, JSONObject.NULL)
-                }
-                val directory = File(context.filesDir, "reading-desktop").apply { mkdirs() }
-                val owned = JSONObject()
-                val incoming = json.optJSONObject("desktopImages")
-                try {
-                    if (incoming != null) for (size in listOf("small", "medium", "large")) {
-                        val source = File(incoming.getString(size)).canonicalFile
-                        require(source.path.startsWith(File(context.applicationInfo.dataDir).canonicalPath + "/") && source.length() in 8..2_097_152)
-                        val target = File(directory, "${java.util.UUID.randomUUID()}.png")
-                        owned.put(size, target.path)
-                        source.copyTo(target)
+            "publishSnapshot" -> {
+                val rawJson = call.argument<String>("json")
+                runWidgetIo(result, "WIDGET_WRITE_FAILED", "桌面组件暂未更新，请重试") {
+                    val json = JSONObject(requireNotNull(rawJson))
+                    require(json.getInt("version") == 1 && json.getJSONArray("week").length() == 7)
+                    // Privacy is enforced at the host boundary as well as in Dart.
+                    if (!json.optBoolean("showBookDetails")) json.put("currentBook", JSONObject.NULL)
+                    if (!json.optBoolean("showBookDetails")) json.optJSONObject("latestCompletion")?.let {
+                        for (key in listOf("bookId", "title", "author", "coverPath")) it.put(key, JSONObject.NULL)
                     }
-                    json.remove("desktopImages")
-                    if (owned.length() == 3) json.put("desktopImages", owned)
-                check(context.getSharedPreferences(widgetPreferences, Context.MODE_PRIVATE).edit()
-                    .putString("snapshot", json.toString()).commit())
-                } catch (error: Exception) {
-                    owned.keys().forEach { File(owned.getString(it)).delete() }
-                    throw error
+                    val directory = File(context.filesDir, "reading-desktop").apply { mkdirs() }
+                    val owned = JSONObject()
+                    val incoming = json.optJSONObject("desktopImages")
+                    try {
+                        if (incoming != null) for (size in listOf("small", "medium", "large")) {
+                            val source = File(incoming.getString(size)).canonicalFile
+                            require(source.path.startsWith(File(context.applicationInfo.dataDir).canonicalPath + "/") && source.length() in 8..2_097_152)
+                            val target = File(directory, "${java.util.UUID.randomUUID()}.png")
+                            owned.put(size, target.path)
+                            source.copyTo(target)
+                        }
+                        json.remove("desktopImages")
+                        if (owned.length() == 3) json.put("desktopImages", owned)
+                        check(context.getSharedPreferences(widgetPreferences, Context.MODE_PRIVATE).edit()
+                            .putString("snapshot", json.toString()).commit())
+                    } catch (error: Exception) {
+                        owned.keys().forEach { File(owned.getString(it)).delete() }
+                        throw error
+                    }
+                    val retained = owned.keys().asSequence().map { owned.getString(it) }.toSet()
+                    directory.listFiles()?.filter { it.path !in retained }?.forEach { it.delete() }
+                    ReadingWidgetProvider.refreshAll(context)
                 }
-                val retained = owned.keys().asSequence().map { owned.getString(it) }.toSet()
-                directory.listFiles()?.filter { it.path !in retained }?.forEach { it.delete() }
-                ReadingWidgetProvider.refreshAll(context)
-                result.success(null)
-            } catch (_: Exception) { result.error("WIDGET_WRITE_FAILED", "桌面组件暂未更新，请重试", null) }
+            }
             else -> result.notImplemented()
         }
     }
@@ -162,7 +204,16 @@ class ReadingLargeWidget : ReadingWidgetProvider(2)
 open class ReadingWidgetProvider(private val family: Int) : AppWidgetProvider() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == context.packageName + ".WIDGET_QUOTE_NEXT") {
-            ReadingWidgetCards.next(context, intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1))
+            val pending = goAsync()
+            val appContext = context.applicationContext
+            val widgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1)
+            Thread({
+                try {
+                    ReadingWidgetCards.next(appContext, widgetId)
+                } finally {
+                    pending.finish()
+                }
+            }, "shuyu-widget-quote").start()
         } else super.onReceive(context, intent)
     }
     override fun onDeleted(context: Context, ids: IntArray) { ids.forEach { ReadingWidgetCards.remove(context, it) } }
@@ -181,7 +232,10 @@ open class ReadingWidgetProvider(private val family: Int) : AppWidgetProvider() 
                 }
         }
         private fun update(context: Context, manager: AppWidgetManager, id: Int, family: Int) {
-            ReadingWidgetCards.render(context, manager, id, family)?.let { manager.updateAppWidget(id, it); return }
+            ReadingWidgetCards.render(context, manager, id, family)?.let {
+                runCatching { manager.updateAppWidget(id, it) }
+                return
+            }
             val json = runCatching { JSONObject(context.getSharedPreferences(widgetPreferences, Context.MODE_PRIVATE)
                 .getString("snapshot", "")!!) }.getOrNull()
             val theme = ReadingWidgetTheme.read(json)
@@ -189,11 +243,11 @@ open class ReadingWidgetProvider(private val family: Int) : AppWidgetProvider() 
             val design = ReadingWidgetDesignViews.id(json)
             if (design != "classic") {
                 val bounds = manager.getAppWidgetOptions(id)
-                val width = bounds.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, if (family == 0) 170 else 350).coerceAtLeast(140)
-                val height = bounds.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, if (family == 2) 350 else 170).coerceAtLeast(140)
+                val width = bounds.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, if (family == 0) 170 else 350).coerceIn(140, 1024)
+                val height = bounds.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, if (family == 2) 350 else 170).coerceIn(140, 1024)
                 val imagePath = json?.optJSONObject("desktopImages")?.optString(listOf("small", "medium", "large")[family])
                 val image = imagePath?.takeIf { File(it).parentFile == File(context.filesDir, "reading-desktop") }
-                    ?.let { BitmapFactory.decodeFile(it) }
+                    ?.let { decodeDesktopFace(it, family) }
                 val designed = if (image == null) ReadingWidgetDesignViews.create(context, content, design, family, width, height)
                     else RemoteViews(context.packageName, R.layout.reading_widget_rendered).apply {
                         setImageViewBitmap(R.id.widget_rendered_face, image)
@@ -210,7 +264,7 @@ open class ReadingWidgetProvider(private val family: Int) : AppWidgetProvider() 
                 }
                 designed.setOnClickPendingIntent(R.id.reading_widget_root, PendingIntent.getActivity(context, id, intent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-                manager.updateAppWidget(id, designed)
+                runCatching { manager.updateAppWidget(id, designed) }
                 return
             }
             val views = RemoteViews(context.packageName, theme.layout(family))
@@ -218,9 +272,9 @@ open class ReadingWidgetProvider(private val family: Int) : AppWidgetProvider() 
             views.setTextViewText(R.id.widget_heatmap_heading, "近${ReadingWidgetHeatmap.weeks(family)}周")
             val options = manager.getAppWidgetOptions(id)
             val width = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,
-                if (family == 0) 170 else 350).coerceAtLeast(if (family == 0) 140 else 250)
+                if (family == 0) 170 else 350).coerceIn(if (family == 0) 140 else 250, 1024)
             val height = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,
-                if (family == 2) 350 else 170).coerceAtLeast(if (family == 2) 280 else 140)
+                if (family == 2) 350 else 170).coerceIn(if (family == 2) 280 else 140, 1024)
             val chartHeight = when (family) { 0 -> height - 102; 1 -> height - 100; else -> 49 }
             views.setImageViewBitmap(R.id.widget_heatmap, ReadingWidgetHeatmapRenderer.render(
                 content.heatmap, family, theme.name, context.resources.displayMetrics.density,
@@ -282,8 +336,23 @@ open class ReadingWidgetProvider(private val family: Int) : AppWidgetProvider() 
             views.setOnClickPendingIntent(R.id.reading_widget_root, PendingIntent.getActivity(context, id, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
             // A full replacement releases the previous cover bitmap allocation.
-            manager.updateAppWidget(id, views)
+            runCatching { manager.updateAppWidget(id, views) }
         }
+        private fun decodeDesktopFace(path: String, family: Int): Bitmap? = runCatching {
+            val maxDimension = if (family == 0) 480 else 720
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+            var sample = 1
+            while (bounds.outWidth / sample > maxDimension || bounds.outHeight / sample > maxDimension) {
+                sample *= 2
+            }
+            val options = BitmapFactory.Options().apply {
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+                inSampleSize = sample
+            }
+            BitmapFactory.decodeFile(path, options)
+        }.getOrNull()
         internal fun decodeCover(path: String): Bitmap? = runCatching {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(path, bounds)

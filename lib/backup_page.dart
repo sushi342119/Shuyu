@@ -264,56 +264,6 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Text(
-                        '打包附加内容',
-                        style: TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '书架、阅读进度、书签划线与标签始终包含。',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      _scopeToggle(
-                        switchKey: const ValueKey('backup-option-preferences'),
-                        title: '包含外观与阅读偏好',
-                        value: _exportOptions.includePreferences,
-                        onChanged: _busy == null
-                            ? (v) => setState(
-                                () => _exportOptions = _exportOptions.copyWith(
-                                  includePreferences: v,
-                                ),
-                              )
-                            : null,
-                      ),
-                      _scopeToggle(
-                        switchKey: const ValueKey('backup-option-purification'),
-                        title: '包含正文净化与纠错规则',
-                        value: _exportOptions.includePurification,
-                        onChanged: _busy == null
-                            ? (v) => setState(
-                                () => _exportOptions = _exportOptions.copyWith(
-                                  includePurification: v,
-                                ),
-                              )
-                            : null,
-                      ),
-                      _scopeToggle(
-                        switchKey: const ValueKey('backup-option-stats'),
-                        title: '包含阅读统计与时刻',
-                        value: _exportOptions.includeReadingStats,
-                        onChanged: _busy == null
-                            ? (v) => setState(
-                                () => _exportOptions = _exportOptions.copyWith(
-                                  includeReadingStats: v,
-                                ),
-                              )
-                            : null,
-                      ),
-                      const Divider(height: 24),
                       if (widget.state.preRestoreBackup != null)
                         GlassTextButton(
                           onPressed: _busy == null
@@ -390,6 +340,63 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
                       ),
                     ),
                   ),
+                const SizedBox(height: 16),
+                ContentPanel(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        '打包附加内容',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '书架、阅读进度、书签划线与标签始终包含。',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      _scopeToggle(
+                        switchKey: const ValueKey('backup-option-preferences'),
+                        title: '包含外观与阅读偏好',
+                        value: _exportOptions.includePreferences,
+                        onChanged: _busy == null
+                            ? (v) => setState(
+                                () => _exportOptions = _exportOptions.copyWith(
+                                  includePreferences: v,
+                                ),
+                              )
+                            : null,
+                      ),
+                      _scopeToggle(
+                        switchKey: const ValueKey('backup-option-purification'),
+                        title: '包含正文净化与纠错规则',
+                        value: _exportOptions.includePurification,
+                        onChanged: _busy == null
+                            ? (v) => setState(
+                                () => _exportOptions = _exportOptions.copyWith(
+                                  includePurification: v,
+                                ),
+                              )
+                            : null,
+                      ),
+                      _scopeToggle(
+                        switchKey: const ValueKey('backup-option-stats'),
+                        title: '包含阅读统计与时刻',
+                        value: _exportOptions.includeReadingStats,
+                        onChanged: _busy == null
+                            ? (v) => setState(
+                                () => _exportOptions = _exportOptions.copyWith(
+                                  includeReadingStats: v,
+                                ),
+                              )
+                            : null,
+                      ),
+                    ],
+                  ),
+                ),
                 if (_preview case final backup?) ...[
                   const SizedBox(height: 24),
                   LoadedContentItem(

@@ -106,14 +106,25 @@ abstract final class LocalPlatform {
   static bool get ios => !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
   // Flutter-OH adds this enum value; the stable Android/iOS SDK does not.
   static bool get harmony => !kIsWeb && defaultTargetPlatform.name == 'ohos';
-  static bool get readerAppearance => android || ios || harmony;
-  static bool get listening => android || ios || harmony;
-  static bool get fileActions => android || ios || harmony;
+  static bool get readerAppearance => android || harmony;
+  static bool get listening => android || harmony;
+  static bool get fileActions => android || harmony;
   static bool get volumePaging => android || harmony;
   /// SDK level and total RAM, used once per launch for the glass tier.
-  static Future<Map<Object?, Object?>?> deviceProfile() => channel
-      .invokeMethod<Map<Object?, Object?>>('deviceProfile')
-      .timeout(const Duration(milliseconds: 600));
+  static Future<Map<Object?, Object?>?> deviceProfile() async {
+    if (!android && !harmony) return null;
+    try {
+      return await channel
+          .invokeMethod<Map<Object?, Object?>>('deviceProfile')
+          .timeout(const Duration(milliseconds: 600));
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    } on TimeoutException {
+      return null;
+    }
+  }
   static Future<bool> exportBackup(String text, String name) async =>
       await channel.invokeMethod<bool>('exportBackup', {
         'text': text,

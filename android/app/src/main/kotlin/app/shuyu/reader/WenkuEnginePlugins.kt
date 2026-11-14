@@ -67,7 +67,9 @@ class WenkuHostPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRes
         val existing = tools
         if (existing == null) tools = LocalTools(binding.activity)
         else existing.attachActivity(binding.activity)
-        documents = BookDocuments(binding.activity)
+        val existingDocs = documents
+        if (existingDocs == null) documents = BookDocuments(binding.activity)
+        else existingDocs.attachActivity(binding.activity)
         binding.addActivityResultListener(this)
         binding.addRequestPermissionsResultListener(this)
     }

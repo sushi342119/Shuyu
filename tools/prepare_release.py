@@ -64,9 +64,15 @@ def sync_dart_defaults(root: Path, version: str, build: int, notes: str) -> None
         dart,
         count=1,
     )
-    escaped_notes = notes.replace("\\", "\\\\").replace("$", r"\$")
+    escaped_notes = (
+        notes.replace("\\", "\\\\")
+        .replace("$", r"\$")
+        .replace("'''", r"\'\'\'")
+    )
+    if escaped_notes.endswith("'"):
+        escaped_notes = escaped_notes[:-1] + r"\'"
     dart = re.sub(
-        r"const (?:String\s+)?currentReleaseNotes\s*=\s*r?'''[\s\S]*?'''\s*;",
+        r"const (?:String\s+)?currentReleaseNotes\s*=\s*r?'''(?:\\.|(?!''')[\s\S])*?'''\s*;",
         lambda _: f"const currentReleaseNotes = '''\n{escaped_notes}''';",
         dart,
         count=1,

@@ -218,9 +218,23 @@ class ReadingWidgetCards extends ChangeNotifier {
     final payload = <Map<String, Object?>>[];
     final oldFiles = <String>[];
     try {
-      _directory ??= await (await getTemporaryDirectory()).createTemp(
-        'reading-cards-',
-      );
+      if (_directory == null) {
+        final dir = Directory(
+          '${(await getApplicationSupportDirectory()).path}/reading-cards-staging-v1',
+        );
+        await dir.create(recursive: true);
+        final activePaths = {
+          for (final entry in _cache.values) ...entry.images.values,
+        };
+        await for (final entity in dir.list(followLinks: false)) {
+          if (entity is File && !activePaths.contains(entity.path)) {
+            try {
+              await entity.delete();
+            } catch (_) {}
+          }
+        }
+        _directory = dir;
+      }
       for (final card in configs) {
         final value = base.styled(
           design: card.design,
@@ -248,9 +262,13 @@ class ReadingWidgetCards extends ChangeNotifier {
             ? '${card.skin.name}:${widgetDate(value.localDay)}'
             : jsonEncode(visible);
         final previous = _cache[card.id];
+        final reusable = previous != null &&
+            previous.signature == signature &&
+            previous.images.isNotEmpty &&
+            previous.images.values.every((path) => File(path).existsSync());
         Map<String, String> images;
-        if (previous?.signature == signature) {
-          images = previous!.images;
+        if (reusable) {
+          images = previous.images;
         } else {
           images = {};
           await warmReadingDesktopImages(value);

@@ -400,10 +400,52 @@ class _LiquidGlassViewState extends State<LiquidGlassView>
     }
   }
 
+  final Set<ui.Image> _pendingDisposedImages = <ui.Image>{};
+
+  void _disposeImageLater(ui.Image? image) {
+    if (image == null || !_pendingDisposedImages.add(image)) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pendingDisposedImages.remove(image);
+      try {
+        image.dispose();
+      } catch (_) {}
+    });
+  }
+
+  void _disposeImagesLater(Iterable<ui.Image?>? images) {
+    if (images == null) return;
+    for (final img in images) {
+      _disposeImageLater(img);
+    }
+  }
+
+  void _disposeShadersLater(Iterable<ui.FragmentShader>? shaders) {
+    if (shaders == null || _useImpeller) return;
+    final list = List<ui.FragmentShader>.of(shaders);
+    if (list.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      for (final shader in list) {
+        try {
+          shader.dispose();
+        } catch (_) {}
+      }
+    });
+  }
+
   @override
   void didUpdateWidget(covariant LiquidGlassView oldWidget) {
     super.didUpdateWidget(oldWidget);
     // If config changes and no animation is running → update instantly
+    if (widget.controller != oldWidget.controller) {
+      oldWidget.controller?.detach();
+      widget.controller?.attach(
+        captureOnce: _captureOnce,
+        startRealtime: _startRealtimeCapture,
+        stopRealtime: _stopRealtimeCapture,
+        registerAdaptiveClient: _registerAdaptiveClient,
+        unregisterAdaptiveClient: _unregisterAdaptiveClient,
+      );
+    }
 
     if (_usePerLensShaders &&
         widget.children.length != oldWidget.children.length) {
@@ -488,6 +530,8 @@ class _LiquidGlassViewState extends State<LiquidGlassView>
     if (!_usePerLensShaders) return;
     if (!LiquidGlassShaders.isLoadedFor(_useImpeller)) return;
 
+    final oldMain = _shaders['liquid_glass_list'];
+    final oldBorder = _shaders['liquid_glass_border_list'];
     setState(() {
       _shaders['liquid_glass_list'] = _createShaderList(
           () => LiquidGlassShaders.createMainShader(_useImpeller), newCount);
@@ -496,6 +540,8 @@ class _LiquidGlassViewState extends State<LiquidGlassView>
             () => LiquidGlassShaders.createBorderShader(false), newCount);
       }
     });
+    if (oldMain is List<ui.FragmentShader>) _disposeShadersLater(oldMain);
+    if (oldBorder is List<ui.FragmentShader>) _disposeShadersLater(oldBorder);
   }
 
   /// Safely captures the background RepaintBoundary.
@@ -571,22 +617,29 @@ class _LiquidGlassViewState extends State<LiquidGlassView>
                 final images = <ui.Image?>[];
                 final regions = <Rect?>[];
                 bool any = false;
-                for (final child in widget.children) {
-                  final Offset tl = child.geometry.position.resolve(
-                      boundary.size,
-                      Size(child.geometry.width, child.geometry.height));
-                  final Rect r =
-                      (tl & Size(child.geometry.width, child.geometry.height))
-                          .inflate(_kRegionCaptureMargin)
-                          .intersect(Offset.zero & boundary.size);
-                  if (r.isEmpty) {
-                    images.add(null);
-                    regions.add(null);
-                    continue;
+                try {
+                  for (final child in widget.children) {
+                    final Offset tl = child.geometry.position.resolve(
+                        boundary.size,
+                        Size(child.geometry.width, child.geometry.height));
+                    final Rect r =
+                        (tl & Size(child.geometry.width, child.geometry.height))
+                            .inflate(_kRegionCaptureMargin)
+                            .intersect(Offset.zero & boundary.size);
+                    if (r.isEmpty) {
+                      images.add(null);
+                      regions.add(null);
+                      continue;
+                    }
+                    images.add(layer.toImageSync(r, pixelRatio: pixelRatio));
+                    regions.add(r);
+                    any = true;
                   }
-                  images.add(layer.toImageSync(r, pixelRatio: pixelRatio));
-                  regions.add(r);
-                  any = true;
+                } catch (_) {
+                  for (final partial in images) {
+                    partial?.dispose();
+                  }
+                  rethrow;
                 }
                 if (any) {
                   newImagesPerLens = images;
@@ -615,17 +668,33 @@ class _LiquidGlassViewState extends State<LiquidGlassView>
         }
 
         if (newImage == null && newImagesPerLens == null) return;
-        if (!context.mounted) return;
+        if (!context.mounted || !mounted) {
+          newImage?.dispose();
+          if (newImagesPerLens != null) {
+            for (final img in newImagesPerLens) {
+              img?.dispose();
+            }
+          }
+          return;
+        }
 
         if (newImagesPerLens != null) {
+          final previousPerLens = _imagesPerLens;
           _imagesPerLens = newImagesPerLens;
           _regionsPerLens = newRegionsPerLens;
+          _disposeImagesLater(previousPerLens);
         } else {
+          final previousImage = _image;
+          final previousPerLens = _imagesPerLens;
           _image = newImage;
           _imageRegion = null;
           _imageStale = false;
           _imagesPerLens = null;
           _regionsPerLens = null;
+          if (!identical(previousImage, newImage)) {
+            _disposeImageLater(previousImage);
+          }
+          _disposeImagesLater(previousPerLens);
           // Wake the lens-anywhere lenses (scope listeners). Safe here:
           // captures run from the ticker / post-frame callbacks, never
           // inside paint.
@@ -709,9 +778,13 @@ class _LiquidGlassViewState extends State<LiquidGlassView>
         Offset.zero & boundary.size,
         pixelRatio: pixelRatio,
       );
+      final previousImage = _image;
       _image = img;
       _imageRegion = null;
       _imageStale = false;
+      if (!identical(previousImage, img)) {
+        _disposeImageLater(previousImage);
+      }
       return img;
     } catch (_) {
       return _image;
@@ -820,10 +893,15 @@ class _LiquidGlassViewState extends State<LiquidGlassView>
           liquidGlassAdaptiveCaptureRatio(sampling, allVisibleRegions);
 
       final ui.Image img = await boundary.toImage(pixelRatio: ratio);
-      final ByteData? bytes =
-          await img.toByteData(format: ui.ImageByteFormat.rawRgba);
-      final int w = img.width, h = img.height;
-      img.dispose();
+      final ByteData? bytes;
+      final int w, h;
+      try {
+        w = img.width;
+        h = img.height;
+        bytes = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
+      } finally {
+        img.dispose();
+      }
       if (bytes == null || !mounted || w == 0 || h == 0) return;
 
       // Close the idle gate until the next rendered frame proves the
@@ -963,6 +1041,23 @@ class _LiquidGlassViewState extends State<LiquidGlassView>
     _adaptiveTimer?.cancel();
     _adaptiveTimer = null;
     _adaptiveClients.clear();
+    final lastImage = _image;
+    final lastPerLens = _imagesPerLens;
+    _image = null;
+    _imagesPerLens = null;
+    _regionsPerLens = null;
+    _disposeImageLater(lastImage);
+    _disposeImagesLater(lastPerLens);
+    if (!_useImpeller) {
+      for (final value in _shaders.values) {
+        if (value is ui.FragmentShader) {
+          _disposeShadersLater(<ui.FragmentShader>[value]);
+        } else if (value is List<ui.FragmentShader>) {
+          _disposeShadersLater(value);
+        }
+      }
+      _shaders = const <String, Object>{};
+    }
     _captureRevision.dispose();
     super.dispose();
   }

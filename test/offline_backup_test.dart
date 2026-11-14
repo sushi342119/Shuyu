@@ -42,10 +42,19 @@ void main() {
                 .toSet(),
             {
               ('file', 'local_books'),
+              ('root', 'app_flutter/local_books'),
               ('file', 'wenku8-offline-v1'),
               ('file', 'wenku8-illustrations-v1'),
+              ('file', 'sync-recovery'),
+              ('file', 'reading-desktop'),
+              ('file', 'reading-cards'),
               ('sharedpref', 'wenku_account_session.xml'),
               ('sharedpref', 'cloud_sources_secure.xml'),
+              ('sharedpref', 'webdav_backup_secure.xml'),
+              ('sharedpref', 'book_documents.xml'),
+              ('sharedpref', 'reading_widgets_v1.xml'),
+              ('sharedpref', 'reading_cards_v1.xml'),
+              ('sharedpref', 'reading_widget_configuration.xml'),
             },
           );
         }

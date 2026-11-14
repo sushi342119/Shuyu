@@ -468,14 +468,16 @@ class _ReaderPageState extends State<ReaderPage>
     super.dispose();
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final routeCurrent = ModalRoute.isCurrentOf(context) ?? true;
+  void _updateRouteCurrent(bool routeCurrent) {
     if (_activityRouteCurrent != routeCurrent) {
       _activityRouteCurrent = routeCurrent;
       _syncReadingActivity();
     }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
     final listening = ListeningScope.maybeOf(context);
     if (listening != _listening) {
       _listening?.snapshot.removeListener(_listeningChanged);
@@ -1477,7 +1479,13 @@ class _ReaderPageState extends State<ReaderPage>
       isBookmarked: () => _isCurrentPositionBookmarked,
       onAddBookmark: _quickAddBookmark,
       actions: _readerActions(),
-      leadingStackChild: ReaderScreenBinding(state: widget.state),
+      leadingStackChild: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ReaderScreenBinding(state: widget.state),
+          _ReaderRouteActivityBinding(onChanged: _updateRouteCurrent),
+        ],
+      ),
       body: NativeGlassGroup(
         enabled: false,
         inherit: false,
@@ -2303,4 +2311,25 @@ class _ReaderPageState extends State<ReaderPage>
       _findOpen = false;
     }
   }
+}
+
+class _ReaderRouteActivityBinding extends StatefulWidget {
+  const _ReaderRouteActivityBinding({required this.onChanged});
+  final ValueChanged<bool> onChanged;
+
+  @override
+  State<_ReaderRouteActivityBinding> createState() =>
+      _ReaderRouteActivityBindingState();
+}
+
+class _ReaderRouteActivityBindingState
+    extends State<_ReaderRouteActivityBinding> {
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    widget.onChanged(ModalRoute.isCurrentOf(context) ?? true);
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
 }

@@ -1,5 +1,15 @@
 # Wenku8 performance patch
 
+## 2026-11-14 — Release replaced Skia captures, clip-path handles and swapped controllers
+
+`LiquidGlassView` now schedules deterministic post-frame `dispose()` calls for
+replaced and unmounted `ui.Image` backdrop captures (`_image` and
+`_imagesPerLens`), wraps adaptive luminance `toByteData` readbacks in
+`try/finally` so failed readbacks still release their temporary `ui.Image`,
+rebinds `LiquidGlassViewController` in `didUpdateWidget`, and releases Skia
+`FragmentShader` instances on list resize and disposal. `RenderLiquidGlassLens`
+also clears `_skiaBlurClipPathLayerHandle` when blur is disabled.
+
 ## 2026-10-26 — Specialize mathematically absent optics
 
 The Impeller lens selects `liquid_glass_unlit.frag` only for circular rounded

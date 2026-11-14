@@ -41,8 +41,13 @@ Future<Uint8List> renderReadingDesktopCard(
     ),
     textDirection: TextDirection.ltr,
     maxLines: 1,
-  )..layout(maxWidth: logical.width - 36);
-  titlePainter.paint(canvas, const Offset(18, 18));
+  );
+  try {
+    titlePainter.layout(maxWidth: logical.width - 36);
+    titlePainter.paint(canvas, const Offset(18, 18));
+  } finally {
+    titlePainter.dispose();
+  }
 
   final bodyText = paintQuote
       ? '${widgetMinutes(snapshot.verifiedTodaySeconds)} 分钟今日阅读'
@@ -58,8 +63,16 @@ Future<Uint8List> renderReadingDesktopCard(
     ),
     textDirection: TextDirection.ltr,
     maxLines: 2,
-  )..layout(maxWidth: logical.width - 36);
-  bodyPainter.paint(canvas, Offset(18, logical.height - bodyPainter.height - 22));
+  );
+  try {
+    bodyPainter.layout(maxWidth: logical.width - 36);
+    bodyPainter.paint(
+      canvas,
+      Offset(18, logical.height - bodyPainter.height - 22),
+    );
+  } finally {
+    bodyPainter.dispose();
+  }
 
   final picture = recorder.endRecording();
   final image = await picture.toImage(

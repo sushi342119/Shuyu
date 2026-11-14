@@ -76,33 +76,43 @@ internal class Wenku8Bridge(context: Context, private val postToMain: (Runnable)
         }
     }
 
-    private fun illustration(raw: String): ByteArray = synchronized(imageLock) {
+    private fun illustration(raw: String): ByteArray {
         val url = IllustrationUrlPolicy.parse(raw)
         val name = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray()).joinToString("") { "%02x".format(it) }
         val file = File(images, name)
-        if (file.isFile) {
-            try {
-                require(file.length() in 1..(8 * 1024 * 1024))
-                val cached = file.readBytes()
-                validateImage(cached)
-                file.setLastModified(System.currentTimeMillis())
-                return@synchronized cached
-            } catch (_: Exception) { file.delete() }
+        synchronized(imageLock) {
+            if (file.isFile) {
+                try {
+                    require(file.length() in 1..(8 * 1024 * 1024))
+                    val cached = file.readBytes()
+                    validateImage(cached)
+                    file.setLastModified(System.currentTimeMillis())
+                    return cached
+                } catch (_: Exception) {
+                    file.delete()
+                }
+            }
         }
         val bytes = downloadIllustration(url)
-        try {
-            images.mkdirs()
-            val temporary = File(images, "$name.part")
-            temporary.writeBytes(bytes)
-            check(temporary.renameTo(file))
-            val cached = images.listFiles()?.filter { it.isFile } ?: emptyList()
-            var size = cached.sumOf { it.length() }
-            for (old in cached.sortedBy { it.lastModified() }) {
-                if (size <= 256L * 1024 * 1024) break
-                if (old != file) { val length = old.length(); if (old.delete()) size -= length }
+        synchronized(imageLock) {
+            val temporary = File(images, "$name.part.${System.nanoTime()}")
+            try {
+                images.mkdirs()
+                temporary.writeBytes(bytes)
+                check(temporary.renameTo(file))
+                val cached = images.listFiles()?.filter { it.isFile && !it.name.contains(".part") } ?: emptyList()
+                var size = cached.sumOf { it.length() }
+                for (old in cached.sortedBy { it.lastModified() }) {
+                    if (size <= 256L * 1024 * 1024) break
+                    if (old != file) { val length = old.length(); if (old.delete()) size -= length }
+                }
+            } catch (_: Exception) {
+                /* An online illustration survives a cache write error. */
+            } finally {
+                temporary.delete()
             }
-        } catch (_: Exception) { /* An online illustration survives a cache write error. */ }
-        bytes
+        }
+        return bytes
     }
 
     private fun downloadIllustration(source: URL): ByteArray {

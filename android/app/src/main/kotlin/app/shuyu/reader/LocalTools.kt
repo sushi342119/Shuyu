@@ -372,8 +372,8 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                                     val path = if (response is String) response else (response as? Map<*, *>)?.get("path") as? String
                                     if (path != null) File(path).delete()
                                 } else if (call.method == "copyDocumentToFile") {
-                                    val path = call.argument<String>("destPath")
-                                    if (path != null) File(path).delete()
+                                    val path = response as? String
+                                    if (path != null && isAllowedAppStorageFile(File(path))) File(path).delete()
                                 }
                             }
                         }
@@ -638,11 +638,26 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         return libraryRecordKey.matches(key)
     }
 
+    private fun allowedStorageRoots(): List<File> = listOfNotNull(
+        activity.filesDir,
+        activity.cacheDir,
+        activity.applicationInfo?.dataDir?.let(::File),
+        activity.getExternalFilesDir(null),
+    )
+
+    private fun isAllowedAppStorageFile(file: File): Boolean =
+        isPathInsideAllowedRoots(file, allowedStorageRoots())
+
     private fun openDocInputStream(doc: Uri): java.io.InputStream? {
-        val path = doc.path
-        if (doc.scheme == "file" && !path.isNullOrEmpty()) {
+        if (doc.scheme.equals("file", ignoreCase = true)) {
+            val path = doc.path
+            if (path.isNullOrBlank()) throw SecurityException("Invalid file URI")
             val file = File(path)
-            if (file.isFile) return file.inputStream()
+            if (!isAllowedAppStorageFile(file)) {
+                throw SecurityException("File URI outside app storage")
+            }
+            if (!file.isFile) throw java.io.FileNotFoundException("Local file not found")
+            return file.inputStream()
         }
         return activity.contentResolver.openInputStream(doc)
     }
@@ -919,14 +934,19 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                             Canvas(bmp).drawColor(Color.WHITE)
                             pg.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                             // 先写临时文件再重命名，避免残缺缓存（修复#12）。
-                            val tmp = File(sub, "p_${page}_w${w}.tmp")
-                            var ok = false
-                            FileOutputStream(tmp).use { fos ->
-                                ok = bmp.compress(Bitmap.CompressFormat.PNG, 90, fos)
-                                fos.flush()
+                            val tmp = File(sub, "p_${page}_w${w}.tmp.${System.nanoTime()}")
+                            try {
+                                var ok = false
+                                FileOutputStream(tmp).use { fos ->
+                                    ok = bmp.compress(Bitmap.CompressFormat.PNG, 90, fos)
+                                    fos.flush()
+                                }
+                                if (!ok || !tmp.renameTo(out)) {
+                                    throw IllegalStateException("Bitmap compress or rename failed")
+                                }
+                            } finally {
+                                tmp.delete()
                             }
-                            if (!ok) throw IllegalStateException("Bitmap compress failed")
-                            tmp.renameTo(out)
                         } finally {
                             // 确保位图释放（修复#12）。
                             if (!bmp.isRecycled) bmp.recycle()
@@ -943,7 +963,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         val files = root.walkTopDown().filter { it.isFile }.toList()
         var total = files.sumOf { it.length() }
         for (file in files) {
-            if (file.name.endsWith(".tmp") && now - file.lastModified() > 60 * 60 * 1000) {
+            if ((file.name.endsWith(".tmp") || file.name.contains(".tmp.")) && now - file.lastModified() > 60 * 60 * 1000) {
                 val length = file.length()
                 if (file.delete()) total -= length
             }
@@ -983,40 +1003,20 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         return true
     }
 
-    // 将 SAF 文档流式复制到 destPath，上限 MAX_EPUB_BYTES；失败或超限时删除目标文件
+    // 将 SAF 文档流式复制到应用私有目录内的 destPath，上限 MAX_EPUB_BYTES；通过同目录 .part 临时文件原子替换，失败不误删既有目标文件
     private fun copyDocumentToFile(doc: Uri, destPath: String): String {
-        val dest = java.io.File(destPath)
-        dest.parentFile?.let { parent ->
-            if (!parent.exists() && !parent.mkdirs() && !parent.exists()) {
-                throw java.io.IOException("cannot create directory: ${parent.path}")
-            }
+        if (destPath.isBlank()) throw IllegalArgumentException("destPath cannot be blank")
+        val rawDest = File(destPath)
+        if (!isAllowedAppStorageFile(rawDest)) {
+            throw SecurityException("Destination path outside app storage")
         }
-        try {
-            val input = openDocInputStream(doc)
-                ?: throw java.io.IOException("cannot open input stream: $doc")
-            input.use { ins ->
-                java.io.FileOutputStream(dest).use { out ->
-                    val buffer = ByteArray(64 * 1024)
-                    var total = 0L
-                    while (true) {
-                        if (Thread.currentThread().isInterrupted) throw InterruptedException()
-                        val n = ins.read(buffer)
-                        if (Thread.currentThread().isInterrupted) throw InterruptedException()
-                        if (n < 0) break
-                        total += n
-                        if (total > MAX_EPUB_BYTES) {
-                            throw java.io.IOException("document exceeds size limit")
-                        }
-                        out.write(buffer, 0, n)
-                    }
-                    out.flush()
-                }
-            }
-            return destPath
-        } catch (t: Throwable) {
-            dest.delete()
-            throw t
+        val dest = rawDest.canonicalFile
+        val input = openDocInputStream(doc)
+            ?: throw java.io.IOException("cannot open input stream: $doc")
+        input.use { ins ->
+            copyStreamToFileAtomically(ins, dest, MAX_EPUB_BYTES)
         }
+        return dest.path
     }
 
     /** 删除 SAF 文档。provider 确认删除成功才算成功；FileNotFoundException
@@ -1193,9 +1193,66 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
     fun close() {
         requests.close()
         pending = null
+        pendingShare = null
+        galleryAwaitingPermission = null
         pendingFolder = null
         pendingFont = null
         activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         io.shutdownNow()
+    }
+}
+
+internal fun isPathInsideAllowedRoots(candidate: File, allowedRoots: Iterable<File>): Boolean {
+    val canonicalCandidate = try {
+        candidate.canonicalFile
+    } catch (_: Exception) {
+        return false
+    }
+    val candidatePath = canonicalCandidate.path
+    for (root in allowedRoots) {
+        val canonicalRoot = try {
+            root.canonicalFile
+        } catch (_: Exception) {
+            continue
+        }
+        val prefix = canonicalRoot.path.trimEnd(File.separatorChar) + File.separator
+        if (candidatePath.startsWith(prefix)) return true
+    }
+    return false
+}
+
+internal fun copyStreamToFileAtomically(
+    input: java.io.InputStream,
+    dest: File,
+    maxBytes: Long,
+) {
+    val parent = dest.parentFile ?: throw java.io.IOException("destination missing parent directory")
+    if (!parent.exists() && !parent.mkdirs() && !parent.exists()) {
+        throw java.io.IOException("cannot create directory: ${parent.path}")
+    }
+    val part = File(parent, "${dest.name}.part.${System.nanoTime()}")
+    try {
+        FileOutputStream(part).use { out ->
+            val buffer = ByteArray(64 * 1024)
+            var total = 0L
+            while (true) {
+                if (Thread.currentThread().isInterrupted) throw InterruptedException()
+                val n = input.read(buffer)
+                if (Thread.currentThread().isInterrupted) throw InterruptedException()
+                if (n < 0) break
+                total += n
+                if (total > maxBytes) {
+                    throw java.io.IOException("document exceeds size limit")
+                }
+                out.write(buffer, 0, n)
+            }
+            out.flush()
+            runCatching { out.fd.sync() }
+        }
+        if (!part.renameTo(dest)) {
+            throw java.io.IOException("cannot replace destination file: ${dest.path}")
+        }
+    } finally {
+        part.delete()
     }
 }

@@ -122,7 +122,9 @@ class AppUpdatePage extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 24),
-              const Text('隐私与联网：收藏、进度及缓存保存在本机。在线书库会访问内容服务；在线听书会将待朗读文本发送给 Microsoft 在线语音服务；检查更新会访问 GitHub。系统备份和设备迁移由系统设置控制。'),
+              const Text(
+                '隐私与联网：收藏、进度及缓存保存在本机，系统自动云备份默认关闭，卸载或换机前请在应用内按需导出备份。在线书库会访问内容服务；在线听书会将待朗读文本发送给 Microsoft 在线语音或你配置的自定义 HTTP TTS；WebDAV / S3 同步、远程规则导入、在线字体下载与检查更新仅在对应功能触发时访问目标服务或 GitHub。',
+              ),
               const SizedBox(height: 24),
               if (service != null) ...[
                 ContentPanel(
