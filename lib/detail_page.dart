@@ -554,6 +554,11 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                                   Text(
                                                     loadError != null
                                                         ? '目录暂未载入'
+                                                        : localBook?.isComicSeries ==
+                                                                  true &&
+                                                              comicChapters !=
+                                                                  null
+                                                        ? '${novel.isComplete ? '已完结' : '连载中'}  ·  ${comicChapters.length} 卷 · ${novel.chapters.length} 页'
                                                         : '${novel.isComplete ? '已完结' : '连载中'}  ·  ${novel.chapters.length} $chapterUnit',
                                                     style: TextStyle(
                                                       color: Theme.of(context)
@@ -563,11 +568,40 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                                     ),
                                                   ),
                                                 const SizedBox(height: 8),
-                                                ArchiveCode(
-                                                  ArchiveDesign.fileCode(
-                                                    novel.id,
-                                                  ),
-                                                  inverse: true,
+                                                Builder(
+                                                  builder: (context) {
+                                                    final badgeLabel =
+                                                        mangaBadgeLabelForBook(
+                                                          localBook,
+                                                          isMangaMode: state
+                                                              .isMangaModeForBook(
+                                                                novel.id,
+                                                                book: localBook,
+                                                              ),
+                                                        );
+                                                    return Wrap(
+                                                      spacing: 8,
+                                                      runSpacing: 6,
+                                                      crossAxisAlignment:
+                                                          WrapCrossAlignment
+                                                              .center,
+                                                      children: [
+                                                        ArchiveCode(
+                                                          ArchiveDesign.fileCode(
+                                                            novel.id,
+                                                          ),
+                                                          inverse: true,
+                                                        ),
+                                                        if (badgeLabel != null)
+                                                          MangaBadge(
+                                                            key: ValueKey(
+                                                              'detail-manga-badge-${novel.id}',
+                                                            ),
+                                                            label: badgeLabel,
+                                                          ),
+                                                      ],
+                                                    );
+                                                  },
                                                 ),
                                               ],
                                             ),
@@ -720,7 +754,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                               novel.chapters.isEmpty
                                                   ? ''
                                                   : comicChapters != null
-                                                  ? '共 ${comicChapters.length} 话 · ${novel.chapters.length} 页'
+                                                  ? '共 ${comicChapters.length} ${localBook?.isComicSeries == true ? '卷' : '话'} · ${novel.chapters.length} 页'
                                                   : '共 ${novel.chapters.length} $chapterUnit',
                                             ),
                                           ),
@@ -924,7 +958,27 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     if (loadError != null) return '重试加载目录';
     if (novel.chapters.isEmpty) return '暂无可读章节';
     final action = state.hasRead(novel.id) ? '继续阅读' : '开始阅读';
-    final kind = localLibraryOf(repository)?.kindFor(novel.id);
+    final local = localLibraryOf(repository);
+    final localBook = local?.bookFor(novel.id);
+    if (localBook != null &&
+        localBook.isComicSeries &&
+        localBook.chapters.length > 1) {
+      final page = state.chapterForNovel(novel);
+      var active = localBook.chapters.first;
+      for (final ch in localBook.chapters) {
+        if (page >= ch.offset) {
+          active = ch;
+        } else {
+          break;
+        }
+      }
+      final localPage = (page - active.offset + 1).clamp(
+        1,
+        math.max(1, active.length),
+      );
+      return '$action · ${active.title}（第$localPage页）';
+    }
+    final kind = localBook?.kind ?? local?.kindFor(novel.id);
     final unit =
         (kind == LocalBookKind.pdf || kind == LocalBookKind.comic) ? '页' : '章';
     return '$action · 第${state.chapterForNovel(novel) + 1}$unit';

@@ -802,6 +802,40 @@ class _ShelfPageState extends State<ShelfPage> {
     );
   }
 
+  String? _mangaBadgeText(int id) {
+    final local = localLibraryOf(widget.repository);
+    final localBook = local?.bookFor(id);
+    return mangaBadgeLabelForBook(
+      localBook,
+      isMangaMode: state.isMangaModeForBook(id, book: localBook),
+    );
+  }
+
+  String _shelfProgressCaption(Novel book) {
+    if (!state.hasRead(book.id)) return '未读';
+    if (state.finishedReading(book)) return '已读完';
+    final localBook = localLibraryOf(widget.repository)?.bookFor(book.id);
+    if (localBook != null &&
+        localBook.kind == LocalBookKind.comic &&
+        localBook.chapters.length > 1) {
+      final page = state.chapterForNovel(book);
+      var activeIdx = 0;
+      for (var i = 0; i < localBook.chapters.length; i++) {
+        if (page >= localBook.chapters[i].offset) {
+          activeIdx = i;
+        } else {
+          break;
+        }
+      }
+      final unit = localBook.isComicSeries ? '卷' : '话';
+      return '${activeIdx + 1}/${localBook.chapters.length} $unit';
+    }
+    if (book.chapters.isNotEmpty || book.chapterCount > 0) {
+      return '${state.chapterForNovel(book) + 1}/${book.chapters.isNotEmpty ? book.chapters.length : book.chapterCount}';
+    }
+    return '第 ${state.chapterFor(book.id) + 1} 章';
+  }
+
   Widget _gridCell(BuildContext context, int id) {
     final book = _known(id);
     if (book == null) {
@@ -816,6 +850,7 @@ class _ShelfPageState extends State<ShelfPage> {
       );
     }
     final progress = _progressOf(book);
+    final badgeText = _mangaBadgeText(book.id);
     return _selectable(
       book,
       JellyTapSurface(
@@ -827,11 +862,33 @@ class _ShelfPageState extends State<ShelfPage> {
             LayoutBuilder(
               builder: (context, constraints) {
                 final width = constraints.maxWidth.clamp(0.0, 104.0);
-                return NovelCover(
+                final cover = NovelCover(
                   book,
                   width: width,
                   height: width * 148 / 104,
                   heroTag: CoverHeroTag(this, book.id),
+                );
+                if (badgeText == null) return cover;
+                return Stack(
+                  children: [
+                    cover,
+                    Positioned(
+                      top: 6,
+                      right: 6,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: math.max(36.0, width - 12),
+                        ),
+                        child: IgnorePointer(
+                          child: MangaBadge(
+                            key: ValueKey('shelf-grid-manga-badge-${book.id}'),
+                            label: badgeText,
+                            overlay: true,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 );
               },
             ),
@@ -918,44 +975,51 @@ class _ShelfPageState extends State<ShelfPage> {
     ),
   );
 
-  Widget _row(BuildContext context, Novel book) => _selectable(book, NovelRow(
-    key: ValueKey('shelf-book-${book.id}'),
-    novel: book,
-    coverHeroTag: CoverHeroTag(this, book.id),
-    tagRow: _tagRowForBook(book.id),
-    progress: _progressOf(book),
-    onTap: () => _openOrSelect(context, book),
-    trailing: SizedBox(
-      width: 74,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          GlassMenuAnchor(
-            child: Builder(
-              builder: (buttonContext) => GlassIconButton(
-                icon: CupertinoIcons.ellipsis,
-                label: '${book.title}书架操作',
-                onPressed: () => _bookMenu(buttonContext, book.id, book: book),
+  Widget _row(BuildContext context, Novel book) {
+    final badgeText = _mangaBadgeText(book.id);
+    return _selectable(
+      book,
+      NovelRow(
+        key: ValueKey('shelf-book-${book.id}'),
+        novel: book,
+        coverHeroTag: CoverHeroTag(this, book.id),
+        badge: badgeText == null
+            ? null
+            : MangaBadge(
+                key: ValueKey('shelf-manga-badge-${book.id}'),
+                label: badgeText,
               ),
-            ),
+        tagRow: _tagRowForBook(book.id),
+        progress: _progressOf(book),
+        onTap: () => _openOrSelect(context, book),
+        trailing: SizedBox(
+          width: 74,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              GlassMenuAnchor(
+                child: Builder(
+                  builder: (buttonContext) => GlassIconButton(
+                    icon: CupertinoIcons.ellipsis,
+                    label: '${book.title}书架操作',
+                    onPressed: () =>
+                        _bookMenu(buttonContext, book.id, book: book),
+                  ),
+                ),
+              ),
+              Text(
+                _shelfProgressCaption(book),
+                style: TextStyle(
+                  fontSize: 10,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+            ],
           ),
-          Text(
-            !state.hasRead(book.id)
-                ? '未读'
-                : state.finishedReading(book)
-                ? '已读完'
-                : (book.chapters.isNotEmpty || book.chapterCount > 0)
-                ? '${state.chapterForNovel(book) + 1}/${book.chapters.isNotEmpty ? book.chapters.length : book.chapterCount}'
-                : '第 ${state.chapterFor(book.id) + 1} 章',
-            style: TextStyle(
-              fontSize: 10,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-          ),
-        ],
+        ),
       ),
-    ),
-  ));
+    );
+  }
 
   Future<void> _chooseSort(BuildContext context) async {
     final sort = await showGlassMenu<_ShelfSort>(
@@ -1323,16 +1387,22 @@ Future<_DeleteFileResult> _deleteLocalBookWithFallback(
         if (choice == 'reauth') {
           if (!context.mounted) return _DeleteFileResult.failed;
           final sourceId = local.bookFor(id)?.sourceId;
-          final previousFolder = sourceId != null && sourceId.startsWith('saf:')
-              ? sourceId.substring(4)
-              : local.folderUri;
+          final isMangaFolderSource =
+              sourceId != null && sourceId.startsWith('saf_manga:');
+          final previousFolder = isMangaFolderSource
+              ? sourceId.substring('saf_manga:'.length)
+              : sourceId != null && sourceId.startsWith('saf:')
+                  ? sourceId.substring(4)
+                  : local.folderUri;
           if (previousFolder == null) {
             showNovelFeedback(context, '无法确认原文件夹，请先在本地书库中重新授权');
             return _DeleteFileResult.failed;
           }
           String? picked;
           try {
-            picked = await local.pickFolder(requiredFolder: previousFolder);
+            picked = isMangaFolderSource
+                ? await local.pickMangaFolder(requiredFolder: previousFolder)
+                : await local.pickFolder(requiredFolder: previousFolder);
           } catch (_) {
             // pickFolder 的异常发生在本 catch 块内，外层 catch 捕获不到，
             // 必须就地处理，不能逸出成未捕获异步错误。

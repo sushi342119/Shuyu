@@ -43,11 +43,16 @@ class _Preferences extends InMemorySharedPreferencesStore {
 
 class _LocalLibrary extends Fake implements LocalLibraryStore {
   String? pickedFolder;
+  String? pickedMangaFolder;
   int pickerCalls = 0;
+  int mangaPickerCalls = 0;
   LocalBook? pdf;
 
   @override
   String? get folderUri => pickedFolder;
+
+  @override
+  String? get mangaFolderUri => pickedMangaFolder;
 
   @override
   List<LocalBook> get books => [?pdf];
@@ -71,6 +76,17 @@ class _LocalLibrary extends Fake implements LocalLibraryStore {
   Future<String?> pickFolder({String? requiredFolder}) async {
     pickerCalls++;
     return pickedFolder;
+  }
+
+  @override
+  Future<String?> pickMangaFolder({String? requiredFolder}) async {
+    mangaPickerCalls++;
+    return pickedMangaFolder;
+  }
+
+  @override
+  Future<void> forgetMangaFolder() async {
+    pickedMangaFolder = null;
   }
 }
 

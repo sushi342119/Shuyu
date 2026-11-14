@@ -1,20 +1,24 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:archive/archive_io.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shuyu/app_ui.dart';
 import 'package:shuyu/book_tags.dart';
+import 'package:shuyu/catalog.dart';
 import 'package:shuyu/library_backup.dart';
 import 'package:shuyu/library_filter.dart';
 import 'package:shuyu/library_state.dart';
 import 'package:shuyu/local_library.dart';
+import 'package:shuyu/local_library_page.dart';
 import 'package:shuyu/local_manga_reader.dart';
+import 'package:shuyu/local_platform.dart';
 import 'package:shuyu/pages.dart';
 import 'package:shuyu/reader_preferences.dart';
 
@@ -387,10 +391,12 @@ void main() {
   group('LocalMangaReaderPage 阅读交互与进度书签', () {
     Future<void> pumpManga(WidgetTester tester) async {
       await tester.pump(const Duration(milliseconds: 350));
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 60)),
-      );
-      await tester.pump();
+      for (var i = 0; i < 6; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 25)),
+        );
+        await tester.pump(const Duration(milliseconds: 20));
+      }
       await tester.pump(const Duration(milliseconds: 260));
     }
 
@@ -511,5 +517,417 @@ void main() {
         findsOneWidget,
       );
     });
+
+    testWidgets(
+      '夜间模式下 PDF 分卷漫画不跟随常规 PDF 反色，且进度条按分卷定位并支持上/下一卷切换',
+      (tester) async {
+        tester.view.physicalSize = const Size(420, 840);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+
+        const mangaTree =
+            'content://com.android.externalstorage.documents/tree/primary%3AManga';
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+
+        late Directory temp;
+        late PathProviderPlatform prevPaths;
+        late LocalLibraryStore store;
+        late LibraryState state;
+        late LocalBook seriesBook;
+
+        await tester.runAsync(() async {
+          temp = await Directory.systemTemp.createTemp('shuyu_manga_series_');
+          prevPaths = PathProviderPlatform.instance;
+          PathProviderPlatform.instance = _MangaTestPaths(temp.path);
+          final pagePng = await _testMangaPng(color: const Color(0xFFD96B43));
+          final renderedPage = File('${temp.path}/rendered_series_page.png');
+          await renderedPage.writeAsBytes(pagePng);
+
+          messenger.setMockMethodCallHandler(LocalPlatform.channel, (
+            call,
+          ) async {
+            switch (call.method) {
+              case 'scanLocalFolder':
+                return {
+                  'complete': true,
+                  'rootName': 'Manga',
+                  'dirUris': {'迷宫饭': '$mangaTree/document/mgf_dir'},
+                  'entries': [
+                    {
+                      'uri': '$mangaTree/document/mgf_02.pdf',
+                      'name': 'Mgf_02.pdf',
+                      'relPath': '迷宫饭/Mgf_02.pdf',
+                      'size': 120 * 1024 * 1024,
+                      'modified': 2000,
+                    },
+                    {
+                      'uri': '$mangaTree/document/mgf_01.pdf',
+                      'name': 'Mgf_01.pdf',
+                      'relPath': '迷宫饭/Mgf_01.pdf',
+                      'size': 120 * 1024 * 1024,
+                      'modified': 2000,
+                    },
+                  ],
+                };
+              case 'pdfPageCount':
+                final uri = (call.arguments as Map)['docUri'] as String;
+                return uri.endsWith('mgf_01.pdf') ? 3 : 4;
+              case 'renderPdfPage':
+                return renderedPage.path;
+              case 'clearPdfCache':
+                return null;
+            }
+            throw MissingPluginException(call.method);
+          });
+
+          SharedPreferences.setMockInitialValues({
+            'local_library_manga_folder': mangaTree,
+            'reduce_motion': true,
+          });
+          await TagStore.load();
+          store = await LocalLibraryStore.load();
+          state = await LibraryState.load();
+          state.bindLocalChapters(store);
+          await state.setPdfNightInvert(true);
+          await store.scan();
+          seriesBook = store.books.single;
+        });
+        addTearDown(() async {
+          messenger.setMockMethodCallHandler(LocalPlatform.channel, null);
+          state.dispose();
+          store.dispose();
+          PathProviderPlatform.instance = prevPaths;
+          await tester.runAsync(() async {
+            if (await temp.exists()) await temp.delete(recursive: true);
+          });
+        });
+
+        expect(seriesBook.isComicSeries, isTrue);
+        expect(seriesBook.isIntrinsicManga, isTrue);
+        expect(state.pdfNightInvert, isTrue);
+        expect(state.readerPreferences.mangaInvert, isFalse);
+
+        final novel = store.toNovel(seriesBook);
+        // 无需手动切换，默认直接进入漫画阅读器
+        final routed = readerPageFor(
+          novel: novel,
+          state: state,
+          repository: store,
+          chapter: 0,
+        );
+        expect(routed, isA<LocalMangaReaderPage>());
+
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ThemeData.dark(),
+            darkTheme: ThemeData.dark(),
+            themeMode: ThemeMode.dark,
+            home: LocalMangaReaderPage(
+              novel: novel,
+              state: state,
+              local: store,
+            ),
+          ),
+        );
+        await pumpManga(tester);
+
+        // 暗色模式下即便 pdfNightInvert 为 true，漫画页面也绝不自动反色变蓝/负片
+        expect(find.byType(CircularProgressIndicator), findsNothing);
+        expect(
+          find.byKey(const ValueKey('manga-color-invert-0')),
+          findsNothing,
+        );
+        // 多卷状态文案与当前卷滑杆范围（第 1 卷共 3 页 -> max = 2.0）
+        expect(
+          find.textContaining('Mgf_01 · 第 1 / 3 页 · 全书 14%'),
+          findsOneWidget,
+        );
+        expect(tester.widget<Slider>(find.byType(Slider)).max, 2.0);
+
+        // 日漫右翻模式下左侧按钮为「下一卷」：点击切换到 Mgf_02（共 4 页 -> max = 3.0）
+        await tester.tap(find.byKey(const ValueKey('manga-prev-chapter')));
+        await pumpManga(tester);
+        expect(
+          find.textContaining('Mgf_02 · 第 1 / 4 页 · 全书 57%'),
+          findsOneWidget,
+        );
+        expect(tester.widget<Slider>(find.byType(Slider)).max, 3.0);
+        expect(state.chapterForNovel(novel), 3);
+
+        // 仅当用户主动开启漫画专属反色开关时才施加 ColorFiltered
+        await state.setReaderPreferences(
+          state.readerPreferences.copyWith(mangaInvert: true),
+        );
+        await pumpManga(tester);
+        expect(
+          find.byKey(const ValueKey('manga-color-invert-3')),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      '漫画徽标标识、小说/漫画格式筛选、详情页分卷展示与双文件夹独立入口渲染正确',
+      (tester) async {
+        tester.view.physicalSize = const Size(420, 900);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+
+        const novelTree =
+            'content://com.android.externalstorage.documents/tree/primary%3ANovels';
+        const mangaTree =
+            'content://com.android.externalstorage.documents/tree/primary%3AManga';
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+
+        late Directory temp;
+        late PathProviderPlatform prevPaths;
+        late LocalLibraryStore store;
+        late LibraryState state;
+        late LocalBook txtBook;
+        late LocalBook seriesBook;
+        late LocalBook singlePdfManga;
+        late Novel loadedSeriesNovel;
+
+        await tester.runAsync(() async {
+          temp = await Directory.systemTemp.createTemp('shuyu_manga_ui_');
+          prevPaths = PathProviderPlatform.instance;
+          PathProviderPlatform.instance = _MangaTestPaths(temp.path);
+          LibraryFilter.shared.resetForTesting();
+
+          final pagePng = await _testMangaPng(color: const Color(0xFF457B9D));
+          final renderedPage = File('${temp.path}/rendered_ui_page.png');
+          await renderedPage.writeAsBytes(pagePng);
+          final txtSource = File('${temp.path}/santi.txt');
+          await txtSource.writeAsString(
+            '第一章 科学边界\n叶文洁抬头望向红岸基地的天空。\n' * 30,
+          );
+
+          messenger.setMockMethodCallHandler(LocalPlatform.channel, (
+            call,
+          ) async {
+            switch (call.method) {
+              case 'scanLocalFolder':
+                final treeUri = (call.arguments as Map)['treeUri'] as String;
+                if (treeUri == novelTree) {
+                  return {
+                    'complete': true,
+                    'rootName': 'Novels',
+                    'entries': [
+                      {
+                        'uri': '$novelTree/document/santi.txt',
+                        'name': '三体.txt',
+                        'relPath': '三体.txt',
+                        'size': await txtSource.length(),
+                        'modified': 1000,
+                      },
+                    ],
+                  };
+                }
+                return {
+                  'complete': true,
+                  'rootName': 'Manga',
+                  'dirUris': {'迷宫饭': '$mangaTree/document/mgf_dir'},
+                  'entries': [
+                    {
+                      'uri': '$mangaTree/document/mgf_01.pdf',
+                      'name': 'Mgf_01.pdf',
+                      'relPath': '迷宫饭/Mgf_01.pdf',
+                      'size': 100 * 1024 * 1024,
+                      'modified': 2000,
+                    },
+                    {
+                      'uri': '$mangaTree/document/mgf_02.pdf',
+                      'name': 'Mgf_02.pdf',
+                      'relPath': '迷宫饭/Mgf_02.pdf',
+                      'size': 100 * 1024 * 1024,
+                      'modified': 2000,
+                    },
+                    {
+                      'uri': '$mangaTree/document/oneshot.pdf',
+                      'name': '短篇集.pdf',
+                      'relPath': '短篇集.pdf',
+                      'size': 30 * 1024 * 1024,
+                      'modified': 2100,
+                    },
+                  ],
+                };
+              case 'prepareLocalText':
+                final copy = File(
+                  '${temp.path}/prepared_${DateTime.now().microsecondsSinceEpoch}.txt',
+                );
+                await txtSource.copy(copy.path);
+                return {
+                  'path': copy.path,
+                  'fingerprint': 'santi_sha256',
+                };
+              case 'pdfPageCount':
+                final uri = (call.arguments as Map)['docUri'] as String;
+                if (uri.endsWith('mgf_01.pdf')) return 3;
+                if (uri.endsWith('mgf_02.pdf')) return 4;
+                return 5;
+              case 'renderPdfPage':
+                return renderedPage.path;
+              case 'clearPdfCache':
+                return null;
+            }
+            throw MissingPluginException(call.method);
+          });
+
+          SharedPreferences.setMockInitialValues({
+            'local_library_folder': novelTree,
+            'local_library_manga_folder': mangaTree,
+            'reduce_motion': true,
+          });
+          await TagStore.load();
+          store = await LocalLibraryStore.load();
+          state = await LibraryState.load();
+          state.bindLocalChapters(store);
+          await store.scan();
+
+          txtBook = store.books.firstWhere((b) => b.displayTitle == '三体');
+          seriesBook = store.books.firstWhere((b) => b.displayTitle == '迷宫饭');
+          singlePdfManga = store.books.firstWhere(
+            (b) => b.displayTitle == '短篇集',
+          );
+          final chapters = await store.chapters(seriesBook.id);
+          loadedSeriesNovel = store
+              .toNovel(seriesBook)
+              .withChapters(chapters);
+        });
+        addTearDown(() async {
+          LibraryFilter.shared.resetForTesting();
+          messenger.setMockMethodCallHandler(LocalPlatform.channel, null);
+          state.dispose();
+          store.dispose();
+          PathProviderPlatform.instance = prevPaths;
+          await tester.runAsync(() async {
+            if (await temp.exists()) await temp.delete(recursive: true);
+          });
+        });
+
+        // 1. 漫画徽标文案区分普通小说、单册漫画与多卷漫画
+        expect(
+          mangaBadgeLabelForBook(
+            txtBook,
+            isMangaMode: state.isMangaModeForBook(txtBook.id, book: txtBook),
+          ),
+          isNull,
+        );
+        expect(
+          mangaBadgeLabelForBook(
+            singlePdfManga,
+            isMangaMode: state.isMangaModeForBook(
+              singlePdfManga.id,
+              book: singlePdfManga,
+            ),
+          ),
+          '漫画',
+        );
+        expect(
+          mangaBadgeLabelForBook(
+            seriesBook,
+            isMangaMode: state.isMangaModeForBook(
+              seriesBook.id,
+              book: seriesBook,
+            ),
+          ),
+          '漫画 · 2 卷',
+        );
+
+        // 2. 书架筛选器：「漫画」与「小说」互不干扰
+        LibraryFilter.shared.toggleFormat(BookFormatFilter.comic);
+        expect(
+          LibraryFilter.shared.matchesFormat(
+            seriesBook.id,
+            store,
+            state: state,
+          ),
+          isTrue,
+        );
+        expect(
+          LibraryFilter.shared.matchesFormat(
+            singlePdfManga.id,
+            store,
+            state: state,
+          ),
+          isTrue,
+        );
+        expect(
+          LibraryFilter.shared.matchesFormat(txtBook.id, store, state: state),
+          isFalse,
+        );
+
+        LibraryFilter.shared.resetForTesting();
+        LibraryFilter.shared.toggleFormat(BookFormatFilter.novel);
+        expect(
+          LibraryFilter.shared.matchesFormat(txtBook.id, store, state: state),
+          isTrue,
+        );
+        expect(
+          LibraryFilter.shared.matchesFormat(
+            seriesBook.id,
+            store,
+            state: state,
+          ),
+          isFalse,
+        );
+        expect(
+          LibraryFilter.shared.matchesFormat(
+            singlePdfManga.id,
+            store,
+            state: state,
+          ),
+          isFalse,
+        );
+        LibraryFilter.shared.resetForTesting();
+
+        // 3. 详情页展示「漫画 · 2 卷」徽标、「共 2 卷 · 7 页」目录头与「开始阅读 · Mgf_01（第1页）」
+        await tester.pumpWidget(
+          MaterialApp(
+            home: DetailPage(
+              novel: loadedSeriesNovel,
+              state: state,
+              repository: store,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(ValueKey('detail-manga-badge-${seriesBook.id}')),
+          findsOneWidget,
+        );
+        expect(find.widgetWithText(MangaBadge, '漫画 · 2 卷'), findsOneWidget);
+        expect(find.text('共 2 卷 · 7 页'), findsOneWidget);
+        expect(find.text('开始阅读 · Mgf_01（第1页）'), findsOneWidget);
+
+        // 4. 本地书库页同时展示独立的「小说文件夹」与「漫画文件夹」授权卡片
+        await tester.pumpWidget(
+          MaterialApp(
+            home: LocalLibraryPage(
+              local: store,
+              state: state,
+              repository: store,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const ValueKey('local-library-novel-folder')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('local-library-manga-folder')),
+          findsOneWidget,
+        );
+        expect(find.text('小说文件夹'), findsOneWidget);
+        expect(find.text('漫画文件夹'), findsOneWidget);
+        expect(find.text('已授权，点击可更换 · 同目录分卷自动合并'), findsOneWidget);
+      },
+    );
   });
 }
+

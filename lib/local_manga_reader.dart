@@ -415,6 +415,11 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
               book.id,
             );
             resolvedCount = folderManifest?.pages.length ?? book.pageCount;
+          } else if (book.isComicSeries) {
+            final seriesManifest = await widget.local.loadComicSeriesManifest(
+              book.id,
+            );
+            resolvedCount = seriesManifest?.pageCount ?? book.pageCount;
           } else {
             resolvedCount = book.pageCount;
           }
@@ -596,6 +601,14 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
           _folderManifest = manifest;
           return widget.local.readComicFolderPage(manifest.pages[page]);
         }
+        if (book.isComicSeries) {
+          final width = _targetDecodeWidth().clamp(900, 2400);
+          return widget.local.readComicSeriesPage(
+            book.id,
+            page,
+            pdfDecodeWidth: width,
+          );
+        }
         return widget.local.readComicArchivePage(book.id, page);
       case LocalBookKind.epub:
         if (page < 0 || page >= _epubPages.length) {
@@ -621,6 +634,13 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     final media = MediaQuery.maybeOf(context);
     if (media == null) return 1440;
     return (media.size.width * media.devicePixelRatio).round().clamp(800, 2600);
+  }
+
+  _MangaPageData? _readyPageData(int page, {required bool cropMargins}) {
+    final cached = _pageCache[page];
+    if (cached == null) return null;
+    if (cropMargins && cached.cropRect == null) return null;
+    return cached;
   }
 
   Future<_MangaPageData> _loadPageData(int page, {required bool cropMargins}) {
@@ -1150,6 +1170,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
         currentPage: _page,
         chapters: _chapters,
         currentChapterIndex: _chapterIndexForPage(_page),
+        isSeries: _book?.isComicSeries ?? false,
       ),
     );
     if (picked != null && mounted) {
@@ -1221,6 +1242,29 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   String _statusText(ReaderPreferences prefs) {
     if (_loadingDescriptor || _pageCount <= 0) return '';
     final ch = _chapterForPage(_page);
+    final pct = (((_page + 1) / _pageCount) * 100).round().clamp(0, 100);
+    if (_chapters.length > 1 && ch != null && ch.pageCount > 0) {
+      final localCount = ch.pageCount;
+      final localPage = (_page - ch.startPage + 1).clamp(1, localCount);
+      String pageLabel = '第 $localPage / $localCount 页';
+      if (prefs.mangaMode != MangaReadingMode.webtoon &&
+          _currentSpreads.isNotEmpty) {
+        final spread =
+            _currentSpreads[_spreadIndexForPage(_currentSpreads, _page)];
+        if (spread.isDouble) {
+          final firstLocal = (spread.firstPage - ch.startPage + 1).clamp(
+            1,
+            localCount,
+          );
+          final lastLocal = (spread.lastPage - ch.startPage + 1).clamp(
+            1,
+            localCount,
+          );
+          pageLabel = '第 $firstLocal-$lastLocal / $localCount 页';
+        }
+      }
+      return '${ch.title} · $pageLabel · 全书 $pct%';
+    }
     final prefix = ch != null ? '${ch.title} · ' : '';
     String pageLabel = '第 ${_page + 1} / $_pageCount 页';
     if (prefs.mangaMode != MangaReadingMode.webtoon &&
@@ -1231,7 +1275,6 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
             '第 ${spread.firstPage + 1}-${spread.lastPage + 1} / $_pageCount 页';
       }
     }
-    final pct = (((_page + 1) / _pageCount) * 100).round().clamp(0, 100);
     return '$prefix$pageLabel · $pct%';
   }
 
@@ -1423,11 +1466,8 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
         _viewportHeight = constraints.maxHeight;
         _syncSpreads(constraints, prefs);
 
-        final invert =
-            prefs.mangaInvert ||
-            (_book?.kind == LocalBookKind.pdf &&
-                Theme.of(context).brightness == Brightness.dark &&
-                widget.state.pdfNightInvert);
+        // 漫画模式下绝不因 PDF 常规夜间反色设置而将彩漫/黑白漫反相成负片；仅响应漫画专属反色开关。
+        final invert = prefs.mangaInvert;
 
         final Widget viewport = prefs.mangaMode == MangaReadingMode.webtoon
             ? _buildWebtoonView(context, prefs, invert, muted)
@@ -1635,6 +1675,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
         : MediaQuery.sizeOf(context).width;
     final decodeWidth = _targetDecodeWidth();
     return FutureBuilder<_MangaPageData>(
+      initialData: _readyPageData(page, cropMargins: cropMargins),
       future: _loadPageData(page, cropMargins: cropMargins),
       builder: (context, snapshot) {
         if (snapshot.hasData) {
@@ -1699,6 +1740,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   }) {
     final decodeWidth = _targetDecodeWidth();
     return FutureBuilder<_MangaPageData>(
+      initialData: _readyPageData(page, cropMargins: cropMargins),
       future: _loadPageData(page, cropMargins: cropMargins),
       builder: (context, snapshot) {
         if (snapshot.hasData) {
@@ -1761,11 +1803,23 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     final scheme = Theme.of(context).colorScheme;
     final count = _pageCount;
     final isRtl = prefs.mangaMode == MangaReadingMode.rtl;
+    final isSeries = _book?.isComicSeries ?? false;
     final chapterIdx = _chapterIndexForPage(_page);
     final hasMultiChapters = _chapters.length > 1;
+    final activeChapter =
+        hasMultiChapters && chapterIdx >= 0 && chapterIdx < _chapters.length
+            ? _chapters[chapterIdx]
+            : null;
+    final sliderCount = activeChapter != null
+        ? math.max(1, activeChapter.pageCount)
+        : math.max(1, count);
+    final sliderPage = activeChapter != null
+        ? (_page - activeChapter.startPage).clamp(0, sliderCount - 1)
+        : _page.clamp(0, sliderCount - 1);
     final canPrevChapter = hasMultiChapters && chapterIdx > 0;
     final canNextChapter =
         hasMultiChapters && chapterIdx >= 0 && chapterIdx + 1 < _chapters.length;
+    final unitNoun = isSeries ? '卷' : '话';
 
     void goPrevChapter() {
       if (!canPrevChapter) return;
@@ -1806,7 +1860,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
               IconButton(
                 key: const ValueKey('manga-prev-chapter'),
                 visualDensity: VisualDensity.compact,
-                tooltip: isRtl ? '下一话' : '上一话',
+                tooltip: isRtl ? '下一$unitNoun' : '上一$unitNoun',
                 onPressed: isRtl
                     ? (canNextChapter ? goNextChapter : null)
                     : (canPrevChapter ? goPrevChapter : null),
@@ -1819,7 +1873,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
                 ),
               ),
             Text(
-              isRtl ? '$count' : '${_page + 1}',
+              isRtl ? '$sliderCount' : '${sliderPage + 1}',
               style: TextStyle(
                 fontSize: 12,
                 color: scheme.onSurfaceVariant,
@@ -1831,20 +1885,35 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
                 textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
                 child: Slider(
                   key: const ValueKey('manga-page-slider'),
-                  value: _page.clamp(0, count - 1).toDouble(),
+                  value: sliderPage.toDouble(),
                   min: 0,
-                  max: (count - 1).toDouble(),
-                  divisions: count > 1 ? count - 1 : null,
+                  max: math.max(1, sliderCount - 1).toDouble(),
+                  divisions: sliderCount > 1 && sliderCount <= 200
+                      ? sliderCount - 1
+                      : null,
                   activeColor: scheme.secondary,
                   inactiveColor: scheme.outlineVariant,
-                  label: '第 ${_page + 1} 页',
-                  onChanged: (value) =>
-                      _jumpToPage(value.round().clamp(0, count - 1)),
+                  label: '第 ${sliderPage + 1} 页',
+                  onChanged: sliderCount <= 1
+                      ? null
+                      : (value) {
+                          final localTarget = value.round().clamp(
+                            0,
+                            sliderCount - 1,
+                          );
+                          final globalTarget = activeChapter != null
+                              ? (activeChapter.startPage + localTarget).clamp(
+                                  0,
+                                  count - 1,
+                                )
+                              : localTarget;
+                          _jumpToPage(globalTarget);
+                        },
                 ),
               ),
             ),
             Text(
-              isRtl ? '${_page + 1}' : '$count',
+              isRtl ? '${sliderPage + 1}' : '$sliderCount',
               style: TextStyle(
                 fontSize: 12,
                 color: scheme.onSurfaceVariant,
@@ -1855,7 +1924,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
               IconButton(
                 key: const ValueKey('manga-next-chapter'),
                 visualDensity: VisualDensity.compact,
-                tooltip: isRtl ? '上一话' : '下一话',
+                tooltip: isRtl ? '上一$unitNoun' : '下一$unitNoun',
                 onPressed: isRtl
                     ? (canPrevChapter ? goPrevChapter : null)
                     : (canNextChapter ? goNextChapter : null),
@@ -2080,6 +2149,7 @@ class _MangaNavigationSheet extends StatefulWidget {
     required this.currentPage,
     required this.chapters,
     required this.currentChapterIndex,
+    this.isSeries = false,
   });
 
   final LibraryState state;
@@ -2088,6 +2158,7 @@ class _MangaNavigationSheet extends StatefulWidget {
   final int currentPage;
   final List<MangaChapterEntry> chapters;
   final int currentChapterIndex;
+  final bool isSeries;
 
   @override
   State<_MangaNavigationSheet> createState() => _MangaNavigationSheetState();
@@ -2122,7 +2193,9 @@ class _MangaNavigationSheetState extends State<_MangaNavigationSheet> {
                 segments: [
                   ButtonSegment<bool>(
                     value: false,
-                    label: Text('章节 (${widget.chapters.length})'),
+                    label: Text(
+                      '${widget.isSeries ? '分卷' : '章节'} (${widget.chapters.length})',
+                    ),
                   ),
                   ButtonSegment<bool>(
                     value: true,

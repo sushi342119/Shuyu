@@ -7,10 +7,11 @@ import 'local_library.dart';
 import 'ui_preferences.dart';
 
 enum BookFormatFilter {
+  novel('小说'),
+  comic('漫画'),
   txt('TXT'),
   epub('EPUB'),
-  pdf('PDF'),
-  comic('漫画');
+  pdf('PDF');
 
   const BookFormatFilter(this.label);
   final String label;
@@ -114,24 +115,23 @@ class LibraryFilter extends ChangeNotifier {
     if (_formats.isEmpty) return true;
     final book = local?.bookFor(bookId);
     final kind = book?.kind ?? local?.kindFor(bookId);
-    switch (kind) {
-      case LocalBookKind.comic:
-        return _formats.contains(BookFormatFilter.comic);
-      case LocalBookKind.epub:
-        if (_formats.contains(BookFormatFilter.epub)) return true;
-        final isManga = state != null
+    final isManga = switch (kind) {
+      LocalBookKind.comic => true,
+      LocalBookKind.epub || LocalBookKind.pdf =>
+        state != null
             ? state.isMangaModeForBook(bookId, book: book)
-            : (book?.isComicEpub ?? false);
-        return isManga && _formats.contains(BookFormatFilter.comic);
-      case LocalBookKind.pdf:
-        if (_formats.contains(BookFormatFilter.pdf)) return true;
-        final isManga =
-            state != null && state.isMangaModeForBook(bookId, book: book);
-        return isManga && _formats.contains(BookFormatFilter.comic);
-      default:
-        // Online books are text; local TXT and unknown default to TXT.
-        return _formats.contains(BookFormatFilter.txt);
-    }
+            : (book?.isIntrinsicManga ?? false),
+      _ => false,
+    };
+    if (isManga && _formats.contains(BookFormatFilter.comic)) return true;
+    if (!isManga && _formats.contains(BookFormatFilter.novel)) return true;
+    return switch (kind) {
+      LocalBookKind.comic => false,
+      LocalBookKind.epub => _formats.contains(BookFormatFilter.epub),
+      LocalBookKind.pdf => _formats.contains(BookFormatFilter.pdf),
+      // Online books are text; local TXT and unknown default to TXT.
+      _ => _formats.contains(BookFormatFilter.txt),
+    };
   }
 }
 
