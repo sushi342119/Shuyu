@@ -11,11 +11,32 @@ abstract final class LegacyCover {
     request: (aid) =>
         LegacyTransport.channel.invokeMethod<Uint8List>('cover', {'aid': aid}),
   );
+  static bool Function(int aid)? _canLoadLocal;
+  static Future<Uint8List?> Function(int aid)? _loadLocal;
+
+  static void registerLocalLoader({
+    required bool Function(int aid) canLoad,
+    required Future<Uint8List?> Function(int aid) load,
+  }) {
+    _canLoadLocal = canLoad;
+    _loadLocal = load;
+  }
+
+  static void evict(int aid) => _cache.evict(aid);
+
+  static bool hasLocalCover(int aid) =>
+      isLocalNovelId(aid) &&
+      (_cache.peek(aid) != null || (_canLoadLocal?.call(aid) ?? false));
+
   static Uint8List? peek(int aid) => _cache.peek(aid);
   static Future<Uint8List> bytes(int aid) {
     if (isLocalNovelId(aid)) {
       final cached = _cache.peek(aid);
       if (cached != null) return Future.value(cached);
+      final loader = _loadLocal;
+      if (loader != null && (_canLoadLocal?.call(aid) ?? false)) {
+        return _cache.loadWith(aid, loader);
+      }
       return Future.error(const FormatException('本地书籍没有远程封面'));
     }
     return _cache.load(aid);
@@ -56,6 +77,13 @@ class LegacyCoverCache {
 
   Uint8List? peek(int aid) => _touch(aid)?.bytes;
 
+  void evict(int aid) {
+    final previous = _entries.remove(aid);
+    if (previous != null) _encodedBytes -= previous.bytes.length;
+    _pending.remove(aid);
+    _failures.remove(aid);
+  }
+
   void seed(int aid, Uint8List bytes) {
     if (aid <= 0 || bytes.isEmpty) throw ArgumentError('Invalid local cover');
     final local = Uint8List.fromList(bytes).asUnmodifiableView();
@@ -77,7 +105,12 @@ class LegacyCoverCache {
     }
   }
 
-  Future<Uint8List> load(int aid) {
+  Future<Uint8List> load(int aid) => loadWith(aid, request);
+
+  Future<Uint8List> loadWith(
+    int aid,
+    Future<Uint8List?> Function(int) fetcher,
+  ) {
     if (aid <= 0) return Future.error(ArgumentError('Invalid cover ID'));
     final entry = _touch(aid);
     if (entry != null) return entry.future;
@@ -92,7 +125,7 @@ class LegacyCoverCache {
     _pending[aid] = future;
     unawaited(() async {
       try {
-        final image = await request(aid);
+        final image = await fetcher(aid);
         if (image == null || image.isEmpty) throw const FormatException('封面为空');
         final bytes = image.asUnmodifiableView();
         if (identical(_pending[aid], future)) {

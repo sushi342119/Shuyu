@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 
 import 'app_interactions.dart';
 import 'app_ui.dart';
+import 'book_import_limits.dart';
 import 'library_state.dart';
 import 'local_library.dart';
 
@@ -337,7 +338,11 @@ class LanBookshelfServer extends ChangeNotifier {
               'author': book.displayAuthor,
               'fileName': book.fileName,
               'kind': book.kind.name,
-              'chapterCount': book.chapters.length,
+              'chapterCount':
+                  book.kind == LocalBookKind.pdf ||
+                      book.kind == LocalBookKind.comic
+                  ? book.pageCount
+                  : book.chapters.length,
               'wordCount': book.wordCount ?? 0,
             },
         ];
@@ -380,6 +385,19 @@ class LanBookshelfServer extends ChangeNotifier {
               .map((b) => b.text ?? '')
               .where((s) => s.trim().isNotEmpty)
               .join('\n\n');
+          if (content.trim().isEmpty && book.isComicEpub) {
+            content = '该书籍为漫画 EPUB，请在书屿 App 内打开阅读。';
+          }
+        } else if (book.kind == LocalBookKind.comic) {
+          chapterTitle = novel.chapters.isNotEmpty
+              ? novel.chapters[safeIdx].title
+              : book.displayTitle;
+          content = '该书籍为漫画（共 ${book.pageCount} 页），请在书屿 App 内打开阅读。';
+        } else if (book.kind == LocalBookKind.pdf) {
+          chapterTitle = novel.chapters.isNotEmpty
+              ? novel.chapters[safeIdx].title
+              : book.displayTitle;
+          content = '该书籍为 PDF（共 ${book.pageCount} 页），请在书屿 App 内打开阅读。';
         }
         _writeJson(response, {
           'ok': true,
@@ -408,21 +426,23 @@ class LanBookshelfServer extends ChangeNotifier {
           await response.close();
           return;
         }
-        if (request.contentLength > localTextMaxSourceBytes) {
+        final rawName =
+            request.uri.queryParameters['name'] ??
+            request.headers.value('x-file-name') ??
+            'uploaded_book.txt';
+        final safeName = _sanitizeUploadFileName(rawName);
+        final limitBytes = localBookByteLimit(safeName);
+        final limitMiB = limitBytes ~/ (1024 * 1024);
+        if (request.contentLength > limitBytes) {
           _writeJson(
             response,
-            {'ok': false, 'error': '上传文件超过 256 MiB 限制'},
+            {'ok': false, 'error': '上传文件超过 $limitMiB MiB 限制'},
             status: HttpStatus.requestEntityTooLarge,
           );
           await response.close();
           return;
         }
         _activeUploads++;
-        final rawName =
-            request.uri.queryParameters['name'] ??
-            request.headers.value('x-file-name') ??
-            'uploaded_book.txt';
-        final safeName = _sanitizeUploadFileName(rawName);
         Directory? tempDir;
         try {
           tempDir = await Directory.systemTemp.createTemp('shuyu_wifi_');
@@ -432,8 +452,8 @@ class LanBookshelfServer extends ChangeNotifier {
           try {
             await for (final chunk in request) {
               totalBytes += chunk.length;
-              if (totalBytes > localTextMaxSourceBytes) {
-                throw const FormatException('上传文件超过 256 MiB 限制');
+              if (totalBytes > limitBytes) {
+                throw FormatException('上传文件超过 $limitMiB MiB 限制');
               }
               sink.add(chunk);
             }
@@ -1080,11 +1100,11 @@ const _webAppHtml = '''<!DOCTYPE html>
   <div class="dropzone" onclick="document.getElementById('fileInput').click()"
        ondragover="event.preventDefault()"
        ondrop="handleDrop(event)">
-    <div style="font-size:16px;font-weight:600">点击选择或拖拽小说文件到此处上传</div>
+    <div style="font-size:16px;font-weight:600">点击选择或拖拽小说 / 漫画文件到此处上传</div>
     <div style="font-size:13px;color:var(--muted);margin-top:4px">
-      支持 .txt / .epub / .mobi / .azw3 / .zip 批量导入，自动加入书屿书架
+      支持 .cbz / .zip / .epub / .pdf / .txt / .mobi / .azw3 批量导入，自动加入书屿书架
     </div>
-    <input id="fileInput" type="file" multiple accept=".txt,.epub,.mobi,.azw3,.azw,.prc,.zip,.fb2,.docx" style="display:none" onchange="uploadFiles(this.files)">
+    <input id="fileInput" type="file" multiple accept=".cbz,.zip,.epub,.pdf,.txt,.mobi,.azw3,.azw,.prc,.fb2,.docx" style="display:none" onchange="uploadFiles(this.files)">
   </div>
   <div id="reader">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
@@ -1132,8 +1152,9 @@ async function loadBooks() {
     const div = document.createElement('div');
     div.className = 'book-card';
     div.onclick = () => openBook(b.id, 0);
+    const unit = (b.kind === 'comic' || b.kind === 'pdf') ? ' 页' : ' 章';
     div.innerHTML = '<h3>' + escapeHtml(b.title) + '</h3><p>' +
-      escapeHtml(b.author || '佚名') + ' · ' + b.chapterCount + ' 章</p>';
+      escapeHtml(b.author || '佚名') + ' · ' + b.chapterCount + unit + '</p>';
     container.appendChild(div);
   }
 }

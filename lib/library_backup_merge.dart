@@ -116,8 +116,14 @@ extension LibraryBackupMerge on LibraryState {
           await previous.encode(),
         );
         final records = backup.records;
+        final knownForRemap = <int, Novel>{..._known};
+        if (_localChapters case final LocalLibraryStore localStore) {
+          for (final book in localStore.books) {
+            knownForRemap.putIfAbsent(book.id, () => localStore.toNovel(book));
+          }
+        }
         final (:remap, :collidingUnmatched) = _resolveLocalBookIdMap(
-          _known,
+          knownForRemap,
           records,
         );
         int? mapBookId(int rawId) => collidingUnmatched.contains(rawId)
@@ -307,6 +313,31 @@ extension LibraryBackupMerge on LibraryState {
           for (final key in backupPreferenceKeys) {
             if (records[key] case final value?) changed[key] = value;
           }
+          if (records[UiPreferenceKeys.mangaBookModes] case final String rawModes) {
+            try {
+              final decoded = jsonDecode(rawModes);
+              if (decoded is Map) {
+                final mergedModes = <String, String>{
+                  for (final entry in _readerStore.mangaBookModes.entries)
+                    '${entry.key}': entry.value,
+                };
+                for (final entry in decoded.entries) {
+                  final rawId = int.tryParse('${entry.key}');
+                  final mode = entry.value;
+                  if (rawId == null || (mode != 'manga' && mode != 'normal')) {
+                    continue;
+                  }
+                  final mappedId = mapBookId(rawId);
+                  if (mappedId != null) {
+                    mergedModes['$mappedId'] = mode as String;
+                  }
+                }
+                changed[UiPreferenceKeys.mangaBookModes] = jsonEncode(
+                  mergedModes,
+                );
+              }
+            } catch (_) {}
+          }
           // A backup may predate the migration marker. Normalize within the
           // same journaled commit so a restart cannot revive hidden overrides.
           for (final entry in _retiredAppearanceDefaults.entries) {
@@ -386,7 +417,12 @@ extension LibraryBackupMerge on LibraryState {
         _recentSearches = searches;
         if (importPreferences) {
           _appearanceStore.applyBackupRecords(records);
-          _readerStore.applyBackupRecords(records);
+          _readerStore.applyBackupRecords({
+            ...records,
+            if (changed[UiPreferenceKeys.mangaBookModes]
+                case final Object remappedModes)
+              UiPreferenceKeys.mangaBookModes: remappedModes,
+          });
           _performanceStore.applyBackupRecords(records);
         }
         if (!_disposed) {

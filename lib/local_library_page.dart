@@ -282,7 +282,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        '小说文件夹',
+                        '小说与漫画文件夹',
                         style: TextStyle(fontWeight: FontWeight.w600),
                       ),
                       const SizedBox(height: 2),
@@ -304,7 +304,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           FeatureEntry(
             key: const ValueKey('local-library-scan'),
             title: scanTitle,
-            subtitle: '自动导入新增，移除已删除的（共 ${books.length} 本）',
+            subtitle: '自动导入小说、CBZ/ZIP 与图片文件夹漫画（共 ${books.length} 本）',
             icon: CupertinoIcons.doc_text_search,
             onTap: isScanning || _picking ? () {} : _scan,
           ),
@@ -328,7 +328,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           FeatureEntry(
             key: const ValueKey('local-library-lan-wifi'),
             title: 'Wi-Fi 传书与网页书架',
-            subtitle: '在电脑或平板浏览器拖拽上传 TXT / EPUB / MOBI / AZW3 或在线阅读',
+            subtitle: '在电脑或平板浏览器拖拽上传 TXT / EPUB / PDF / CBZ / ZIP 或在线阅读',
             icon: CupertinoIcons.wifi,
             onTap: () async {
               await showLanBookshelfSheet(
@@ -344,7 +344,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           FeatureEntry(
             key: const ValueKey('local-library-cloud-import'),
             title: '网盘导入',
-            subtitle: '从 OpenList / WebDAV、S3 或夸克网盘浏览并导入书籍',
+            subtitle: '从 OpenList / WebDAV、S3 或夸克网盘浏览并导入书籍与漫画',
             icon: CupertinoIcons.cloud_download,
             onTap: () async {
               await pushNovelPage<void>(

@@ -140,6 +140,24 @@ enum ReaderTextWeight {
   final FontWeight weight;
 }
 
+enum MangaReadingMode {
+  rtl('日漫右翻'),
+  ltr('普通左翻'),
+  webtoon('条漫下拉');
+
+  const MangaReadingMode(this.label);
+  final String label;
+}
+
+enum MangaSpreadMode {
+  off('关闭'),
+  autoLandscape('横屏自动'),
+  always('始终双页');
+
+  const MangaSpreadMode(this.label);
+  final String label;
+}
+
 /// Reader-only settings: changing paper never changes the rest of the app.
 class ReaderPreferences {
   const ReaderPreferences({
@@ -182,6 +200,14 @@ class ReaderPreferences {
     this.tapGrid = defaultReaderTapGrid,
     this.autoPageMode = ReaderAutoPageMode.off,
     this.kinsokuCompression = true,
+    this.mangaMode = MangaReadingMode.rtl,
+    this.mangaSpread = MangaSpreadMode.autoLandscape,
+    this.mangaCoverOffset = true,
+    this.mangaCropMargins = false,
+    this.mangaDarkCanvas = true,
+    this.mangaNightDim = 0,
+    this.mangaInvert = false,
+    this.mangaTapPaging = true,
   });
   final ReaderPaper paper;
   final double margin, paragraphGap, autoScrollSpeed;
@@ -229,6 +255,16 @@ class ReaderPreferences {
 
   /// Kinsoku trailing punctuation compression in pagination.
   final bool kinsokuCompression;
+
+  /// Manga / comic reader preferences.
+  final MangaReadingMode mangaMode;
+  final MangaSpreadMode mangaSpread;
+  final bool mangaCoverOffset;
+  final bool mangaCropMargins;
+  final bool mangaDarkCanvas;
+  final double mangaNightDim;
+  final bool mangaInvert;
+  final bool mangaTapPaging;
   String get layoutKey {
     final geometry =
         leftMargin == 26 &&
@@ -350,6 +386,15 @@ class ReaderPreferences {
     if (autoPageMode != ReaderAutoPageMode.off)
       'autoPageMode': autoPageMode.name,
     if (!kinsokuCompression) 'kinsokuCompression': false,
+    if (mangaMode != MangaReadingMode.rtl) 'mangaMode': mangaMode.name,
+    if (mangaSpread != MangaSpreadMode.autoLandscape)
+      'mangaSpread': mangaSpread.name,
+    if (!mangaCoverOffset) 'mangaCoverOffset': false,
+    if (mangaCropMargins) 'mangaCropMargins': true,
+    if (!mangaDarkCanvas) 'mangaDarkCanvas': false,
+    if (mangaNightDim > 0) 'mangaNightDim': mangaNightDim,
+    if (mangaInvert) 'mangaInvert': true,
+    if (!mangaTapPaging) 'mangaTapPaging': false,
   };
   static bool _sameTapGrid(
     List<ReaderTapZoneAction> a,
@@ -385,6 +430,11 @@ class ReaderPreferences {
       'paragraphGapOverride',
       'catalogueReversed',
       'kinsokuCompression',
+      'mangaCoverOffset',
+      'mangaCropMargins',
+      'mangaDarkCanvas',
+      'mangaInvert',
+      'mangaTapPaging',
     ]) {
       if (json[key] != null && json[key] is! bool) {
         throw const FormatException('阅读偏好格式有误');
@@ -469,6 +519,16 @@ class ReaderPreferences {
         orElse: () => ReaderAutoPageMode.off,
       ),
       kinsokuCompression: json['kinsokuCompression'] != false,
+      mangaMode: MangaReadingMode.values.byName(json['mangaMode'] ?? 'rtl'),
+      mangaSpread: MangaSpreadMode.values.byName(
+        json['mangaSpread'] ?? 'autoLandscape',
+      ),
+      mangaCoverOffset: json['mangaCoverOffset'] != false,
+      mangaCropMargins: json['mangaCropMargins'] == true,
+      mangaDarkCanvas: json['mangaDarkCanvas'] != false,
+      mangaNightDim: number('mangaNightDim', 0, .65, 0),
+      mangaInvert: json['mangaInvert'] == true,
+      mangaTapPaging: json['mangaTapPaging'] != false,
     );
   }
   static ReaderPreferences fromRecord(Object? record) {
@@ -521,6 +581,14 @@ class ReaderPreferences {
     List<ReaderTapZoneAction>? tapGrid,
     ReaderAutoPageMode? autoPageMode,
     bool? kinsokuCompression,
+    MangaReadingMode? mangaMode,
+    MangaSpreadMode? mangaSpread,
+    bool? mangaCoverOffset,
+    bool? mangaCropMargins,
+    bool? mangaDarkCanvas,
+    double? mangaNightDim,
+    bool? mangaInvert,
+    bool? mangaTapPaging,
   }) => ReaderPreferences(
     paper: paper ?? this.paper,
     margin: margin ?? this.margin,
@@ -564,5 +632,13 @@ class ReaderPreferences {
     tapGrid: tapGrid ?? this.tapGrid,
     autoPageMode: autoPageMode ?? this.autoPageMode,
     kinsokuCompression: kinsokuCompression ?? this.kinsokuCompression,
+    mangaMode: mangaMode ?? this.mangaMode,
+    mangaSpread: mangaSpread ?? this.mangaSpread,
+    mangaCoverOffset: mangaCoverOffset ?? this.mangaCoverOffset,
+    mangaCropMargins: mangaCropMargins ?? this.mangaCropMargins,
+    mangaDarkCanvas: mangaDarkCanvas ?? this.mangaDarkCanvas,
+    mangaNightDim: mangaNightDim ?? this.mangaNightDim,
+    mangaInvert: mangaInvert ?? this.mangaInvert,
+    mangaTapPaging: mangaTapPaging ?? this.mangaTapPaging,
   );
 }

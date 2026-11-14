@@ -38,6 +38,7 @@ class ReaderSettingsPreferenceStore {
   bool keepScreenOn = false;
   bool pdfNightInvert = true;
   ReaderPreferences readerPreferences = const ReaderPreferences();
+  Map<int, String> mangaBookModes = const {};
   String appFontId = appFontSystem.id;
 
   void load({UserFontStore? fonts}) {
@@ -70,6 +71,32 @@ class ReaderSettingsPreferenceStore {
     readerPreferences = reader == null
         ? const ReaderPreferences()
         : ReaderPreferences.fromRecord(reader);
+    mangaBookModes = _parseMangaBookModes(
+      _prefs.get(UiPreferenceKeys.mangaBookModes),
+    );
+  }
+
+  static Map<int, String> _parseMangaBookModes(Object? raw) {
+    if (raw is! String || raw.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return const {};
+      final parsed = <int, String>{};
+      for (final entry in decoded.entries) {
+        final k = entry.key;
+        final v = entry.value;
+        final id = k is String ? int.tryParse(k) : null;
+        if (id != null &&
+            id > 0 &&
+            id <= 0x7fffffff &&
+            (v == 'manga' || v == 'normal')) {
+          parsed[id] = v as String;
+        }
+      }
+      return parsed.isEmpty ? const {} : Map<int, String>.unmodifiable(parsed);
+    } catch (_) {
+      return const {};
+    }
   }
 
   void loadFontState({UserFontStore? fonts}) {
@@ -121,6 +148,9 @@ class ReaderSettingsPreferenceStore {
     'readerTypeface': readerTypeface,
     UiPreferenceKeys.pdfNightInvert: pdfNightInvert,
     UiPreferenceKeys.readerPreferences: jsonEncode(readerPreferences.toJson()),
+    UiPreferenceKeys.mangaBookModes: jsonEncode({
+      for (final entry in mangaBookModes.entries) '${entry.key}': entry.value,
+    }),
     'readerKeepScreenOn': keepScreenOn,
   };
 

@@ -158,11 +158,18 @@ abstract final class LocalPlatform {
   static Future<String?> pickLocalFolder() =>
       channel.invokeMethod<String>('pickLocalFolder');
 
-  /// 扫描已授权文件夹中的 txt / pdf。
-  /// 返回 (entries, complete, reason)：entries 为 [{uri, name, size, modified}]；
+  /// 扫描已授权文件夹中的 txt / pdf / epub / cbz / zip 及漫画图片目录。
+  /// 返回 (entries, complete, reason, rootName, dirUris)：
+  /// entries 为 [{uri, name, size, modified, relPath?, parentUri?}]；
   /// complete 为 false 表示扫描不完整（此时禁止执行删除）。
   static Future<
-    ({List<Map<String, Object?>> entries, bool complete, String? reason})
+    ({
+      List<Map<String, Object?>> entries,
+      bool complete,
+      String? reason,
+      String rootName,
+      Map<String, String> dirUris,
+    })
   >
   scanLocalFolder(String treeUri) async {
     final result = await channel
@@ -170,11 +177,17 @@ abstract final class LocalPlatform {
           'treeUri': treeUri,
         })
         .timeout(
-          _localIoTimeout,
+          const Duration(seconds: 65),
           onTimeout: () => throw TimeoutException('目录查询超时，请重试'),
         );
     if (result == null) {
-      return (entries: <Map<String, Object?>>[], complete: false, reason: 'null_result');
+      return (
+        entries: <Map<String, Object?>>[],
+        complete: false,
+        reason: 'null_result',
+        rootName: '',
+        dirUris: const <String, String>{},
+      );
     }
     final rawEntries = result['entries'];
     final List<Map<String, Object?>> entries = rawEntries is List
@@ -196,7 +209,36 @@ abstract final class LocalPlatform {
     final bool complete = result['complete'] == true && valid;
     final String? reason = !valid ? 'enumeration_failed' :
         result['reason'] is String ? result['reason'] as String : null;
-    return (entries: entries, complete: complete, reason: reason);
+    final String rootName =
+        result['rootName'] is String ? result['rootName'] as String : '';
+    final rawDirs = result['dirUris'];
+    final dirUris = <String, String>{};
+    if (rawDirs is Map) {
+      for (final e in rawDirs.entries) {
+        if (e.key is String && e.value is String) {
+          dirUris[e.key as String] = e.value as String;
+        }
+      }
+    }
+    return (
+      entries: entries,
+      complete: complete,
+      reason: reason,
+      rootName: rootName,
+      dirUris: dirUris,
+    );
+  }
+
+  /// 读取单张本地/SAF 图片或元数据原始字节（上限 64 MiB）。
+  static Future<Uint8List> readLocalBytes(String docUri) async {
+    final bytes = await channel
+        .invokeMethod<Uint8List>('readLocalBytes', {'docUri': docUri})
+        .timeout(
+          _localIoTimeout,
+          onTimeout: () => throw TimeoutException('源文件读取超时，请重试'),
+        );
+    if (bytes == null) throw StateError('源文件读取未返回数据');
+    return bytes;
   }
 
   /// 读取文本文件并自动识别 UTF-8 / GB18030 编码。

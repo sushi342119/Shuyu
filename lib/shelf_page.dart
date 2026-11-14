@@ -80,7 +80,11 @@ class _ShelfPageState extends State<ShelfPage> {
 
   bool _matches(int id) {
     if (!_filter.matchesTags(id, state.tagMatchMode)) return false;
-    if (!_filter.matchesFormat(id, localLibraryOf(widget.repository))) {
+    if (!_filter.matchesFormat(
+      id,
+      localLibraryOf(widget.repository),
+      state: state,
+    )) {
       return false;
     }
     final book = _known(id);

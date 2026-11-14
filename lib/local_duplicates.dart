@@ -136,7 +136,7 @@ _titleAliases(LocalBook book) {
   // Filenames remain useful when EPUB/MOBI metadata uses a different title.
   var filename = stripFilenameTags(book.fileName);
   filename = filename.replaceFirst(
-    RegExp(r'\.(?:txt|epub|pdf|mobi|azw3)$', caseSensitive: false),
+    RegExp(r'\.(?:txt|epub|pdf|mobi|azw3|cbz|zip)$', caseSensitive: false),
     '',
   );
   add(filename, weakOnly: true);

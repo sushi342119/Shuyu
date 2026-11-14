@@ -15,6 +15,7 @@ import 'local_epub.dart';
 import 'reader_purification.dart';
 import 'reading_activity.dart';
 import 'local_library.dart';
+import 'local_manga_reader.dart';
 import 'reader_annotation_editor.dart';
 import 'reader_catalogue.dart';
 import 'reader_chrome.dart';
@@ -803,11 +804,28 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     }
   }
 
+  Future<void> _switchToMangaReader() async {
+    await widget.state.setBookMangaModeOverride(_novel.id, 'manga');
+    if (!mounted) return;
+    await Navigator.of(context).pushReplacement(
+      softRoute<void>(
+        LocalMangaReaderPage(
+          novel: _novel,
+          state: widget.state,
+          local: widget.local,
+          initialChapter: _chapter,
+        ),
+        reduceMotion: widget.state.effectiveReduceMotion,
+      ),
+    );
+  }
+
   Future<void> _settings({bool bookmarks = false}) async {
     if (_sheetOpen || _total == 0) return;
     _selection.clear();
     _sheetOpen = true;
     _syncReadingActivity();
+    var switchToManga = false;
     try {
       final action = await showJellySheet<ReaderToolAction>(
         context: context,
@@ -819,9 +837,17 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
           chapterProgress: _chapterRatio,
           onAddBookmark: _addBookmark,
           initialBookmarks: bookmarks,
+          onSwitchToManga: () {
+            switchToManga = true;
+            Navigator.pop(context);
+          },
         ),
       );
       if (!mounted) return;
+      if (switchToManga) {
+        await _switchToMangaReader();
+        return;
+      }
       if (action is ReaderEnterFocus) {
         _showChrome(false);
       } else if (action is ReaderOpenBookmark) {
@@ -1268,6 +1294,7 @@ class LocalEpubReaderTools extends StatefulWidget {
     required this.onAddBookmark,
     this.initialBookmarks = false,
     this.chapterProgress = 0,
+    this.onSwitchToManga,
   });
 
   final Novel novel;
@@ -1278,6 +1305,7 @@ class LocalEpubReaderTools extends StatefulWidget {
 
   /// 打开面板时当前章的滚动比例（0~1）。
   final double chapterProgress;
+  final VoidCallback? onSwitchToManga;
 
   @override
   State<LocalEpubReaderTools> createState() => _LocalEpubReaderToolsState();
@@ -1444,6 +1472,14 @@ class _LocalEpubReaderToolsState extends State<LocalEpubReaderTools> {
       onPressed: () => Navigator.pop(context, const ReaderOpenPurification()),
       child: const Text('正文净化与纠错'),
     ),
+    if (widget.onSwitchToManga != null) ...[
+      const SizedBox(height: 8),
+      GlassTextButton(
+        key: const ValueKey('epub-switch-manga-mode'),
+        onPressed: widget.onSwitchToManga,
+        child: const Text('以漫画模式阅读'),
+      ),
+    ],
     const SizedBox(height: 8),
     GlassTextButton(
       onPressed: () => Navigator.pop(context, const ReaderEnterFocus()),

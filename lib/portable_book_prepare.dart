@@ -6,11 +6,15 @@ import 'package:archive/archive.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:xml/xml.dart';
 
+import 'book_import_limits.dart';
+import 'local_comic.dart';
 import 'local_mobi.dart';
 
 typedef PreparedCloudBook = ({
   String name,
   Uint8List? epubBytes,
+  Uint8List? cbzBytes,
+  Uint8List? pdfBytes,
   Uint8List? rawTextBytes,
   String? text,
 });
@@ -18,7 +22,7 @@ typedef PreparedCloudBook = ({
 class PortableBookPreparer {
   const PortableBookPreparer._();
 
-  static const int _maxSingleFileBytes = 256 * 1024 * 1024;
+  static const int _maxSingleFileBytes = maxLocalArchiveBytes;
   static const int _maxZipTotalBytes = 1024 * 1024 * 1024;
   static const int _maxZipEntries = 256;
 
@@ -27,14 +31,36 @@ class PortableBookPreparer {
     String path,
   ) async {
     final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
+    if (ext == 'cbr' || ext == 'rar') {
+      throw const FormatException('暂不支持 RAR/CBR 压缩格式，请转换为 CBZ 或 ZIP 后导入');
+    }
+    if (ext == 'cb7' || ext == '7z') {
+      throw const FormatException('暂不支持 7z/CB7 压缩格式，请转换为 CBZ 或 ZIP 后导入');
+    }
     final file = File(path);
     final length = await file.length();
     if (length > _maxSingleFileBytes) {
-      throw const FormatException('文件超过 256 MiB 大小限制');
+      throw const FormatException('文件超过 512 MiB 大小限制');
     }
     final bytes = await file.readAsBytes();
     return Isolate.run(() => _prepareBytes(name, ext, bytes));
   }
+
+  static PreparedCloudBook _book({
+    required String name,
+    Uint8List? epubBytes,
+    Uint8List? cbzBytes,
+    Uint8List? pdfBytes,
+    Uint8List? rawTextBytes,
+    String? text,
+  }) => (
+    name: name,
+    epubBytes: epubBytes,
+    cbzBytes: cbzBytes,
+    pdfBytes: pdfBytes,
+    rawTextBytes: rawTextBytes,
+    text: text,
+  );
 
   static List<PreparedCloudBook> _prepareBytes(
     String name,
@@ -42,10 +68,21 @@ class PortableBookPreparer {
     Uint8List bytes,
   ) {
     switch (ext) {
+      case 'cbr':
+      case 'rar':
+        throw const FormatException('暂不支持 RAR/CBR 压缩格式，请转换为 CBZ 或 ZIP 后导入');
+      case 'cb7':
+      case '7z':
+        throw const FormatException('暂不支持 7z/CB7 压缩格式，请转换为 CBZ 或 ZIP 后导入');
+      case 'cbz':
+        checkComicArchiveMagicBytes(bytes);
+        final pkg = ComicArchivePackage.openBytes(bytes);
+        pkg.close();
+        return [_book(name: name, cbzBytes: bytes)];
       case 'epub':
-        return [
-          (name: name, epubBytes: bytes, rawTextBytes: null, text: null),
-        ];
+        return [_book(name: name, epubBytes: bytes)];
+      case 'pdf':
+        return [_book(name: name, pdfBytes: bytes)];
       case 'mobi':
       case 'azw3':
       case 'azw':
@@ -54,27 +91,16 @@ class PortableBookPreparer {
         final outName = mobi.author.isNotEmpty
             ? '${mobi.title} - ${mobi.author}.txt'
             : '${mobi.title}.txt';
-        return [
-          (name: outName, epubBytes: null, rawTextBytes: null, text: mobi.text),
-        ];
+        return [_book(name: outName, text: mobi.text)];
       case 'txt':
       case 'md':
       case 'markdown':
-        return [
-          (name: name, epubBytes: null, rawTextBytes: bytes, text: null),
-        ];
+        return [_book(name: name, rawTextBytes: bytes)];
       case 'html':
       case 'htm':
       case 'xhtml':
         final doc = html_parser.parse(utf8.decode(bytes, allowMalformed: true));
-        return [
-          (
-            name: name,
-            epubBytes: null,
-            rawTextBytes: null,
-            text: doc.body?.text ?? doc.text ?? '',
-          ),
-        ];
+        return [_book(name: name, text: doc.body?.text ?? doc.text ?? '')];
       case 'fb2':
         try {
           final xml = XmlDocument.parse(
@@ -85,18 +111,9 @@ class PortableBookPreparer {
               .map((e) => e.innerText.trim())
               .where((s) => s.isNotEmpty)
               .join('\n\n');
-          return [
-            (
-              name: name,
-              epubBytes: null,
-              rawTextBytes: null,
-              text: paragraphs,
-            ),
-          ];
+          return [_book(name: name, text: paragraphs)];
         } catch (_) {
-          return [
-            (name: name, epubBytes: null, rawTextBytes: bytes, text: null),
-          ];
+          return [_book(name: name, rawTextBytes: bytes)];
         }
       case 'docx':
         try {
@@ -126,14 +143,7 @@ class PortableBookPreparer {
                 .trim();
             if (line.isNotEmpty) lines.add(line);
           }
-          return [
-            (
-              name: name,
-              epubBytes: null,
-              rawTextBytes: null,
-              text: lines.join('\n\n'),
-            ),
-          ];
+          return [_book(name: name, text: lines.join('\n\n'))];
         } catch (_) {
           return const [];
         }
@@ -143,15 +153,13 @@ class PortableBookPreparer {
             .replaceAll(RegExp(r'\\par\b\s*'), '\n')
             .replaceAll(RegExp(r'\\[a-zA-Z]+-?\d*\s?'), '')
             .replaceAll(RegExp(r'[{}]'), '');
-        return [
-          (
-            name: name,
-            epubBytes: null,
-            rawTextBytes: null,
-            text: stripped.trim(),
-          ),
-        ];
+        return [_book(name: name, text: stripped.trim())];
       case 'zip':
+        checkComicArchiveMagicBytes(bytes);
+        if (isComicZipBytes(bytes)) {
+          final stem = name.replaceFirst(RegExp(r'\.[^.]+$'), '');
+          return [_book(name: '$stem.cbz', cbzBytes: bytes)];
+        }
         try {
           final archive = ZipDecoder().decodeBytes(bytes);
           final results = <PreparedCloudBook>[];
@@ -182,9 +190,7 @@ class PortableBookPreparer {
           return const [];
         }
       default:
-        return [
-          (name: name, epubBytes: null, rawTextBytes: bytes, text: null),
-        ];
+        return [_book(name: name, rawTextBytes: bytes)];
     }
   }
 }

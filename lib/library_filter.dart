@@ -9,7 +9,8 @@ import 'ui_preferences.dart';
 enum BookFormatFilter {
   txt('TXT'),
   epub('EPUB'),
-  pdf('PDF');
+  pdf('PDF'),
+  comic('漫画');
 
   const BookFormatFilter(this.label);
   final String label;
@@ -105,16 +106,32 @@ class LibraryFilter extends ChangeNotifier {
         : own.any(_tags.contains);
   }
 
-  bool matchesFormat(int bookId, LocalLibraryStore? local) {
+  bool matchesFormat(
+    int bookId,
+    LocalLibraryStore? local, {
+    LibraryState? state,
+  }) {
     if (_formats.isEmpty) return true;
-    final kind = local?.kindFor(bookId);
-    final format = switch (kind) {
-      LocalBookKind.epub => BookFormatFilter.epub,
-      LocalBookKind.pdf => BookFormatFilter.pdf,
-      // Online books are text; local TXT and unknown default to TXT.
-      _ => BookFormatFilter.txt,
-    };
-    return _formats.contains(format);
+    final book = local?.bookFor(bookId);
+    final kind = book?.kind ?? local?.kindFor(bookId);
+    switch (kind) {
+      case LocalBookKind.comic:
+        return _formats.contains(BookFormatFilter.comic);
+      case LocalBookKind.epub:
+        if (_formats.contains(BookFormatFilter.epub)) return true;
+        final isManga = state != null
+            ? state.isMangaModeForBook(bookId, book: book)
+            : (book?.isComicEpub ?? false);
+        return isManga && _formats.contains(BookFormatFilter.comic);
+      case LocalBookKind.pdf:
+        if (_formats.contains(BookFormatFilter.pdf)) return true;
+        final isManga =
+            state != null && state.isMangaModeForBook(bookId, book: book);
+        return isManga && _formats.contains(BookFormatFilter.comic);
+      default:
+        // Online books are text; local TXT and unknown default to TXT.
+        return _formats.contains(BookFormatFilter.txt);
+    }
   }
 }
 
