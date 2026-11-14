@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 
 import 'performance_preferences.dart';
@@ -130,6 +132,7 @@ abstract final class UiPreferenceKeys {
   static const tagMatchMode = 'tagMatchMode';
   static const readerPreferences = 'readerPreferences';
   static const paletteVariant = 'paletteVariant';
+  static const mangaBookModes = 'mangaBookModes';
 
   static const all = {
     paletteVariant,
@@ -141,6 +144,7 @@ abstract final class UiPreferenceKeys {
     shelfLayout,
     tagMatchMode,
     readerPreferences,
+    mangaBookModes,
   };
 
   /// Validates a backup value for one of the new keys.
@@ -152,8 +156,27 @@ abstract final class UiPreferenceKeys {
     shelfLayout => ShelfLayout.values.any((v) => v.name == value),
     tagMatchMode => TagMatchMode.values.any((v) => v.name == value),
     paletteVariant => OriginalPaletteVariant.values.any((v) => v.name == value),
+    mangaBookModes => _validMangaBookModes(value),
     _ => false,
   };
+
+  static bool _validMangaBookModes(Object? value) {
+    if (value is! String || value.length > 256 * 1024) return false;
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is! Map || decoded.length > 10000) return false;
+      for (final entry in decoded.entries) {
+        final k = entry.key;
+        final v = entry.value;
+        final id = k is String ? int.tryParse(k) : null;
+        if (id == null || id <= 0 || id > 0x7fffffff) return false;
+        if (v != 'manga' && v != 'normal') return false;
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 }
 
 /// Device facts used once per launch to choose the automatic glass tier.

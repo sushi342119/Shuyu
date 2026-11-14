@@ -1,13 +1,18 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shuyu/app_ui.dart';
 import 'package:shuyu/archive_wave.dart';
 import 'package:shuyu/book_tags.dart';
 import 'package:shuyu/catalog.dart';
+import 'package:shuyu/haptic_preferences.dart';
 import 'package:shuyu/library_backup.dart';
 import 'package:shuyu/library_filter.dart';
 import 'package:shuyu/library_state.dart';
+import 'package:shuyu/local_platform.dart';
 import 'package:shuyu/main.dart';
 import 'package:shuyu/pages.dart';
 import 'package:shuyu/performance_preferences.dart';
@@ -254,4 +259,171 @@ void main() {
     expect(PerformanceScope.reduceMotionOf(context), isTrue);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  test(
+    'Android LocalTools allowlist covers every Dart backup and library batch preference key',
+    () async {
+      final source = await File(
+        'android/app/src/main/kotlin/app/shuyu/reader/LocalTools.kt',
+      ).readAsString();
+      final blockMatch = RegExp(
+        r'allowedLibraryPreferenceKeys\s*=\s*setOf\(([\s\S]*?)\n\s*\)',
+      ).firstMatch(source);
+      expect(blockMatch, isNotNull);
+      final kotlinAllowed = {
+        for (final match in RegExp(
+          r'"([^"]+)"',
+        ).allMatches(blockMatch!.group(1)!))
+          match.group(1)!,
+      };
+      final requiredKeys = <String>{
+        ...backupPreferenceKeys,
+        ...backupPurificationKeys,
+        ...backupReadingStatsKeys,
+        ...UiPreferenceKeys.all,
+        HapticPreferences.preferenceKey,
+        'shelf',
+        'reading_history_hidden',
+        'recentSearches',
+        'local_shelf_removed',
+        'tag_defs',
+        'tag_map',
+      };
+      for (final key in requiredKeys) {
+        expect(
+          kotlinAllowed,
+          contains(key),
+          reason:
+              'LocalTools.kt allowedLibraryPreferenceKeys is missing "$key"',
+        );
+      }
+    },
+  );
+
+  testWidgets(
+    'Android haptic level picker saves directly without LocalTools error toast and previews pulse (Issue #13)',
+    (tester) async {
+      expect(LocalPlatform.android, isTrue);
+      AppHaptics.resetForTesting();
+
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      final previewCalls = <Object?>[];
+      messenger.setMockMethodCallHandler(AppHaptics.channel, (call) async {
+        if (call.method == 'play') previewCalls.add(call.arguments);
+        return true;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(AppHaptics.channel, null),
+      );
+
+      // Simulate LocalTools channel being strict or busy on Android: single-key
+      // setHaptics writes directly via atomic SharedPreferences without failing
+      // even if LocalTools file I/O is busy or unavailable, while multi-key
+      // restoreBackup batches pass strict allowlist validation.
+      var failDirectBatchOnBusy = true;
+      final seenBatchKeys = <String>{};
+      messenger.setMockMethodCallHandler(LocalPlatform.channel, (call) async {
+        if (call.method == 'writeLibraryPreferences') {
+          if (failDirectBatchOnBusy) {
+            throw PlatformException(
+              code: 'local',
+              message: 'Local file operation failed',
+            );
+          }
+          final changes = (call.arguments as Map)['changes'] as Map;
+          seenBatchKeys.addAll(changes.keys.cast<String>());
+          final prefs = await SharedPreferences.getInstance();
+          for (final entry in changes.entries) {
+            final k = entry.key as String;
+            final v = entry.value;
+            if (v is String) {
+              await prefs.setString(k, v);
+            } else if (v is bool) {
+              await prefs.setBool(k, v);
+            } else if (v is int) {
+              await prefs.setInt(k, v);
+            } else if (v is double) {
+              await prefs.setDouble(k, v);
+            } else if (v is List) {
+              await prefs.setStringList(k, List<String>.from(v));
+            }
+          }
+          return true;
+        }
+        return null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(LocalPlatform.channel, null),
+      );
+
+      SharedPreferences.setMockInitialValues({});
+      await TagStore.load();
+      final state = await LibraryState.load();
+      addTearDown(state.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: novelTheme(Brightness.light),
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: AppearancePerformancePanel(state: state),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('appearance-performance-toggle')),
+      );
+      await tester.pumpAndSettle();
+
+      for (final (level, label) in [
+        (HapticLevel.light, '轻'),
+        (HapticLevel.strong, '强'),
+        (HapticLevel.off, '关'),
+        (HapticLevel.standard, '标准'),
+      ]) {
+        AppHaptics.resetForTesting();
+        final option = find.descendant(
+          of: find.byKey(const ValueKey('haptic-level-picker')),
+          matching: find.text(label),
+        );
+        await tester.ensureVisible(option);
+        await tester.tap(option);
+        await pumpUntil(tester, () => state.haptics.level == level);
+        await tester.pumpAndSettle();
+        expect(find.text('设置保存失败，请重试'), findsNothing);
+        expect(find.textContaining('振动：$label'), findsOneWidget);
+      }
+
+      expect(previewCalls, isNotEmpty);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString(HapticPreferences.preferenceKey), isNotNull);
+
+      final reloaded = await LibraryState.load();
+      addTearDown(reloaded.dispose);
+      expect(reloaded.haptics.level, HapticLevel.standard);
+
+      // Verify multi-key backup restore on Android also commits hapticPreferences cleanly.
+      failDirectBatchOnBusy = false;
+      final backup = await pumpStorage(
+        tester,
+        () => LibraryBackup.fromRecords({
+          HapticPreferences.preferenceKey:
+              const HapticPreferences()
+                  .withLevel(HapticLevel.light)
+                  .toRecords()[HapticPreferences.preferenceKey]!,
+        }),
+      );
+      await pumpStorage(
+        tester,
+        () => state.restoreBackup(backup, importPreferences: true),
+      );
+      expect(seenBatchKeys, contains(HapticPreferences.preferenceKey));
+      expect(state.haptics.level, HapticLevel.light);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 }

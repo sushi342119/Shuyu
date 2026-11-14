@@ -390,13 +390,17 @@ class EpubPackage {
     required String? coverEntry,
     required List<EpubChapter> chapters,
     required Map<int, List<EpubBlock>> chapterBlocks,
+    this.isComicLayout = false,
+    this.isRtlProgression = false,
+    Map<String, String> explicitTocTitles = const <String, String>{},
   }) : _input = input,
        _entries = entries,
        _title = title,
        _author = author,
        _coverEntry = coverEntry,
        _chapters = List.unmodifiable(chapters),
-       _chapterBlocks = Map.unmodifiable(chapterBlocks);
+       _chapterBlocks = Map.unmodifiable(chapterBlocks),
+       _explicitTocTitles = Map.unmodifiable(explicitTocTitles);
 
   final InputFileStream _input;
   final Map<String, ArchiveFile> _entries;
@@ -405,6 +409,9 @@ class EpubPackage {
   final String? _coverEntry;
   final List<EpubChapter> _chapters;
   final Map<int, List<EpubBlock>> _chapterBlocks;
+  final Map<String, String> _explicitTocTitles;
+  final bool isComicLayout;
+  final bool isRtlProgression;
   bool _closed = false;
 
   String get title => _title;
@@ -911,6 +918,81 @@ class EpubPackage {
         .map((i) => _resolveEntryKey(entries, i.path))
         .firstWhere((_) => true, orElse: () => null);
 
+    // 检测固定版式/纯图片漫画 EPUB（Vol.moe / Kox.moe / Kindle Comic Creator 等）
+    var isComicLayout = false;
+    final rasterSpineCount = spineHrefs
+        .where((h) => _rasterImageEntryPattern.hasMatch(h))
+        .length;
+    if (spineHrefs.isNotEmpty &&
+        rasterSpineCount * 5 >= spineHrefs.length * 4) {
+      isComicLayout = true;
+    } else if (chapters.isNotEmpty &&
+        (parsedOpf.opfDeclaresComic ||
+            (chapters.length >= 4 && medianSpineSize <= 2048))) {
+      final sampleCount = math.min(6, chapters.length);
+      var sampled = 0;
+      var withImage = 0;
+      var textChars = 0;
+      String? firstSampleImage;
+      for (var s = 0; s < sampleCount; s++) {
+        final idx = sampleCount == 1
+            ? 0
+            : ((s * (chapters.length - 1)) ~/ (sampleCount - 1));
+        try {
+          List<EpubBlock> blocks;
+          if (precomputedBlocks[idx] case final cached?) {
+            blocks = cached;
+          } else {
+            final href = chapters[idx].href.split('#').first;
+            if (_rasterImageEntryPattern.hasMatch(href)) {
+              final resolved = _resolveEntryKey(entries, href);
+              blocks = resolved == null
+                  ? const []
+                  : [EpubBlock.image(resolved)];
+            } else {
+              blocks = _extractDocument(
+                href,
+                await readText(href),
+                entries,
+              ).blocks;
+            }
+          }
+          sampled++;
+          var hasImg = false;
+          for (final b in blocks) {
+            if (b.kind == EpubBlockKind.image && b.entryPath != null) {
+              hasImg = true;
+              firstSampleImage ??= b.entryPath;
+            } else if (b.text != null) {
+              textChars += b.text!.replaceAll(_whitespace, '').length;
+            }
+          }
+          if (hasImg) withImage++;
+        } on Object {
+          // Ignore unreadable sample item.
+        }
+      }
+      if (sampled > 0) {
+        if (parsedOpf.opfDeclaresComic) {
+          isComicLayout = withImage >= 1 && textChars <= sampled * 120;
+        } else {
+          isComicLayout =
+              sampled >= 4 &&
+              withImage * 5 >= sampled * 4 &&
+              textChars <= sampled * 36;
+        }
+      }
+      if (isComicLayout && cover == null && firstSampleImage != null) {
+        cover = _resolveEntryKey(entries, firstSampleImage);
+      }
+    }
+    if (isComicLayout && cover == null) {
+      cover = manifestOrder
+          .where(usableImage)
+          .map((i) => _resolveEntryKey(entries, i.path))
+          .firstWhere((p) => p != null, orElse: () => null);
+    }
+
     return EpubPackage._(
       input: input,
       entries: entries,
@@ -919,6 +1001,9 @@ class EpubPackage {
       coverEntry: cover,
       chapters: chapters,
       chapterBlocks: precomputedBlocks,
+      isComicLayout: isComicLayout,
+      isRtlProgression: parsedOpf.isRtlProgression,
+      explicitTocTitles: navTitles,
     );
   }
 
@@ -937,6 +1022,153 @@ class EpubPackage {
     }
     final source = await _decodeText(_readEntrySync(href));
     return _extractDocument(href, source, _entries).blocks;
+  }
+
+  /// 提取整本 EPUB 中的有序图片页及对应话/卷目录（供漫画阅读模式使用）。
+  Future<
+    ({
+      List<String> pages,
+      List<({String title, int startPage, int pageCount})> chapters,
+      List<int> pageToSpineChapter,
+    })
+  >
+  extractMangaPages() async {
+    _ensureOpen();
+    final pages = <String>[];
+    final pageToSpine = <int>[];
+    final chapterSpans = <({
+      String title,
+      String href,
+      int startPage,
+      int pageCount,
+    })>[];
+
+    for (var i = 0; i < _chapters.length; i++) {
+      final blocks = await chapterBlocks(i);
+      final start = pages.length;
+      for (final block in blocks) {
+        if (block.kind == EpubBlockKind.image && block.entryPath != null) {
+          final resolved = _resolveEntryKey(_entries, block.entryPath);
+          if (resolved != null) {
+            pages.add(resolved);
+            pageToSpine.add(i);
+          }
+        }
+      }
+      final count = pages.length - start;
+      if (count > 0) {
+        chapterSpans.add((
+          title: _chapters[i].title,
+          href: _chapters[i].href.split('#').first,
+          startPage: start,
+          pageCount: count,
+        ));
+      }
+    }
+
+    if (pages.isEmpty) {
+      // Fallback: collect raster images from manifest/archive in natural order.
+      final rawImages = _entries.keys
+          .where((k) => _rasterImageEntryPattern.hasMatch(k))
+          .toSet()
+          .toList()
+        ..sort(_naturalPathCompare);
+      pages.addAll(rawImages);
+      if (pages.isNotEmpty) {
+        return (
+          pages: List<String>.unmodifiable(pages),
+          chapters: [
+            (
+              title: _title.trim().isNotEmpty ? _title.trim() : '全一卷',
+              startPage: 0,
+              pageCount: pages.length,
+            ),
+          ],
+          pageToSpineChapter: List<int>.filled(pages.length, 0),
+        );
+      }
+      return (
+        pages: const <String>[],
+        chapters: const <({String title, int startPage, int pageCount})>[],
+        pageToSpineChapter: const <int>[],
+      );
+    }
+
+    final unmodifiablePageToSpine = List<int>.unmodifiable(pageToSpine);
+
+    // 若 EPUB 每页一个 XHTML（如 Vol.moe），按 NCX/nav 真实目录锚点聚合为话/章。
+    final singlePageSpans =
+        chapterSpans.where((s) => s.pageCount == 1).length;
+    if (_explicitTocTitles.isNotEmpty &&
+        _explicitTocTitles.length < chapterSpans.length &&
+        singlePageSpans * 4 >= chapterSpans.length * 3) {
+      final merged = <({String title, int startPage, int pageCount})>[];
+      String currentTitle =
+          _explicitTocTitles[chapterSpans.first.href] ?? '序章';
+      int currentStart = 0;
+      final seenTocHrefs = <String>{};
+      for (var i = 0; i < chapterSpans.length; i++) {
+        final span = chapterSpans[i];
+        final tocTitle = _explicitTocTitles[span.href];
+        if (tocTitle != null && seenTocHrefs.add(span.href)) {
+          if (span.startPage > currentStart) {
+            merged.add((
+              title: currentTitle,
+              startPage: currentStart,
+              pageCount: span.startPage - currentStart,
+            ));
+          }
+          currentTitle = tocTitle;
+          currentStart = span.startPage;
+        }
+      }
+      if (pages.length > currentStart) {
+        merged.add((
+          title: currentTitle,
+          startPage: currentStart,
+          pageCount: pages.length - currentStart,
+        ));
+      }
+      if (merged.isNotEmpty) {
+        return (
+          pages: List<String>.unmodifiable(pages),
+          chapters:
+              List<({String title, int startPage, int pageCount})>.unmodifiable(
+                merged,
+              ),
+          pageToSpineChapter: unmodifiablePageToSpine,
+        );
+      }
+    }
+
+    // 若没有任何显式目录，且所有 spine 都是单页自动编号，合并为单卷避免百余条无意义分章。
+    final autoNumberedAll =
+        _explicitTocTitles.isEmpty &&
+        chapterSpans.length >= 6 &&
+        singlePageSpans == chapterSpans.length;
+    if (autoNumberedAll) {
+      return (
+        pages: List<String>.unmodifiable(pages),
+        chapters: [
+          (
+            title: _title.trim().isNotEmpty ? _title.trim() : '全一卷',
+            startPage: 0,
+            pageCount: pages.length,
+          ),
+        ],
+        pageToSpineChapter: unmodifiablePageToSpine,
+      );
+    }
+
+    return (
+      pages: List<String>.unmodifiable(pages),
+      chapters:
+          List<({String title, int startPage, int pageCount})>.unmodifiable([
+            for (final s in chapterSpans)
+              (title: s.title, startPage: s.startPage, pageCount: s.pageCount),
+          ]),
+      pageToSpineChapter: unmodifiablePageToSpine,
+    );
   }
 
   Future<Uint8List> readEntry(String entryPath) async {
@@ -1125,6 +1357,8 @@ typedef _ParsedOpf = ({
   List<_SpineRef> spineRefs,
   String? tocId,
   String? coverMetaId,
+  bool opfDeclaresComic,
+  bool isRtlProgression,
 });
 
 final _descriptionBlockPattern = RegExp(
@@ -1197,7 +1431,14 @@ _ParsedOpf _parseOpfDocument(
     }
     final spine = _firstElement(opf, 'spine');
     final spineRefs = <_SpineRef>[];
+    var isRtlProgression = false;
     if (spine != null) {
+      if ((_attr(spine, 'page-progression-direction') ?? '')
+              .trim()
+              .toLowerCase() ==
+          'rtl') {
+        isRtlProgression = true;
+      }
       for (final ref in spine.childElements) {
         if (ref.name.local.toLowerCase() != 'itemref') continue;
         final isNonLinear =
@@ -1209,14 +1450,32 @@ _ParsedOpf _parseOpfDocument(
       }
     }
     String? coverMetaId;
-    for (final meta in _elements(metadata, 'meta')) {
-      if ((_attr(meta, 'name') ?? '').trim().toLowerCase() != 'cover') {
-        continue;
+    var opfDeclaresComic = false;
+    for (final typeEl in _elements(metadata, 'type')) {
+      final t = typeEl.innerText.trim().toLowerCase();
+      if (t == 'comic' || t == 'manga' || t == 'comics') {
+        opfDeclaresComic = true;
       }
+    }
+    for (final meta in _elements(metadata, 'meta')) {
+      final metaName = (_attr(meta, 'name') ?? '').trim().toLowerCase();
+      final metaProp = (_attr(meta, 'property') ?? '').trim().toLowerCase();
       final content = (_attr(meta, 'content') ?? '').trim();
-      if (content.isNotEmpty) {
+      final lowerContent = content.toLowerCase();
+      final lowerInner = meta.innerText.trim().toLowerCase();
+      if (metaName == 'cover' && content.isNotEmpty && coverMetaId == null) {
         coverMetaId = content;
-        break;
+      }
+      if ((metaName == 'fixed-layout' && lowerContent == 'true') ||
+          (metaName == 'book-type' && lowerContent == 'comic') ||
+          (metaName == 'regionmagnification' && lowerContent == 'true') ||
+          ((metaProp == 'rendition:layout' || metaProp.endsWith(':layout')) &&
+              lowerInner == 'pre-paginated')) {
+        opfDeclaresComic = true;
+      }
+      if (metaName == 'primary-writing-mode' &&
+          lowerContent == 'horizontal-rl') {
+        isRtlProgression = true;
       }
     }
     return (
@@ -1227,6 +1486,8 @@ _ParsedOpf _parseOpfDocument(
       spineRefs: spineRefs,
       tocId: spine == null ? null : _attr(spine, 'toc'),
       coverMetaId: coverMetaId,
+      opfDeclaresComic: opfDeclaresComic,
+      isRtlProgression: isRtlProgression,
     );
   }
 
@@ -1249,6 +1510,8 @@ _ParsedOpf _parseOpfDocument(
   final spineRefs = <_SpineRef>[];
   String? tocId;
   String? coverMetaId;
+  var opfDeclaresComic = false;
+  var isRtlProgression = false;
   for (final match in _markupTokens.allMatches(cleaned)) {
     final tag = match.group(0)!;
     if (_isClosingTag(tag)) continue;
@@ -1277,6 +1540,12 @@ _ParsedOpf _parseOpfDocument(
       manifestOrder.add(item);
     } else if (name == 'spine') {
       tocId ??= _tagAttribute(tag, 'toc');
+      if ((_tagAttribute(tag, 'page-progression-direction') ?? '')
+              .trim()
+              .toLowerCase() ==
+          'rtl') {
+        isRtlProgression = true;
+      }
     } else if (name == 'itemref') {
       final isNonLinear =
           (_tagAttribute(tag, 'linear') ?? '').trim().toLowerCase() == 'no';
@@ -1285,11 +1554,29 @@ _ParsedOpf _parseOpfDocument(
         nonLinear: isNonLinear,
       ));
     } else if (name == 'meta') {
-      if ((_tagAttribute(tag, 'name') ?? '').trim().toLowerCase() == 'cover') {
-        final content = (_tagAttribute(tag, 'content') ?? '').trim();
-        if (content.isNotEmpty) coverMetaId ??= content;
+      final metaName = (_tagAttribute(tag, 'name') ?? '').trim().toLowerCase();
+      final content = (_tagAttribute(tag, 'content') ?? '').trim();
+      final lowerContent = content.toLowerCase();
+      if (metaName == 'cover' && content.isNotEmpty) {
+        coverMetaId ??= content;
+      }
+      if ((metaName == 'fixed-layout' && lowerContent == 'true') ||
+          (metaName == 'book-type' && lowerContent == 'comic') ||
+          (metaName == 'regionmagnification' && lowerContent == 'true')) {
+        opfDeclaresComic = true;
+      }
+      if (metaName == 'primary-writing-mode' &&
+          lowerContent == 'horizontal-rl') {
+        isRtlProgression = true;
       }
     }
+  }
+  if (!opfDeclaresComic &&
+      RegExp(
+        r'rendition:layout[^>]*>\s*pre-paginated\s*<',
+        caseSensitive: false,
+      ).hasMatch(cleaned)) {
+    opfDeclaresComic = true;
   }
   final titleMatch = RegExp(
     r'<(?:[\w.\-]+:)?title\b[^>]*>([\s\S]*?)</(?:[\w.\-]+:)?title\s*>',
@@ -1311,6 +1598,8 @@ _ParsedOpf _parseOpfDocument(
     spineRefs: spineRefs,
     tocId: tocId,
     coverMetaId: coverMetaId,
+    opfDeclaresComic: opfDeclaresComic,
+    isRtlProgression: isRtlProgression,
   );
 }
 
@@ -1357,7 +1646,7 @@ List<String> _discoverFallbackChapterEntries(Map<String, ArchiveFile> entries) {
   final htmlExt = RegExp(r'\.(?:x?html?|htm|xml)$', caseSensitive: false);
   final txtExt = RegExp(r'\.txt$', caseSensitive: false);
   final skipNames = RegExp(
-    r'(?:^|/)(?:toc|nav|ncx|container|content|package|copyright|license)\.(?:x?html?|xml)$',
+    r'(?:^|/)(?:toc|nav|ncx|container|content|package|copyright|license|comicinfo)\.(?:x?html?|xml)$',
     caseSensitive: false,
   );
   for (final entry in entries.entries) {
@@ -1467,6 +1756,31 @@ Future<EpubPackage> _parseArchiveWithoutOpf(
   // 2. 若压缩包内是直接打包的 HTML / TXT 章节文件（无 container.xml 与 OPF），自动合成章节列表。
   final fallbackHrefs = _discoverFallbackChapterEntries(entries);
   if (fallbackHrefs.isEmpty) {
+    // 3. 若压缩包内仅包含漫画图片（如将 .cbz 改后缀为 .epub），按自然序合成图片漫画章节。
+    final seenImg = <ArchiveFile>{};
+    final imageKeys = <String>[];
+    for (final entry in entries.entries) {
+      if (entry.key.toLowerCase().startsWith('meta-inf/')) continue;
+      if (!_rasterImageEntryPattern.hasMatch(entry.key)) continue;
+      if (seenImg.add(entry.value)) imageKeys.add(entry.key);
+    }
+    if (imageKeys.isNotEmpty) {
+      imageKeys.sort(_naturalPathCompare);
+      final imgChapters = <EpubChapter>[
+        for (var i = 0; i < imageKeys.length; i++)
+          EpubChapter(title: '第 ${i + 1} 页', href: imageKeys[i]),
+      ];
+      return EpubPackage._(
+        input: input,
+        entries: entries,
+        title: '',
+        author: null,
+        coverEntry: imageKeys.first,
+        chapters: imgChapters,
+        chapterBlocks: const <int, List<EpubBlock>>{},
+        isComicLayout: true,
+      );
+    }
     throw StateError('无效的 EPUB：找不到 OPF 文件');
   }
   final chapters = <EpubChapter>[];

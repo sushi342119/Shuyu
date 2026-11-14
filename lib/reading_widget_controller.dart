@@ -429,14 +429,15 @@ Future<String?> cachedReadingWidgetCover(
   final url =
       state.localLibrary?.novelFor(id)?.coverUrl ??
       state.cachedNovel(id)?.coverUrl;
-  if (url == null) return null;
+  final hasLocal = LegacyCover.hasLocalCover(id);
+  if (url == null && !hasLocal) return null;
   try {
     final directory = Directory(
       '${(await getApplicationSupportDirectory()).path}/reading-widget-covers-v1',
     );
     final target = File('${directory.path}/$id.png');
     if (await target.exists()) return target.path;
-    final Uint8List bytes = url.startsWith('file://')
+    final Uint8List bytes = url != null && url.startsWith('file://')
         ? await File(Uri.parse(url).toFilePath()).readAsBytes()
         : await LegacyCover.bytes(id);
     final codec = await ui.instantiateImageCodec(bytes, targetWidth: 360);

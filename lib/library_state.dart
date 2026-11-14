@@ -637,7 +637,7 @@ class LibraryState extends ChangeNotifier {
     }
     await _queuePositionWrite(() async {
       if (_readerStore.readerTypeface == choice) return;
-      await _commitLibraryRecords({'readerTypeface': choice});
+      await writeLibraryPreference(_prefs, 'readerTypeface', choice);
       _readerStore.readerTypeface = choice;
       if (!_disposed) {
         _application.notifyListeners();
@@ -1079,7 +1079,8 @@ class LibraryState extends ChangeNotifier {
     final position = positionFor(novel.id);
     if (position == null) {
       final book = _localChapters?.bookFor(novel.id);
-      if (book?.kind == LocalBookKind.pdf) {
+      if (book?.kind == LocalBookKind.pdf ||
+          book?.kind == LocalBookKind.comic) {
         return _chapters.containsKey(novel.id) &&
             chapterFor(novel.id) >= count - 1;
       }
@@ -1259,6 +1260,13 @@ class LibraryState extends ChangeNotifier {
     return _queuePositionWrite(() async {
       if (id <= 0) return;
       final hidden = {..._hiddenHistory}..remove(id);
+      final hadMangaMode = _readerStore.mangaBookModes.containsKey(id);
+      final nextMangaModes = hadMangaMode
+          ? Map<int, String>.unmodifiable({
+              for (final entry in _readerStore.mangaBookModes.entries)
+                if (entry.key != id) entry.key: entry.value,
+            })
+          : _readerStore.mangaBookModes;
       final changes = <String, Object?>{
         'reading_position_$id': null,
         'chapter_$id': null,
@@ -1267,6 +1275,11 @@ class LibraryState extends ChangeNotifier {
         'listening.cursor.v1.$id': null,
         'novel_meta_$id': null,
         'reading_history_hidden': hidden.map((value) => '$value').toList(),
+        if (hadMangaMode)
+          UiPreferenceKeys.mangaBookModes: jsonEncode({
+            for (final entry in nextMangaModes.entries)
+              '${entry.key}': entry.value,
+          }),
       };
       final previous = {for (final key in changes.keys) key: _prefs.get(key)};
       try {
@@ -1289,9 +1302,16 @@ class LibraryState extends ChangeNotifier {
       _underlinesByChapter.remove(id);
       _annotationRanges.remove(id);
       _annotationsByChapter.remove(id);
+      if (hadMangaMode) {
+        _readerStore.mangaBookModes = nextMangaModes;
+      }
       if (!_disposed) {
         _bookmarkChanges.notifyListeners();
         _underlineChanges.notifyListeners();
+        if (hadMangaMode) {
+          _readerSettings.notifyListeners();
+          _shelfViewChanges.notifyListeners();
+        }
       }
       _historyChanged();
       notifyListeners();
@@ -1318,7 +1338,7 @@ class LibraryState extends ChangeNotifier {
     if (_acceptLocalPosition(novel, chapter)) return true;
     final book = _localChapters?.bookFor(novel.id);
     return book != null &&
-        book.kind == LocalBookKind.pdf &&
+        (book.kind == LocalBookKind.pdf || book.kind == LocalBookKind.comic) &&
         chapter >= 0 &&
         chapter < book.pageCount;
   }
@@ -2526,19 +2546,25 @@ class LibraryState extends ChangeNotifier {
     return result;
   }
 
-  /// PDF page bookmark. Same [ReaderBookmark] record as text books:
-  /// `chapter` is the 0-based page (as `chapter_<id>` already stores for PDF),
-  /// `chapterId` 0 so lookup falls back to the page index, offsets zero.
-  /// The generic [addBookmark] cannot be used because PDF page "chapters"
-  /// carry no revision and are refused by the local chapter guard.
+  /// Page-level bookmark (PDF & manga). Same [ReaderBookmark] record as text
+  /// books: `chapter` is the 0-based page (as `chapter_<id>` already stores
+  /// for PDF/comic), `chapterId` 0 so lookup falls back to the page index,
+  /// offsets zero. The generic [addBookmark] cannot be used because page
+  /// "chapters" carry no revision and are refused by the local chapter guard.
   Future<ReaderBookmark?> addPageBookmark({
     required Novel novel,
     required int page,
     required int pageCount,
+    String? title,
   }) async {
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then(
-        (_) => addPageBookmark(novel: novel, page: page, pageCount: pageCount),
+        (_) => addPageBookmark(
+          novel: novel,
+          page: page,
+          pageCount: pageCount,
+          title: title,
+        ),
       );
     }
     if (novel.id <= 0 || page < 0 || page >= pageCount) return null;
@@ -2558,11 +2584,14 @@ class LibraryState extends ChangeNotifier {
         throw const FormatException('本书书签已达 1000 个，请先整理书签');
       }
       final createdAt = DateTime.now();
+      final customTitle = title?.trim();
       final mark = ReaderBookmark(
         id: '${createdAt.microsecondsSinceEpoch}-${marks.length}',
         createdAt: createdAt.toUtc(),
         createdOffsetMinutes: createdAt.timeZoneOffset.inMinutes,
-        chapterTitle: '第 ${page + 1} 页',
+        chapterTitle: (customTitle != null && customTitle.isNotEmpty)
+            ? customTitle
+            : '第 ${page + 1} 页',
         position: ReadingPosition(
           chapter: page,
           chapterId: 0,
@@ -2814,6 +2843,15 @@ class LibraryState extends ChangeNotifier {
       );
     }
     if (!_acceptLocalSavePosition(novel, chapter)) return Future.value();
+    final localPageBook = isLocalNovelId(novel.id)
+        ? _localChapters?.bookFor(novel.id)
+        : null;
+    final isLocalPaged = localPageBook != null &&
+        (localPageBook.kind == LocalBookKind.pdf ||
+            localPageBook.kind == LocalBookKind.comic);
+    final chapterLimit = isLocalPaged
+        ? localPageBook.pageCount
+        : novel.chapters.length;
     if (novel.id <= 0 ||
         !offset.isFinite ||
         !maximum.isFinite ||
@@ -2821,13 +2859,15 @@ class LibraryState extends ChangeNotifier {
         !paragraphFraction.isFinite ||
         !textScale.isFinite ||
         chapter < 0 ||
-        chapter >= novel.chapters.length) {
+        chapter >= chapterLimit) {
       return Future.value();
     }
     final position = ReadingPosition(
       chapter: chapter,
-      chapterId: novel.chapters[chapter].id,
-      revision: novel.chapters[chapter].revision,
+      chapterId: isLocalPaged ? 0 : novel.chapters[chapter].id,
+      revision: isLocalPaged
+          ? localPageBook.revision
+          : novel.chapters[chapter].revision,
       textOffset: textOffset,
       offset: offset.clamp(0, double.infinity),
       fraction: maximum > 0 ? (offset / maximum).clamp(0, 1) : 0,
@@ -3063,7 +3103,12 @@ class LibraryState extends ChangeNotifier {
     }
     await _queuePositionWrite(() async {
       if (_performanceStore.haptics == value) return;
-      await _commitLibraryRecords(value.toRecords());
+      final encoded = value.toRecords()[HapticPreferences.preferenceKey]!;
+      await writeLibraryPreference(
+        _prefs,
+        HapticPreferences.preferenceKey,
+        encoded,
+      );
       _performanceStore.haptics = value;
       if (!_disposed) {
         _application.notifyListeners();
@@ -3269,6 +3314,42 @@ class LibraryState extends ChangeNotifier {
         () => _readerStore.readerPreferences = value,
         reader: true,
       );
+
+  /// 单本书的阅读器模式覆盖：`'manga'`（强制漫画阅读器）、`'normal'`（强制常规阅读器）或 `null`（自动判断）。
+  String? bookMangaModeOverride(int bookId) =>
+      _readerStore.mangaBookModes[bookId];
+
+  /// 判断某本书是否应使用漫画阅读器打开（兼用于书架「漫画」格式筛选）。
+  bool isMangaModeForBook(int bookId, {LocalBook? book}) {
+    final resolved = book ?? _localChapters?.bookFor(bookId);
+    if (resolved?.kind == LocalBookKind.comic) return true;
+    final override = _readerStore.mangaBookModes[bookId];
+    if (override == 'manga') return true;
+    if (override == 'normal') return false;
+    return resolved?.isComicEpub ?? false;
+  }
+
+  Future<void> setBookMangaModeOverride(int bookId, String? mode) {
+    if (bookId <= 0) return Future<void>.value();
+    if (mode != null && mode != 'manga' && mode != 'normal') {
+      throw ArgumentError.value(mode, 'mode', 'Expected manga, normal, or null');
+    }
+    final next = <int, String>{
+      for (final entry in _readerStore.mangaBookModes.entries)
+        if (entry.key != bookId) entry.key: entry.value,
+      bookId: ?mode,
+    };
+    final frozen = Map<int, String>.unmodifiable(next);
+    return _writeUiPreference(
+      UiPreferenceKeys.mangaBookModes,
+      jsonEncode({
+        for (final entry in frozen.entries) '${entry.key}': entry.value,
+      }),
+      () => _readerStore.mangaBookModes = frozen,
+      reader: true,
+      shelf: true,
+    );
+  }
 
   Future<void> _writeLibraryBatch(Map<String, Object> changes) async {
     if (LocalPlatform.android) {

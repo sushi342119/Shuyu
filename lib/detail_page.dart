@@ -356,7 +356,16 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
         : null;
     final local = localLibraryOf(repository);
     final localBook = local?.bookFor(novel.id);
-    final chapterUnit = localBook?.kind == LocalBookKind.pdf ? '页' : '章';
+    final chapterUnit =
+        (localBook?.kind == LocalBookKind.pdf ||
+            localBook?.kind == LocalBookKind.comic)
+        ? '页'
+        : '章';
+    final comicChapters =
+        (localBook?.kind == LocalBookKind.comic &&
+            localBook!.chapters.length > 1)
+        ? localBook.chapters
+        : null;
     final scheme = Theme.of(context).colorScheme;
     final authorEmpty = novel.author.trim().isEmpty;
     return Scaffold(
@@ -710,10 +719,14 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                               '目录',
                                               novel.chapters.isEmpty
                                                   ? ''
+                                                  : comicChapters != null
+                                                  ? '共 ${comicChapters.length} 话 · ${novel.chapters.length} 页'
                                                   : '共 ${novel.chapters.length} $chapterUnit',
                                             ),
                                           ),
-                                          if (novel.chapters.length > 1) ...[
+                                          if ((comicChapters?.length ??
+                                                  novel.chapters.length) >
+                                              1) ...[
                                             GlassIconButton(
                                               key: const ValueKey(
                                                 'detail-directory-sort',
@@ -757,21 +770,45 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                         padding: const EdgeInsets.symmetric(horizontal: 24),
                         // Keep the directory out of a single tall Column: only
                         // visible/cache-nearby rows build, lay out and paint.
-                        sliver: SliverList.builder(
-                          itemCount: novel.chapters.length,
-                          itemBuilder: (context, index) {
-                            final chapterIndex = _reverseChapters
-                                ? novel.chapters.length - 1 - index
-                                : index;
-                            return RevealFromTop(
-                              key: ValueKey('detail-chapter-$chapterIndex'),
-                              animation: _contentIntro,
-                              start: .48 + index.clamp(0, 8) * .025,
-                              end: .78 + index.clamp(0, 8) * .025,
-                              child: _chapterRow(context, chapterIndex),
-                            );
-                          },
-                        ),
+                        sliver: comicChapters != null
+                            ? SliverList.builder(
+                                itemCount: comicChapters.length,
+                                itemBuilder: (context, index) {
+                                  final chapterIndex = _reverseChapters
+                                      ? comicChapters.length - 1 - index
+                                      : index;
+                                  return RevealFromTop(
+                                    key: ValueKey(
+                                      'detail-chapter-$chapterIndex',
+                                    ),
+                                    animation: _contentIntro,
+                                    start: .48 + index.clamp(0, 8) * .025,
+                                    end: .78 + index.clamp(0, 8) * .025,
+                                    child: _comicChapterRow(
+                                      context,
+                                      chapterIndex,
+                                      comicChapters,
+                                    ),
+                                  );
+                                },
+                              )
+                            : SliverList.builder(
+                                itemCount: novel.chapters.length,
+                                itemBuilder: (context, index) {
+                                  final chapterIndex = _reverseChapters
+                                      ? novel.chapters.length - 1 - index
+                                      : index;
+                                  return RevealFromTop(
+                                    key: ValueKey(
+                                      'detail-chapter-$chapterIndex',
+                                    ),
+                                    animation: _contentIntro,
+                                    start: .48 + index.clamp(0, 8) * .025,
+                                    end: .78 + index.clamp(0, 8) * .025,
+                                    child: _chapterRow(context, chapterIndex),
+                                  );
+                                },
+                              ),
                       ),
                     SliverToBoxAdapter(
                       child: SizedBox(
@@ -835,6 +872,40 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
 
   Future<void> _openDirectorySheet(BuildContext context) async {
     if (novel.chapters.isEmpty) return;
+    final localBook = localLibraryOf(repository)?.bookFor(novel.id);
+    final comicChapters =
+        (localBook?.kind == LocalBookKind.comic &&
+            localBook!.chapters.length > 1)
+        ? localBook.chapters
+        : null;
+    if (comicChapters != null) {
+      final resumePage = state.chapterForNovel(novel);
+      var currentIdx = 0;
+      for (var i = 0; i < comicChapters.length; i++) {
+        if (resumePage >= comicChapters[i].offset) {
+          currentIdx = i;
+        } else {
+          break;
+        }
+      }
+      final syntheticNovel = novel.withChapters([
+        for (var i = 0; i < comicChapters.length; i++)
+          NovelChapter(comicChapters[i].title, '', id: i),
+      ]);
+      final picked = await showJellySheet<int>(
+        context: context,
+        reduceMotion: state.reduceMotion,
+        builder: (_) => ReaderCatalogue(
+          novel: syntheticNovel,
+          currentChapter: currentIdx,
+        ),
+      );
+      if (!context.mounted || picked == null) return;
+      if (picked >= 0 && picked < comicChapters.length) {
+        await _openReader(context, comicChapters[picked].offset);
+      }
+      return;
+    }
     final picked = await showJellySheet<int>(
       context: context,
       reduceMotion: state.reduceMotion,
@@ -853,11 +924,87 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     if (loadError != null) return '重试加载目录';
     if (novel.chapters.isEmpty) return '暂无可读章节';
     final action = state.hasRead(novel.id) ? '继续阅读' : '开始阅读';
+    final kind = localLibraryOf(repository)?.kindFor(novel.id);
     final unit =
-        localLibraryOf(repository)?.kindFor(novel.id) == LocalBookKind.pdf
-        ? '页'
-        : '章';
+        (kind == LocalBookKind.pdf || kind == LocalBookKind.comic) ? '页' : '章';
     return '$action · 第${state.chapterForNovel(novel) + 1}$unit';
+  }
+
+  Widget _comicChapterRow(
+    BuildContext context,
+    int index,
+    List<LocalChapterIndex> comicChapters,
+  ) {
+    final chapter = comicChapters[index];
+    final resume = _resumeChapter;
+    final isCurrent =
+        resume != null &&
+        resume >= chapter.offset &&
+        resume < chapter.offset + chapter.length;
+    return JellyTapSurface(
+      onTap: () => _openReader(context, chapter.offset),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 17),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(color: Theme.of(context).dividerColor),
+          ),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 44,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  (index + 1).toString().padLeft(2, '0'),
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    chapter.title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w500,
+                      fontSize: 14,
+                    ),
+                  ),
+                  Text(
+                    '第 ${chapter.offset + 1} 页起 · ${chapter.length} 页',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (isCurrent) ...[
+              const SizedBox(width: 8),
+              Text(
+                '上次阅读',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
+            const ArchiveIcon(CupertinoIcons.chevron_right, size: 14),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _chapterRow(BuildContext context, int index) {
@@ -982,7 +1129,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
           },
         ),
       ),
-      // 本地书：更多操作（删除文件）。
+      // 本地书：更多操作（切换漫画模式、删除文件）。
       if (localLibraryOf(repository)?.bookFor(novel.id) != null)
         GlassIconButton(
           icon: CupertinoIcons.ellipsis,
@@ -993,16 +1140,26 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     );
   }
 
-  /// 详情页的本地书操作菜单：删除文件。
+  /// 详情页的本地书操作菜单：EPUB/PDF 漫画模式切换与删除文件。
   Future<void> _detailMenu(BuildContext context) async {
     final local = localLibraryOf(repository);
-    if (local == null || local.bookFor(novel.id) == null) return;
+    final book = local?.bookFor(novel.id);
+    if (local == null || book == null) return;
+    final canToggleManga =
+        book.kind == LocalBookKind.epub || book.kind == LocalBookKind.pdf;
+    final currentlyManga =
+        canToggleManga && state.isMangaModeForBook(novel.id, book: book);
     final action = await showGlassMenu<String>(
       context: context,
       reduceMotion: state.reduceMotion,
       builder: (menuContext) => Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (canToggleManga)
+            GlassMenuItem(
+              label: currentlyManga ? '切换为常规阅读器' : '以漫画模式阅读',
+              onPressed: () => Navigator.of(menuContext).pop('toggle_manga'),
+            ),
           GlassMenuItem(
             label: '删除文件',
             onPressed: () => Navigator.of(menuContext).pop('delete'),
@@ -1011,6 +1168,22 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       ),
     );
     if (!mounted || !context.mounted || action == null) return;
+    if (action == 'toggle_manga') {
+      final nextMode = currentlyManga ? 'normal' : 'manga';
+      try {
+        await state.setBookMangaModeOverride(novel.id, nextMode);
+        if (mounted && context.mounted) {
+          setState(() {});
+          showNovelFeedback(
+            context,
+            nextMode == 'manga' ? '已设为漫画阅读模式' : '已切换为常规阅读器',
+          );
+        }
+      } catch (_) {
+        if (context.mounted) showNovelFeedback(context, '阅读模式保存失败，请重试');
+      }
+      return;
+    }
     if (action == 'delete') {
       await _deleteDetailBookFile(context, local, novel.id);
     }
@@ -1110,7 +1283,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
 }
 
 /// One place decides which reader opens a book, so every entry point (detail
-/// page, bookmark library, …) gets the same TXT / EPUB / PDF reader.
+/// page, bookmark library, …) gets the same TXT / EPUB / PDF / Manga reader.
 Widget readerPageFor({
   required Novel novel,
   required LibraryState state,
@@ -1119,8 +1292,27 @@ Widget readerPageFor({
   ReaderBookmark? bookmark,
 }) {
   final local = localLibraryOf(repository);
-  final kind = local?.kindFor(novel.id);
+  final localBook = local?.bookFor(novel.id);
+  final kind = localBook?.kind ?? local?.kindFor(novel.id);
+  if (local != null && kind == LocalBookKind.comic) {
+    return LocalMangaReaderPage(
+      novel: novel,
+      state: state,
+      local: local,
+      initialPage: bookmark?.position.chapter,
+      initialChapter: bookmark == null ? chapter : null,
+    );
+  }
   if (local != null && kind == LocalBookKind.pdf) {
+    if (state.isMangaModeForBook(novel.id, book: localBook)) {
+      return LocalMangaReaderPage(
+        novel: novel,
+        state: state,
+        local: local,
+        initialPage: bookmark?.position.chapter,
+        initialChapter: bookmark == null ? chapter : null,
+      );
+    }
     return LocalPdfReaderPage(
       novel: novel,
       state: state,
@@ -1130,6 +1322,17 @@ Widget readerPageFor({
     );
   }
   if (local != null && kind == LocalBookKind.epub) {
+    if (state.isMangaModeForBook(novel.id, book: localBook)) {
+      final isMangaPageBookmark =
+          bookmark != null && bookmark.position.chapterId == 0;
+      return LocalMangaReaderPage(
+        novel: novel,
+        state: state,
+        local: local,
+        initialPage: isMangaPageBookmark ? bookmark.position.chapter : null,
+        initialChapter: isMangaPageBookmark ? null : chapter,
+      );
+    }
     // EPUB bookmarks land on their chapter; the EPUB reader has no
     // paragraph-level landing yet, so the stored offset is not replayed.
     return LocalEpubReaderPage(

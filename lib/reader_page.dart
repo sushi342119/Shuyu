@@ -707,7 +707,8 @@ class _ReaderPageState extends State<ReaderPage>
     // TXT 用章节索引的 length 做权重，PDF 按页等权；在线书才用 content 长度。
     final local = localLibraryOf(widget.repository)?.bookFor(_novel.id);
     if (local != null) {
-      if (local.kind == LocalBookKind.pdf) {
+      if (local.kind == LocalBookKind.pdf ||
+          local.kind == LocalBookKind.comic) {
         _chapterWeights = List.filled(_novel.chapters.length, 1);
       } else {
         _chapterWeights = [for (final c in local.chapters) c.length];

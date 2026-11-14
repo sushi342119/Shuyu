@@ -11,6 +11,7 @@ import 'reader_skeleton.dart';
 import 'catalog.dart';
 import 'library_state.dart';
 import 'local_library.dart';
+import 'local_manga_reader.dart';
 import 'local_platform.dart';
 import 'reading_activity.dart';
 
@@ -36,6 +37,25 @@ class LocalPdfReaderPage extends StatefulWidget {
   State<LocalPdfReaderPage> createState() => _LocalPdfReaderPageState();
 }
 
+final Map<String, int> _sharedActivePdfReaders = <String, int>{};
+
+String? acquireActivePdfReader(String? uri) {
+  if (uri == null || uri.isEmpty) return null;
+  _sharedActivePdfReaders[uri] = (_sharedActivePdfReaders[uri] ?? 0) + 1;
+  return uri;
+}
+
+void releaseActivePdfReader(String? uri) {
+  if (uri == null || uri.isEmpty) return;
+  final remaining = (_sharedActivePdfReaders[uri] ?? 1) - 1;
+  if (remaining <= 0) {
+    _sharedActivePdfReaders.remove(uri);
+    unawaited(LocalPlatform.clearPdfCache(uri).catchError((_) {}));
+  } else {
+    _sharedActivePdfReaders[uri] = remaining;
+  }
+}
+
 class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   late final AnimationController _chrome;
@@ -49,7 +69,6 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
   bool _addingBookmark = false;
   final Map<int, Future<String>> _pending = {};
 
-  static final Map<String, int> _activePdfReaders = <String, int>{};
   String? _openedFileUri;
 
   int get _pageCount {
@@ -70,11 +89,9 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    final openedUri = widget.local.bookFor(widget.novel.id)?.fileUri;
-    if (openedUri != null && openedUri.isNotEmpty) {
-      _openedFileUri = openedUri;
-      _activePdfReaders[openedUri] = (_activePdfReaders[openedUri] ?? 0) + 1;
-    }
+    _openedFileUri = acquireActivePdfReader(
+      widget.local.bookFor(widget.novel.id)?.fileUri,
+    );
     _readingActivity = ReadingActivitySession(
       store: widget.state.readingActivity,
       bookId: widget.novel.id,
@@ -128,16 +145,9 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _readingActivity.dispose();
-    final openedUri = _openedFileUri ?? widget.local.bookFor(widget.novel.id)?.fileUri;
-    if (openedUri != null && openedUri.isNotEmpty) {
-      final remaining = (_activePdfReaders[openedUri] ?? 1) - 1;
-      if (remaining <= 0) {
-        _activePdfReaders.remove(openedUri);
-        unawaited(LocalPlatform.clearPdfCache(openedUri).catchError((_) {}));
-      } else {
-        _activePdfReaders[openedUri] = remaining;
-      }
-    }
+    releaseActivePdfReader(
+      _openedFileUri ?? widget.local.bookFor(widget.novel.id)?.fileUri,
+    );
     _controller.dispose();
     _chrome.dispose();
     super.dispose();
@@ -227,6 +237,23 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
     if (page != null && mounted) _controller.jumpToPage(page);
   }
 
+  Future<void> _switchToMangaReader() async {
+    widget.state.setChapter(widget.novel.id, _page);
+    await widget.state.setBookMangaModeOverride(widget.novel.id, 'manga');
+    if (!mounted) return;
+    await Navigator.of(context).pushReplacement(
+      softRoute<void>(
+        LocalMangaReaderPage(
+          novel: widget.novel,
+          state: widget.state,
+          local: widget.local,
+          initialPage: _page,
+        ),
+        reduceMotion: widget.state.effectiveReduceMotion,
+      ),
+    );
+  }
+
   List<ReaderAction> _actions() => [
     ReaderAction(
       key: const ValueKey('reader-catalogue-entry'),
@@ -236,11 +263,13 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
       onPressed: _pageCount == 0 ? null : _navigation,
       unavailable: _pageCount == 0 ? '无法读取该 PDF' : null,
     ),
-    const ReaderAction(
-      icon: CupertinoIcons.textformat_size,
-      caption: '设置',
-      label: '阅读设置',
-      unavailable: 'PDF 不支持排版调节：页面按原版式渲染，可双指缩放',
+    ReaderAction(
+      key: const ValueKey('pdf-switch-manga-entry'),
+      icon: CupertinoIcons.square_split_2x1,
+      caption: '漫画',
+      label: '以漫画模式阅读',
+      onPressed: _pageCount == 0 ? null : _switchToMangaReader,
+      unavailable: _pageCount == 0 ? '无法读取该 PDF' : null,
     ),
     ReaderAction(
       key: const ValueKey('reader-appearance-entry'),

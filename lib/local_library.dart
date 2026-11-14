@@ -15,11 +15,24 @@ import 'catalog.dart';
 import 'chapter_splitter.dart';
 export 'chapter_splitter.dart' show LocalChapterIndex;
 import 'local_platform.dart';
+import 'local_comic.dart';
+export 'local_comic.dart'
+    show
+        ComicArchivePackage,
+        ComicChapterInfo,
+        ComicFolderManifest,
+        ComicFolderPageEntry,
+        ComicInfoMetadata,
+        isCbzFileName,
+        isComicImageFileName,
+        isComicZipFile,
+        isComicZipBytes;
 import 'local_epub.dart';
 import 'local_mobi.dart';
 export 'local_mobi.dart' show isMobiFileName, extractMobiBook, MobiBookData;
 import 'book_tags.dart';
 import 'filename_tags.dart';
+import 'legacy_cover.dart';
 import 'local_record_removal.dart';
 import 'portable_book_prepare.dart';
 import 'recovery_archive.dart';
@@ -66,14 +79,19 @@ class IncompleteScanException implements Exception {
   };
 }
 
-enum LocalBookKind { txt, pdf, epub }
+enum LocalBookKind { txt, pdf, epub, comic }
 
 LocalBookKind? localBookKindForFileName(String name) {
   final lower = name.toLowerCase();
   if (lower.endsWith('.txt')) return LocalBookKind.txt;
   if (lower.endsWith('.pdf')) return LocalBookKind.pdf;
   if (lower.endsWith('.epub')) return LocalBookKind.epub;
+  if (lower.endsWith('.cbz')) return LocalBookKind.comic;
   return null;
+}
+
+class _NonComicZipSkipException implements Exception {
+  const _NonComicZipSkipException();
 }
 
 final _bookRevisionCache = Expando<String>();
@@ -104,6 +122,32 @@ class _CachedEpubSession {
     if (evicted && activeReaders <= 0) {
       try {
         await package.close();
+      } catch (_) {}
+    }
+  }
+}
+
+class _CachedComicSession {
+  _CachedComicSession({
+    required this.localPath,
+    required this.fileSize,
+    required this.fileModifiedMicros,
+    required this.sourceFingerprint,
+    required this.package,
+  });
+
+  final String localPath;
+  final int fileSize;
+  final int fileModifiedMicros;
+  final String sourceFingerprint;
+  final ComicArchivePackage package;
+  int activeReaders = 0;
+  bool evicted = false;
+
+  void releaseIfIdle() {
+    if (evicted && activeReaders <= 0) {
+      try {
+        package.close();
       } catch (_) {}
     }
   }
@@ -173,6 +217,9 @@ class LocalBook {
     this.coverEntry,
     this.customTocPattern,
     this.customMaxChapterChars = 0,
+    this.isComicFolder = false,
+    this.isComicEpub = false,
+    this.isRtlProgression = false,
   });
 
   final int id;
@@ -203,7 +250,7 @@ class LocalBook {
   /// EPUB spine 章节的 XHTML 路径，与 chapters 等长并行；非 EPUB 书为空。
   final List<String> epubChapterHrefs;
 
-  /// EPUB 封面图在 ZIP 内的路径；无封面或非 EPUB 书为 null。
+  /// EPUB / CBZ 封面图在 ZIP 内的路径；无封面时为 null。
   final String? coverEntry;
 
   /// 用户为单本 TXT 指定的目录正则与超长分节上限。
@@ -213,6 +260,15 @@ class LocalBook {
   bool get hasCustomChapterSplit =>
       (customTocPattern != null && customTocPattern!.isNotEmpty) ||
       customMaxChapterChars > 0;
+
+  /// 是否为本地图片目录形态的漫画（无单一压缩包文件）。
+  final bool isComicFolder;
+
+  /// EPUB 是否被自动识别为固定版式/纯图流漫画 EPUB。
+  final bool isComicEpub;
+
+  /// 是否声明为日漫右翻（RTL）装订方向。
+  final bool isRtlProgression;
 
   String get revision => _bookRevisionCache[this] ??= sha256
       .convert(
@@ -256,6 +312,9 @@ class LocalBook {
     String? coverEntry,
     Object? customTocPattern = _unset,
     int? customMaxChapterChars,
+    bool? isComicFolder,
+    bool? isComicEpub,
+    bool? isRtlProgression,
   }) => LocalBook(
     id: id,
     title: title ?? this.title,
@@ -282,6 +341,9 @@ class LocalBook {
         ? this.customTocPattern
         : customTocPattern as String?,
     customMaxChapterChars: customMaxChapterChars ?? this.customMaxChapterChars,
+    isComicFolder: isComicFolder ?? this.isComicFolder,
+    isComicEpub: isComicEpub ?? this.isComicEpub,
+    isRtlProgression: isRtlProgression ?? this.isRtlProgression,
   );
 
   Map<String, Object?> toJson() => {
@@ -310,6 +372,9 @@ class LocalBook {
       'customTocPattern': customTocPattern,
     if (customMaxChapterChars > 0)
       'customMaxChapterChars': customMaxChapterChars,
+    if (isComicFolder) 'isComicFolder': true,
+    if (isComicEpub) 'isComicEpub': true,
+    if (isRtlProgression) 'isRtlProgression': true,
   };
 
   factory LocalBook.fromJson(Map<String, Object?> json) {
@@ -325,7 +390,9 @@ class LocalBook {
           ? LocalBookKind.pdf
           : json['kind'] == 'epub'
               ? LocalBookKind.epub
-              : LocalBookKind.txt,
+              : json['kind'] == 'comic'
+                  ? LocalBookKind.comic
+                  : LocalBookKind.txt,
       size: (json['size'] as num?)?.toInt() ?? 0,
       modified: (json['modified'] as num?)?.toInt() ?? 0,
       chapters: chapters is List
@@ -355,6 +422,9 @@ class LocalBook {
           : rawCustomToc.trim(),
       customMaxChapterChars:
           (json['customMaxChapterChars'] as num?)?.toInt() ?? 0,
+      isComicFolder: json['isComicFolder'] == true,
+      isComicEpub: json['isComicEpub'] == true,
+      isRtlProgression: json['isRtlProgression'] == true,
     );
   }
 }
@@ -526,7 +596,34 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     this._supportDir,
     this._operationTimeout,
     this._textWorker,
-  );
+  ) {
+    _liveStores.add(this);
+    _ensureCoverLoaderRegistered();
+  }
+
+  static final Set<LocalLibraryStore> _liveStores = <LocalLibraryStore>{};
+  static bool _coverLoaderRegistered = false;
+
+  static void _ensureCoverLoaderRegistered() {
+    if (_coverLoaderRegistered) return;
+    _coverLoaderRegistered = true;
+    LegacyCover.registerLocalLoader(
+      canLoad: (id) {
+        for (final store in _liveStores.toList().reversed) {
+          final book = store.bookFor(id);
+          if (book != null) return store._canLoadCoverForBook(book);
+        }
+        return false;
+      },
+      load: (id) async {
+        for (final store in _liveStores.toList().reversed) {
+          final book = store.bookFor(id);
+          if (book != null) return store.extractLocalCoverBytes(id);
+        }
+        throw const FormatException('本地书籍没有远程封面');
+      },
+    );
+  }
 
   final SharedPreferences _prefs;
   final Directory _supportDir;
@@ -600,6 +697,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   final LinkedHashMap<int, _CachedEpubSession> _epubSessionCache =
       LinkedHashMap();
   static const _epubSessionCacheMaxEntries = 3;
+  final LinkedHashMap<int, _CachedComicSession> _comicSessionCache =
+      LinkedHashMap();
+  final Map<int, ComicFolderManifest> _comicManifestCache = {};
 
   /// 串行化所有变更操作，防止扫描/删除/编辑竞态（修复#4）。
   Future<void> _mutationLock = Future.value();
@@ -717,7 +817,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       }
     }
     for (final loaded in parsed.books) {
-      final book = parseFilenameTags(loaded.fileName).tags.isEmpty
+      final book = loaded.isComicFolder ||
+              parseFilenameTags(loaded.fileName).tags.isEmpty
           ? loaded
           : _withFilenameMetadata(loaded, loaded.fileName);
       _books.add(book);
@@ -826,6 +927,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       _chapterSliceCacheBytes -= _chapterSliceCache.remove(key)!.length * 2;
     }
     _invalidateEpubCaches(id);
+    LegacyCover.evict(id);
   }
 
   void _cacheChapterSlice(String key, String text) {
@@ -848,12 +950,20 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     unawaited(session.releaseIfIdle());
   }
 
+  void _evictComicSession(_CachedComicSession session) {
+    session.evicted = true;
+    session.releaseIfIdle();
+  }
+
   /// 书修订变化、删除或重扫时调用：清掉该书的图片字节缓存，
   /// 指纹缓存按路径存放，无法可靠映射到书，直接整体清空（代价只是下次重算一次）。
   void _invalidateEpubCaches(int id) {
     _epubFingerprintCache.clear();
     final session = _epubSessionCache.remove(id);
     if (session != null) _evictEpubSession(session);
+    final comicSession = _comicSessionCache.remove(id);
+    if (comicSession != null) _evictComicSession(comicSession);
+    _comicManifestCache.remove(id);
     final prefix = '$id\u0000';
     final stale = [
       for (final key in _epubImageCache.keys)
@@ -870,6 +980,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       _evictEpubSession(session);
     }
     _epubSessionCache.clear();
+    for (final session in _comicSessionCache.values) {
+      _evictComicSession(session);
+    }
+    _comicSessionCache.clear();
+    _comicManifestCache.clear();
     _epubImageCache.clear();
     _epubImageCacheBytes = 0;
   }
@@ -913,9 +1028,12 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     String? fileUri,
     String? sourceKey,
   }) {
+    final parsedAuthor = _authorFromName(fileName);
     return book.copyWith(
       title: _titleFromName(fileName),
-      author: _authorFromName(fileName),
+      author: parsedAuthor.isNotEmpty || book.kind != LocalBookKind.comic
+          ? parsedAuthor
+          : book.author,
       fileUri: fileUri ?? book.fileUri,
       fileName: fileName,
       sourceKey: sourceKey ?? book.sourceKey,
@@ -930,6 +1048,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     if (openEpub != null) {
       openEpub.evicted = true;
       await openEpub.releaseIfIdle();
+    }
+    final openComic = _comicSessionCache.remove(book.id);
+    if (openComic != null) {
+      openComic.evicted = true;
+      openComic.releaseIfIdle();
     }
     if (utf8.encode(targetName).length > 255) {
       throw ArgumentError('文件名超过 255 字节，请缩短书名或标签');
@@ -1138,7 +1261,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     for (final original in _books.toList()) {
       if (sourceId != null && original.sourceId != sourceId) continue;
       final current = bookFor(original.id);
-      if (current == null) continue;
+      if (current == null || current.isComicFolder) continue;
       try {
         await tagStore.mergeTagNamesForBook(
           current.id,
@@ -1335,6 +1458,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           epubChapterHrefs: [for (final c in spine) c.href],
           coverEntry: package.coverEntry ?? book.coverEntry,
           chapterSplitVersion: _chapterSplitVersion,
+          isComicEpub: package.isComicLayout,
+          isRtlProgression: package.isRtlProgression,
           customTitle: book.customTitle,
           customAuthor: book.customAuthor,
         );
@@ -1415,7 +1540,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   });
 
   bool _isBookReadyWithoutLock(LocalBook book) {
-    if (book.kind == LocalBookKind.pdf) return true;
+    if (book.kind == LocalBookKind.pdf || book.kind == LocalBookKind.comic) {
+      return true;
+    }
     if (book.kind == LocalBookKind.epub) {
       return book.chapterSplitVersion == _chapterSplitVersion ||
           book.sourceFingerprint.isEmpty ||
@@ -2153,8 +2280,53 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           if (!scanResult.complete) {
             throw IncompleteScanException(scanResult.reason ?? 'unknown');
           }
-          final entries = scanResult.entries;
+          final rawEntries = scanResult.entries;
+          final entries = <Map<String, Object?>>[];
+          final folderCandidates = <ScannedFolderEntry>[];
+          final nonImageRelPaths = <String>[];
+          for (final entry in rawEntries) {
+            final name = entry['name'] as String? ?? '';
+            final uri = entry['uri'] as String? ?? '';
+            final rawRel = entry['relPath'] as String?;
+            final relPath =
+                (rawRel != null && rawRel.isNotEmpty) ? rawRel : name;
+            if (name.isNotEmpty &&
+                uri.isNotEmpty &&
+                (isComicImageFileName(name) || isComicInfoFileName(name))) {
+              folderCandidates.add(
+                ScannedFolderEntry(
+                  relPath: relPath,
+                  name: name,
+                  uri: uri,
+                  size: (entry['size'] as num?)?.toInt() ?? 0,
+                  modifiedMs: (entry['modified'] as num?)?.toInt() ?? 0,
+                  parentUri: entry['parentUri'] as String?,
+                ),
+              );
+            } else {
+              if (relPath.isNotEmpty) nonImageRelPaths.add(relPath);
+              if (name.isEmpty ||
+                  localBookKindForFileName(name) != null ||
+                  isMobiFileName(name) ||
+                  isZipFileName(name) ||
+                  name.toLowerCase().endsWith('.cbr') ||
+                  name.toLowerCase().endsWith('.cb7')) {
+                entries.add(entry);
+              }
+            }
+          }
+          final comicFolders = groupScannedComicFolders(
+            entries: folderCandidates,
+            rootKeyPrefix: sourceId,
+            rootFolderUri: treeUri,
+            rootDisplayName: scanResult.rootName.isNotEmpty
+                ? scanResult.rootName
+                : '本地漫画',
+            dirUrisByRelPath: scanResult.dirUris,
+            nonImageRelPaths: nonImageRelPaths,
+          );
           if (entries.isEmpty &&
+              comicFolders.isEmpty &&
               _books.any((book) => book.sourceId == sourceId)) {
             throw const IncompleteScanException('empty_result');
           }
@@ -2177,40 +2349,60 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           final seen = <String>{};
           final ignored = _readIgnoredSources();
           var added = 0, refreshed = 0, removed = 0, skipped = 0, backfilled = 0;
+          final totalUnits = entries.length + comicFolders.length;
           await _reserveIds(
             entries.where((entry) {
-              final uri = entry['uri'] as String? ?? '';
-              return uri.isNotEmpty &&
-                  !byKey.containsKey(uri) &&
-                  !byUriLegacy.containsKey(uri) &&
-                  !ignored.contains(
-                    LocalSourceIdentity.saf(treeUri, uri).ignoredKey,
-                  );
-            }).length,
+                  final uri = entry['uri'] as String? ?? '';
+                  return uri.isNotEmpty &&
+                      !byKey.containsKey(uri) &&
+                      !byUriLegacy.containsKey(uri) &&
+                      !ignored.contains(
+                        LocalSourceIdentity.saf(treeUri, uri).ignoredKey,
+                      );
+                }).length +
+                comicFolders.where((manifest) {
+                  final key =
+                      'comic_folder:${manifest.folderRelPath.isEmpty ? "." : manifest.folderRelPath}';
+                  return !byKey.containsKey(key) &&
+                      !ignored.contains(
+                        LocalSourceIdentity.saf(treeUri, key).ignoredKey,
+                      );
+                }).length,
           );
           var processed = 0;
           _updateScanProgress(
             scanning: true,
             processed: 0,
-            total: entries.length,
+            total: totalUnits,
             added: 0,
           );
           for (final entry in entries) {
             processed++;
-            if (entries.length <= 50 ||
+            if (totalUnits <= 50 ||
                 processed == 1 ||
-                processed == entries.length ||
+                processed == totalUnits ||
                 processed % 10 == 0) {
               _updateScanProgress(
                 scanning: true,
                 processed: processed,
-                total: entries.length,
+                total: totalUnits,
                 added: added,
               );
             }
             final uri = entry['uri'] as String? ?? '';
             final name = entry['name'] as String? ?? '';
             if (uri.isEmpty) continue;
+            final lowerName = name.toLowerCase();
+            if (lowerName.endsWith('.cbr')) {
+              failures[name] = '暂不支持 RAR/CBR 压缩格式，请转换为 CBZ 或 ZIP 后导入';
+              skipped++;
+              continue;
+            }
+            if (lowerName.endsWith('.cb7')) {
+              failures[name] = '暂不支持 7z/CB7 压缩格式，请转换为 CBZ 或 ZIP 后导入';
+              skipped++;
+              continue;
+            }
             final sourceKey = uri;
             seen.add(sourceKey);
             if (name.isEmpty) continue;
@@ -2247,6 +2439,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                 chapterUpdates[existing.id] = existing;
               }
               if ((existing.kind == LocalBookKind.pdf ||
+                      existing.kind == LocalBookKind.comic ||
                       (existing.kind == LocalBookKind.epub &&
                           (existing.chapterSplitVersion ==
                                   _chapterSplitVersion ||
@@ -2301,6 +2494,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                   sourceKey: sourceKey,
                   existing: existing,
                 );
+              } on _NonComicZipSkipException {
+                seen.remove(sourceKey);
+                continue;
               } catch (error) {
                 _recordScanFailure(failures, name, error);
                 skipped++;
@@ -2341,6 +2537,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                   sourceId: sourceId,
                   sourceKey: sourceKey,
                 );
+              } on _NonComicZipSkipException {
+                seen.remove(sourceKey);
+                continue;
               } catch (error) {
                 _recordScanFailure(failures, name, error);
                 skipped++;
@@ -2356,9 +2555,78 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
               _updateScanProgress(
                 scanning: true,
                 processed: processed,
-                total: entries.length,
+                total: totalUnits,
                 added: added,
               );
+            }
+          }
+          for (final manifest in comicFolders) {
+            processed++;
+            if (totalUnits <= 50 ||
+                processed == 1 ||
+                processed == totalUnits ||
+                processed % 10 == 0) {
+              _updateScanProgress(
+                scanning: true,
+                processed: processed,
+                total: totalUnits,
+                added: added,
+              );
+            }
+            final sourceKey =
+                'comic_folder:${manifest.folderRelPath.isEmpty ? "." : manifest.folderRelPath}';
+            seen.add(sourceKey);
+            if (ignored.contains(
+              LocalSourceIdentity.saf(treeUri, sourceKey).ignoredKey,
+            )) {
+              skipped++;
+              final existingIgnored = byKey[sourceKey];
+              if (existingIgnored != null) {
+                _removeBook(existingIgnored);
+                reconciledData.add(existingIgnored);
+                removed++;
+              }
+              continue;
+            }
+            final fingerprint = _computeFolderManifestFingerprint(manifest);
+            final existing = byKey[sourceKey];
+            if (existing != null &&
+                !force &&
+                existing.sourceFingerprint == fingerprint &&
+                await _comicManifestFile(existing.id).exists()) {
+              continue;
+            }
+            try {
+              final book = await _importComicFolder(
+                manifest: manifest,
+                sourceId: sourceId,
+                sourceKey: sourceKey,
+                defaultFileUri: manifest.folderUri.isNotEmpty
+                    ? manifest.folderUri
+                    : treeUri,
+                fingerprint: fingerprint,
+                existing: existing,
+              );
+              if (book == null) {
+                skipped++;
+                continue;
+              }
+              if (existing != null) {
+                chapterUpdates[book.id] = book;
+                refreshed++;
+              } else {
+                _addBook(book);
+                added++;
+                _updateScanProgress(
+                  scanning: true,
+                  processed: processed,
+                  total: totalUnits,
+                  added: added,
+                );
+              }
+            } catch (error) {
+              _recordScanFailure(failures, manifest.title, error);
+              skipped++;
             }
           }
           // 忽略名单清理：本来源下源文件已不在磁盘上的条目自动移除，
@@ -2539,67 +2807,139 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           final chapterUpdates = <int, LocalBook>{};
           final reconciledData = <LocalBook>[];
           var added = 0, refreshed = 0, removed = 0, skipped = 0, backfilled = 0;
-          final files = await dir
-              .list()
-              .where((e) => e is File)
-              .cast<File>()
-              .toList();
-          if (!files.any((file) {
-                final lowerPath = file.path.toLowerCase();
-                return lowerPath.endsWith('.txt') ||
-                    lowerPath.endsWith('.epub') ||
-                    isMobiFileName(lowerPath);
-              }) &&
+          final files = <File>[];
+          final folderCandidates = <ScannedFolderEntry>[];
+          final nonImageRelPaths = <String>[];
+          final dirUris = <String, String>{};
+          Future<void> walkAppDir(
+            Directory current,
+            String relPrefix,
+            int depth,
+          ) async {
+            if (depth > 14) return;
+            await for (final entity in current.list(followLinks: false)) {
+              final seg = entity.path.split(Platform.pathSeparator).last;
+              if (seg.isEmpty ||
+                  seg.startsWith('.') ||
+                  seg.toLowerCase() == '__macosx') {
+                continue;
+              }
+              final relPath = relPrefix.isEmpty ? seg : '$relPrefix/$seg';
+              if (entity is Directory) {
+                dirUris[relPath] = entity.path;
+                await walkAppDir(entity, relPath, depth + 1);
+              } else if (entity is File) {
+                if (isComicImageFileName(seg) || isComicInfoFileName(seg)) {
+                  try {
+                    final st = await entity.stat();
+                    if (st.type == FileSystemEntityType.file) {
+                      folderCandidates.add(
+                        ScannedFolderEntry(
+                          relPath: relPath,
+                          name: seg,
+                          uri: entity.path,
+                          size: st.size,
+                          modifiedMs: st.modified.millisecondsSinceEpoch,
+                          parentUri: entity.parent.path,
+                        ),
+                      );
+                    }
+                  } catch (_) {}
+                } else {
+                  nonImageRelPaths.add(relPath);
+                  final lower = seg.toLowerCase();
+                  if (localBookKindForFileName(lower) != null ||
+                      isMobiFileName(lower) ||
+                      lower.endsWith('.cbr') ||
+                      lower.endsWith('.cb7')) {
+                    files.add(entity);
+                  } else if (isZipFileName(lower)) {
+                    if (await isComicZipFile(entity.path)) {
+                      files.add(entity);
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          await walkAppDir(dir, '', 0);
+          final comicFolders = groupScannedComicFolders(
+            entries: folderCandidates,
+            rootKeyPrefix: sourceId,
+            rootFolderUri: Uri.file(dir.path).toString(),
+            rootDisplayName: '本地漫画',
+            dirUrisByRelPath: dirUris,
+            nonImageRelPaths: nonImageRelPaths,
+          );
+          if (files.isEmpty &&
+              comicFolders.isEmpty &&
               _books.any((book) => book.sourceId == sourceId)) {
             throw const IncompleteScanException('empty_result');
           }
+          final totalUnits = files.length + comicFolders.length;
           await _reserveIds(
             files
-                .where(
-                  (file) =>
-                      (file.path.toLowerCase().endsWith('.txt') ||
-                          file.path.toLowerCase().endsWith('.epub') ||
-                          isMobiFileName(file.path)) &&
-                      !byKey.containsKey(file.path) &&
-                      !byUriLegacy.containsKey('file://${file.path}') &&
-                      (!file.path.toLowerCase().endsWith('.epub') ||
+                    .where(
+                      (file) =>
+                          !byKey.containsKey(file.path) &&
+                          !byUriLegacy.containsKey('file://${file.path}') &&
                           !byUriLegacy.containsKey(
                             Uri.file(file.path).toString(),
-                          )) &&
+                          ) &&
+                          !ignored.contains(
+                            LocalSourceIdentity.appFolder(file.path).ignoredKey,
+                          ),
+                    )
+                    .length +
+                comicFolders.where((manifest) {
+                  final folderPath = manifest.folderRelPath.isEmpty
+                      ? dir.path
+                      : '${dir.path}/${manifest.folderRelPath}';
+                  return !byKey.containsKey(folderPath) &&
                       !ignored.contains(
-                        LocalSourceIdentity.appFolder(file.path).ignoredKey,
-                      ),
-                )
-                .length,
+                        LocalSourceIdentity.appFolder(folderPath).ignoredKey,
+                      );
+                }).length,
           );
           var processed = 0;
           _updateScanProgress(
             scanning: true,
             processed: 0,
-            total: files.length,
+            total: totalUnits,
             added: 0,
           );
           for (final file in files) {
             processed++;
-            if (files.length <= 50 ||
+            if (totalUnits <= 50 ||
                 processed == 1 ||
-                processed == files.length ||
+                processed == totalUnits ||
                 processed % 10 == 0) {
               _updateScanProgress(
                 scanning: true,
                 processed: processed,
-                total: files.length,
+                total: totalUnits,
                 added: added,
               );
             }
-            final name = file.path.split('/').last;
+            final name = file.path.split(Platform.pathSeparator).last;
             final lower = name.toLowerCase();
-            if (!lower.endsWith('.txt') &&
-                !lower.endsWith('.epub') &&
-                !isMobiFileName(lower)) {
+            if (lower.endsWith('.cbr')) {
+              failures[name] = '暂不支持 RAR/CBR 压缩格式，请转换为 CBZ 或 ZIP 后导入';
+              skipped++;
               continue;
             }
-            final uri = lower.endsWith('.epub')
+            if (lower.endsWith('.cb7')) {
+              failures[name] = '暂不支持 7z/CB7 压缩格式，请转换为 CBZ 或 ZIP 后导入';
+              skipped++;
+              continue;
+            }
+            final usesUriFile =
+                lower.endsWith('.epub') ||
+                lower.endsWith('.cbz') ||
+                lower.endsWith('.zip') ||
+                lower.endsWith('.pdf');
+            final uri = usesUriFile
                 ? Uri.file(file.path).toString()
                 : 'file://${file.path}';
             final legacy =
@@ -2646,15 +2986,19 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                 );
                 chapterUpdates[existing.id] = existing;
               }
-              if (existing.kind == LocalBookKind.epub &&
-                  existing.chapterSplitVersion == _chapterSplitVersion &&
+              if ((existing.kind == LocalBookKind.pdf ||
+                      existing.kind == LocalBookKind.comic ||
+                      (existing.kind == LocalBookKind.epub &&
+                          existing.chapterSplitVersion ==
+                              _chapterSplitVersion &&
+                          existing.chapters.isNotEmpty)) &&
                   !force &&
                   existing.size == size &&
-                  existing.modified == modified &&
-                  existing.chapters.isNotEmpty) {
+                  existing.modified == modified) {
                 continue;
               }
               if (!force &&
+                  existing.kind == LocalBookKind.txt &&
                   existing.size == size &&
                   existing.modified == modified &&
                   existing.chapterSplitVersion ==
@@ -2686,13 +3030,18 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                   sourceKey: sourceKey,
                   existing: existing,
                 );
+              } on _NonComicZipSkipException {
+                seen.remove(sourceKey);
+                continue;
               } catch (error) {
                 _recordScanFailure(failures, name, error);
                 skipped++;
                 continue;
               }
               if (book == null) {
-                failures[name] = 'TXT 文件为空';
+                failures[name] = lower.endsWith('.pdf')
+                    ? 'PDF 没有可读取的页面'
+                    : '文件内容为空';
                 skipped++;
                 continue;
               }
@@ -2725,13 +3074,18 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                   sourceId: sourceId,
                   sourceKey: sourceKey,
                 );
+              } on _NonComicZipSkipException {
+                seen.remove(sourceKey);
+                continue;
               } catch (error) {
                 _recordScanFailure(failures, name, error);
                 skipped++;
                 continue;
               }
               if (book == null) {
-                failures[name] = 'TXT 文件为空';
+                failures[name] = lower.endsWith('.pdf')
+                    ? 'PDF 没有可读取的页面'
+                    : '文件内容为空';
                 skipped++;
                 continue;
               }
@@ -2740,9 +3094,78 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
               _updateScanProgress(
                 scanning: true,
                 processed: processed,
-                total: files.length,
+                total: totalUnits,
                 added: added,
               );
+            }
+          }
+          for (final manifest in comicFolders) {
+            processed++;
+            if (totalUnits <= 50 ||
+                processed == 1 ||
+                processed == totalUnits ||
+                processed % 10 == 0) {
+              _updateScanProgress(
+                scanning: true,
+                processed: processed,
+                total: totalUnits,
+                added: added,
+              );
+            }
+            final folderPath = manifest.folderRelPath.isEmpty
+                ? dir.path
+                : '${dir.path}/${manifest.folderRelPath}';
+            final sourceKey = folderPath;
+            seen.add(sourceKey);
+            if (ignored.contains(
+              LocalSourceIdentity.appFolder(sourceKey).ignoredKey,
+            )) {
+              skipped++;
+              final existingIgnored = byKey[sourceKey];
+              if (existingIgnored != null) {
+                _removeBook(existingIgnored);
+                reconciledData.add(existingIgnored);
+                removed++;
+              }
+              continue;
+            }
+            final fingerprint = _computeFolderManifestFingerprint(manifest);
+            final existing = byKey[sourceKey];
+            if (existing != null &&
+                !force &&
+                existing.sourceFingerprint == fingerprint &&
+                await _comicManifestFile(existing.id).exists()) {
+              continue;
+            }
+            try {
+              final book = await _importComicFolder(
+                manifest: manifest,
+                sourceId: sourceId,
+                sourceKey: sourceKey,
+                defaultFileUri: Uri.file(folderPath).toString(),
+                fingerprint: fingerprint,
+                existing: existing,
+              );
+              if (book == null) {
+                skipped++;
+                continue;
+              }
+              if (existing != null) {
+                chapterUpdates[book.id] = book;
+                refreshed++;
+              } else {
+                _addBook(book);
+                added++;
+                _updateScanProgress(
+                  scanning: true,
+                  processed: processed,
+                  total: totalUnits,
+                  added: added,
+                );
+              }
+            } catch (error) {
+              _recordScanFailure(failures, manifest.title, error);
+              skipped++;
             }
           }
           // 只清理当前来源的书籍（修复#1）。
@@ -2809,7 +3232,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
   }
 
-  /// 直接从文件路径导入 TXT / EPUB / MOBI / AZW3（纯 Dart，无需原生代码）。
+  /// 直接从文件路径导入 TXT / EPUB / CBZ / ZIP漫画 / PDF / MOBI / AZW3。
   Future<LocalBook?> _importDirectFile({
     required String path,
     required String name,
@@ -2819,10 +3242,29 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     required String sourceKey,
     LocalBook? existing,
   }) async {
-    final kind = localBookKindForFileName(name);
+    final isZipCandidate = isZipFileName(name);
+    final kind = localBookKindForFileName(name) ??
+        (isZipCandidate ? LocalBookKind.comic : null);
+    if (kind == LocalBookKind.comic) {
+      if (isZipCandidate && !await isComicZipFile(path)) {
+        throw const _NonComicZipSkipException();
+      }
+      final comicId = existing?.id ?? _nextId();
+      return _importComicArchive(
+        localPath: path,
+        uri: Uri.file(path).toString(),
+        name: name,
+        size: size,
+        modified: modified,
+        sourceId: sourceId,
+        sourceKey: sourceKey,
+        existing: existing,
+        id: comicId,
+      );
+    }
     if (kind == LocalBookKind.pdf) {
-      final uri = Uri.file(path).toString();
-      final pages = await LocalPlatform.pdfPageCount(uri);
+      final pdfUri = Uri.file(path).toString();
+      final pages = await LocalPlatform.pdfPageCount(pdfUri);
       if (pages <= 0) return null;
       final pdfId = existing?.id ?? _nextId();
       final sourceFingerprint = await _streamFileSha256(File(path));
@@ -2830,7 +3272,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         id: pdfId,
         title: _titleFromName(name),
         author: _authorFromName(name),
-        fileUri: uri,
+        fileUri: pdfUri,
         fileName: name,
         kind: LocalBookKind.pdf,
         size: size,
@@ -3002,6 +3444,15 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       (await sha256.bind(file.openRead()).first).toString();
 
   Future<void> _verifyDuplicateBookUnchanged(LocalBook book) async {
+    if (book.isComicFolder) {
+      final manifest = await loadComicFolderManifest(book.id);
+      if (manifest == null ||
+          _computeFolderManifestFingerprint(manifest) !=
+              book.sourceFingerprint) {
+        throw StateError('源文件已变化，请重新扫描后再清理');
+      }
+      return;
+    }
     if (book.sourceFingerprint.isEmpty) {
       if (book.fileUri.startsWith('content:')) {
         final pages = await LocalPlatform.pdfPageCount(book.fileUri);
@@ -3046,6 +3497,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   }
 
   Future<String> _duplicateSourceIdentity(LocalBook book) async {
+    if (book.isComicFolder) {
+      return 'comic_folder:${book.sourceId}:${book.sourceKey}';
+    }
     final locator = book.sourceKey.isNotEmpty ? book.sourceKey : book.fileUri;
     final uri = Uri.tryParse(locator);
     if (uri?.scheme == 'content') {
@@ -3066,7 +3520,56 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
 
   Future<void> _deleteBookFileUnlocked(LocalBook book) async {
     await _queueDataCleanup([book], clearStash: true);
-    if (book.fileUri.startsWith('content:')) {
+    if (book.isComicFolder) {
+      final manifest = await loadComicFolderManifest(book.id);
+      if (book.fileUri.startsWith('content:')) {
+        if (book.fileUri != folderUri &&
+            manifest != null &&
+            manifest.folderRelPath.isNotEmpty &&
+            manifest.folderUri == book.fileUri) {
+          await LocalPlatform.deleteLocalDocument(book.fileUri);
+        } else if (manifest != null) {
+          for (final page in manifest.pages) {
+            await LocalPlatform.deleteLocalDocument(page.uri);
+          }
+          if (manifest.comicInfoUri != null &&
+              manifest.comicInfoUri!.isNotEmpty) {
+            try {
+              await LocalPlatform.deleteLocalDocument(manifest.comicInfoUri!);
+            } catch (_) {}
+          }
+        } else {
+          throw const LocalDeleteException('missing_manifest', '漫画目录清单缺失，请重新扫描');
+        }
+      } else {
+        if (manifest != null) {
+          for (final page in manifest.pages) {
+            final f = page.uri.startsWith('file:')
+                ? File.fromUri(Uri.parse(page.uri))
+                : File(page.uri);
+            if (await f.exists()) await f.delete();
+          }
+          if (manifest.comicInfoUri != null &&
+              manifest.comicInfoUri!.isNotEmpty) {
+            final info = manifest.comicInfoUri!.startsWith('file:')
+                ? File.fromUri(Uri.parse(manifest.comicInfoUri!))
+                : File(manifest.comicInfoUri!);
+            if (await info.exists()) await info.delete();
+          }
+        }
+        if (book.sourceKey.isNotEmpty) {
+          final appRoot = await appFolderPath;
+          final dir = Directory(book.sourceKey);
+          if (dir.path != appRoot && await dir.exists()) {
+            try {
+              if (await dir.list().isEmpty) {
+                await dir.delete();
+              }
+            } catch (_) {}
+          }
+        }
+      }
+    } else if (book.fileUri.startsWith('content:')) {
       await LocalPlatform.deleteLocalDocument(book.fileUri);
     } else {
       final file = _sourceFile(book);
@@ -3173,6 +3676,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   }) {
     final cleanTitle = title.trim();
     if (cleanTitle.isEmpty) return null;
+    if (book.isComicFolder) return book.fileName;
     final renamed = cleanTitle != book.displayTitle;
     if (!renamed && tagNames == null) return book.fileName;
     final effectiveTags = tagNames ??
@@ -3205,6 +3709,12 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         final tag = store.tagById(id);
         if (tag == null) throw StateError('标签已不存在，请重新选择');
         names.add(tag.name);
+      }
+      if (book.isComicFolder) {
+        await _clearTagStashKeys([book], clearBookTags: false);
+        await store.setTagsForBook(id, ids);
+        notifyListeners();
+        return book;
       }
       final target = appendFilenameTags(
         stripFilenameTags(book.fileName),
@@ -3241,6 +3751,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     final changed = <LocalBook>[];
     try {
       for (final book in _books.toList()) {
+        if (book.isComicFolder) continue;
         final tags = TagStore.shared.tagsForBook(book.id);
         if (!tags.any((tag) => tag.id == tagId)) continue;
         final names = <String>{
@@ -3300,7 +3811,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     if (targetName == null) throw ArgumentError('书名无法用作文件名');
 
     var updated = book;
-    if (targetName != book.fileName) {
+    if (!book.isComicFolder && targetName != book.fileName) {
       updated = await _renameSourceFile(book, targetName);
     }
     updated = updated.copyWith(
@@ -3315,7 +3826,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         await TagStore.shared.setTagsForBook(id, resolvedTagIds);
       }
     } catch (error, stack) {
-      await _restoreRenamedBooks([book], cause: error);
+      if (!book.isComicFolder) {
+        await _restoreRenamedBooks([book], cause: error);
+      }
       Error.throwWithStackTrace(error, stack);
     }
     notifyListeners();
@@ -3381,6 +3894,12 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         }
       }
     }
+    try {
+      final manifestFile = _comicManifestFile(book.id);
+      if (await manifestFile.exists()) await manifestFile.delete();
+    } catch (_) {
+      ok = false;
+    }
     if (book.kind == LocalBookKind.pdf) {
       try {
         await LocalPlatform.clearPdfCache(book.fileUri);
@@ -3399,6 +3918,34 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       } catch (_) {
         ok = false;
       }
+    }
+    if (book.kind == LocalBookKind.comic &&
+        !book.isComicFolder &&
+        !book.fileUri.startsWith('file://')) {
+      try {
+        final cacheDir = await getApplicationCacheDirectory();
+        final cached = File('${cacheDir.path}/local_comic/${book.id}.cbz');
+        if (await cached.exists()) {
+          await cached.delete();
+        }
+      } catch (_) {
+        ok = false;
+      }
+    }
+    try {
+      final cacheDir = await getApplicationCacheDirectory();
+      final coverDir = Directory('${cacheDir.path}/local_covers');
+      if (await coverDir.exists()) {
+        final prefix = 'cover_${book.id}_';
+        await for (final entity in coverDir.list()) {
+          if (entity is File &&
+              entity.path.split('/').last.startsWith(prefix)) {
+            await entity.delete();
+          }
+        }
+      }
+    } catch (_) {
+      /* Cover cache cleanup is best-effort. */
     }
     return ok;
   }
@@ -3497,6 +4044,161 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     return digest;
   }
 
+  Future<LocalBook?> _importComicArchive({
+    required String localPath,
+    required String uri,
+    required String name,
+    required int size,
+    required int modified,
+    required String sourceId,
+    required String sourceKey,
+    LocalBook? existing,
+    int? id,
+  }) async {
+    if (size > localEpubMaxSourceBytes) {
+      throw const FormatException('漫画压缩包超过 1 GiB，无法导入');
+    }
+    final bookId = id ?? existing?.id ?? _nextId();
+    final pkg = await ComicArchivePackage.openFile(localPath);
+    try {
+      if (pkg.pageCount <= 0) return null;
+      final meta = pkg.metadata;
+      final parsedTitle = _titleFromName(name);
+      final parsedAuthor = _authorFromName(name);
+      final hasFilenameTags = parseFilenameTags(name).tags.isNotEmpty;
+      final metaTitle = meta?.displayTitle;
+      final metaWriter = meta?.writer;
+      final title = (!hasFilenameTags &&
+              metaTitle != null &&
+              metaTitle.isNotEmpty)
+          ? metaTitle
+          : parsedTitle;
+      final author = parsedAuthor.isNotEmpty
+          ? parsedAuthor
+          : (metaWriter != null && metaWriter.isNotEmpty ? metaWriter : '');
+      final chapters = [
+        for (final c in pkg.chapters)
+          LocalChapterIndex(c.title, c.startPage, c.pageCount, volume: ''),
+      ];
+      return LocalBook(
+        id: bookId,
+        kind: LocalBookKind.comic,
+        title: title,
+        author: author,
+        fileUri: uri,
+        fileName: name,
+        size: size,
+        modified: modified,
+        sourceId: sourceId,
+        sourceKey: sourceKey,
+        chapters: chapters,
+        coverEntry: pkg.coverEntry,
+        sourceFingerprint: await _epubSourceFingerprint(localPath),
+        textFingerprint: '',
+        wordCount: null,
+        pageCount: pkg.pageCount,
+        chapterSplitVersion: _chapterSplitVersion,
+        isRtlProgression: pkg.isRtl ?? true,
+        customTitle: existing?.customTitle,
+        customAuthor: existing?.customAuthor,
+      );
+    } finally {
+      await pkg.close();
+    }
+  }
+
+  static String _computeFolderManifestFingerprint(ComicFolderManifest manifest) {
+    final sb = StringBuffer();
+    sb.write(manifest.folderRelPath);
+    sb.write('\n');
+    sb.write(manifest.comicInfoUri ?? '');
+    sb.write('\n');
+    for (final p in manifest.pages) {
+      sb
+        ..write(p.relPath)
+        ..write('|')
+        ..write(p.size)
+        ..write('|')
+        ..write(p.modifiedMs)
+        ..write('\n');
+    }
+    return sha256.convert(utf8.encode(sb.toString())).toString();
+  }
+
+  Future<LocalBook?> _importComicFolder({
+    required ComicFolderManifest manifest,
+    required String sourceId,
+    required String sourceKey,
+    required String defaultFileUri,
+    required String fingerprint,
+    LocalBook? existing,
+  }) async {
+    if (manifest.pages.isEmpty) return null;
+    final bookId = existing?.id ?? _nextId();
+    var resolvedManifest = manifest;
+    final infoUri = manifest.comicInfoUri;
+    if (infoUri != null && infoUri.isNotEmpty) {
+      try {
+        final Uint8List infoBytes;
+        if (infoUri.startsWith('content:')) {
+          infoBytes = await LocalPlatform.readLocalBytes(infoUri);
+        } else if (infoUri.startsWith('file:')) {
+          infoBytes = await File.fromUri(Uri.parse(infoUri)).readAsBytes();
+        } else {
+          infoBytes = await File(infoUri).readAsBytes();
+        }
+        final xmlText = utf8.decode(infoBytes, allowMalformed: true);
+        final parsed = ComicInfoMetadata.tryParseXml(xmlText);
+        if (parsed != null) {
+          resolvedManifest = applyMetadataToFolderManifest(manifest, parsed);
+        }
+      } catch (_) {
+        /* Optional ComicInfo.xml parse failure never blocks folder import. */
+      }
+    }
+
+    if (!await _booksDir.exists()) {
+      await _booksDir.create(recursive: true);
+    }
+    final manifestFile = _comicManifestFile(bookId);
+    final tmp = File('${manifestFile.path}.tmp');
+    await tmp.writeAsString(jsonEncode(resolvedManifest.toJson()), flush: true);
+    await tmp.rename(manifestFile.path);
+    _comicManifestCache[bookId] = resolvedManifest;
+
+    final chapters = [
+      for (final c in resolvedManifest.chapters)
+        LocalChapterIndex(c.title, c.startPage, c.pageCount, volume: ''),
+    ];
+    final folderDisplayName = resolvedManifest.folderRelPath.isEmpty
+        ? resolvedManifest.title
+        : resolvedManifest.folderRelPath.split('/').last;
+    return LocalBook(
+      id: bookId,
+      kind: LocalBookKind.comic,
+      title: resolvedManifest.title,
+      author: resolvedManifest.author,
+      fileUri: resolvedManifest.folderUri.isNotEmpty
+          ? resolvedManifest.folderUri
+          : defaultFileUri,
+      fileName: folderDisplayName,
+      size: resolvedManifest.totalBytes,
+      modified: resolvedManifest.latestModifiedMs,
+      sourceId: sourceId,
+      sourceKey: sourceKey,
+      chapters: chapters,
+      sourceFingerprint: fingerprint,
+      textFingerprint: '',
+      wordCount: null,
+      pageCount: resolvedManifest.pages.length,
+      chapterSplitVersion: _chapterSplitVersion,
+      isComicFolder: true,
+      isRtlProgression: resolvedManifest.isRtl ?? true,
+      customTitle: existing?.customTitle,
+      customAuthor: existing?.customAuthor,
+    );
+  }
+
   Future<LocalBook?> _importEpub({
     required String localPath,
     required String uri,
@@ -3539,6 +4241,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         wordCount: null,
         pageCount: 0,
         chapterSplitVersion: _chapterSplitVersion,
+        isComicEpub: epub.isComicLayout,
+        isRtlProgression: epub.isRtlProgression,
         customTitle: existing?.customTitle,
         customAuthor: existing?.customAuthor,
       );
@@ -3712,11 +4416,55 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     required String sourceKey,
     LocalBook? existing,
   }) async {
-    final kind = localBookKindForFileName(name) ?? LocalBookKind.txt;
+    final isZipCandidate = isZipFileName(name);
+    final kind = localBookKindForFileName(name) ??
+        (isZipCandidate ? LocalBookKind.comic : LocalBookKind.txt);
     // 刷新时保留原 ID，避免书架/进度失效（修复#3）。
     final id = existing?.id ?? _nextId();
     final title = _titleFromName(name);
     final author = _authorFromName(name);
+    if (kind == LocalBookKind.comic) {
+      if (size > localEpubMaxSourceBytes) {
+        throw const FormatException('漫画压缩包超过 1 GiB，无法导入');
+      }
+      final cacheFile = await _comicCacheFile(id);
+      final staged = await _stageEpubCopy(uri, size, cacheFile.parent);
+      try {
+        if (isZipCandidate && !await isComicZipFile(staged.path)) {
+          throw const _NonComicZipSkipException();
+        }
+        final book = await _importComicArchive(
+          localPath: staged.path,
+          uri: uri,
+          name: name,
+          size: size,
+          modified: modified,
+          sourceId: sourceId,
+          sourceKey: sourceKey,
+          existing: existing,
+          id: id,
+        );
+        if (book != null) {
+          if (!epubCacheBackups.containsKey(cacheFile.path)) {
+            File? backup;
+            if (await cacheFile.exists()) {
+              final backupDir = await cacheFile.parent.createTemp('rollback-');
+              try {
+                backup = await cacheFile.copy('${backupDir.path}/book.cbz');
+              } catch (_) {
+                await backupDir.delete(recursive: true);
+                rethrow;
+              }
+            }
+            epubCacheBackups[cacheFile.path] = backup;
+          }
+          await staged.rename(cacheFile.path);
+        }
+        return book;
+      } finally {
+        await staged.parent.delete(recursive: true);
+      }
+    }
     if (kind == LocalBookKind.epub) {
       if (size > localEpubMaxSourceBytes) {
         throw const FormatException('EPUB 文件超过 1 GiB，无法导入');
@@ -3934,6 +4682,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     var effectiveName = name.trim().isEmpty ? '未命名书籍.txt' : name.trim();
     var bytes = await File(path).readAsBytes();
     final kind = localBookKindForFileName(effectiveName);
+    if (kind == LocalBookKind.comic) {
+      checkComicArchiveMagicBytes(bytes);
+    }
     if (kind == null && !isMobiFileName(effectiveName)) {
       final prepared = await PortableBookPreparer.prepareFile(
         effectiveName,
@@ -3943,10 +4694,18 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         throw const FormatException('未识别到可导入的书籍内容');
       }
       final doc = prepared.first;
-      if (doc.epubBytes != null) {
+      if (doc.cbzBytes != null) {
+        effectiveName =
+            '${effectiveName.replaceFirst(RegExp(r'\.[^.]+$'), '')}.cbz';
+        bytes = doc.cbzBytes!;
+      } else if (doc.epubBytes != null) {
         effectiveName =
             '${effectiveName.replaceFirst(RegExp(r'\.[^.]+$'), '')}.epub';
         bytes = doc.epubBytes!;
+      } else if (doc.pdfBytes != null) {
+        effectiveName =
+            '${effectiveName.replaceFirst(RegExp(r'\.[^.]+$'), '')}.pdf';
+        bytes = doc.pdfBytes!;
       } else {
         effectiveName =
             '${effectiveName.replaceFirst(RegExp(r'\.[^.]+$'), '')}.txt';
@@ -3999,6 +4758,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       await importCloudFile(name, path);
       return (imported: 1, failed: 0);
     }
+    if (await isComicZipFile(path)) {
+      final stem = name.replaceFirst(RegExp(r'\.[^.]+$'), '');
+      await importCloudFile('$stem.cbz', path);
+      return (imported: 1, failed: 0);
+    }
     final prepared = await PortableBookPreparer.prepareFile(name, path);
     if (prepared.isEmpty) return (imported: 0, failed: 1);
     final tempDir = await Directory.systemTemp.createTemp('wenku8_cloud_zip_');
@@ -4006,13 +4770,21 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     var failed = 0;
     try {
       for (final (i, doc) in prepared.indexed) {
-        final ext = doc.epubBytes != null ? '.epub' : '.txt';
+        final ext = doc.cbzBytes != null
+            ? '.cbz'
+            : doc.epubBytes != null
+                ? '.epub'
+                : doc.pdfBytes != null
+                    ? '.pdf'
+                    : '.txt';
         final entryName = doc.name.toLowerCase().endsWith(ext)
             ? doc.name
             : '${doc.name.replaceFirst(RegExp(r'\.[^.]+$'), '')}$ext';
         final tempFile = File('${tempDir.path}/item_$i$ext');
         final bytes =
+            doc.cbzBytes ??
             doc.epubBytes ??
+            doc.pdfBytes ??
             doc.rawTextBytes ??
             Uint8List.fromList(utf8.encode(doc.text ?? ''));
         await tempFile.writeAsBytes(bytes, flush: true);
@@ -4206,6 +4978,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _liveStores.remove(this);
     // Finish queued file operations before releasing the worker and cache.
     _mutationLock.then((_) {
       _textWorker.dispose();
@@ -4253,7 +5026,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         sourceUnavailable: false,
       );
     }
-    if (existing.kind == LocalBookKind.pdf) {
+    if (existing.kind == LocalBookKind.pdf ||
+        existing.kind == LocalBookKind.comic) {
       _replaceBook(
         index,
         existing.copyWith(
@@ -4380,10 +5154,16 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         ? 'PDF'
         : book.kind == LocalBookKind.epub
             ? 'EPUB'
-            : 'TXT';
+            : book.kind == LocalBookKind.comic
+                ? '漫画'
+                : 'TXT';
     final countLabel = book.kind == LocalBookKind.pdf
         ? '${book.pageCount} 页'
-        : '${book.chapters.length} 章';
+        : book.kind == LocalBookKind.comic
+            ? (book.chapters.length > 1
+                ? '${book.chapters.length} 话 · ${book.pageCount} 页'
+                : '${book.pageCount} 页')
+            : '${book.chapters.length} 章';
     final palette = _shelfPalette[book.id % _shelfPalette.length];
     // 组装简介：本地书籍 · TXT · 123 章 · 45.6 万字 · 2.5 MB
     // 只有 TXT 且已统计字数时才显示字数段
@@ -4403,7 +5183,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       summary: parts.join(' · '),
       colors: palette,
       isComplete: true,
-      chapterCount: book.kind == LocalBookKind.pdf
+      chapterCount: book.kind == LocalBookKind.pdf ||
+              book.kind == LocalBookKind.comic
           ? book.pageCount
           : book.chapters.length,
     );
@@ -4482,6 +5263,42 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           (i) => NovelChapter('第 ${i + 1} 页', '', id: i),
         ),
       );
+    } else if (book.kind == LocalBookKind.comic) {
+      final revision = book.revision;
+      final multiChapter = book.chapters.length > 1;
+      final pages = <NovelChapter>[];
+      if (multiChapter) {
+        var chIdx = 0;
+        for (var p = 0; p < book.pageCount; p++) {
+          while (chIdx + 1 < book.chapters.length &&
+              p >= book.chapters[chIdx + 1].offset) {
+            chIdx++;
+          }
+          final ch = book.chapters[chIdx];
+          final pageInCh = (p - ch.offset) + 1;
+          pages.add(
+            NovelChapter(
+              '${ch.title} · 第 $pageInCh 页',
+              '',
+              id: p,
+              revision: revision,
+              volume: ch.title,
+            ),
+          );
+        }
+      } else {
+        for (var p = 0; p < book.pageCount; p++) {
+          pages.add(
+            NovelChapter(
+              '第 ${p + 1} 页',
+              '',
+              id: p,
+              revision: revision,
+            ),
+          );
+        }
+      }
+      built = List.unmodifiable(pages);
     } else {
       final revision = book.revision;
       built = List.unmodifiable([
@@ -4806,6 +5623,357 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         await session.releaseIfIdle();
       }
     }
+  }
+
+  File _comicManifestFile(int id) =>
+      File('${_booksDir.path}/comic_manifest_$id.json');
+
+  Future<File> _comicCacheFile(int id) async {
+    final cacheRoot = await getApplicationCacheDirectory();
+    final dir = Directory('${cacheRoot.path}/local_comic');
+    await dir.create(recursive: true);
+    return File('${dir.path}/$id.cbz');
+  }
+
+  Future<String> _comicLocalPath({
+    required int id,
+    required String fileUri,
+    required int size,
+    required String sourceKey,
+    required String sourceFingerprint,
+  }) async {
+    if (fileUri.startsWith('file://') || !fileUri.contains('://')) {
+      if (sourceKey.isNotEmpty && File(sourceKey).isAbsolute) {
+        return sourceKey;
+      }
+      if (fileUri.startsWith('file://')) {
+        final legacyPath = fileUri.substring('file://'.length);
+        if (await File(legacyPath).exists()) return legacyPath;
+        return Uri.parse(fileUri).toFilePath();
+      }
+      return fileUri;
+    }
+    if (size > localEpubMaxSourceBytes) {
+      throw const FormatException('漫画压缩包超过 1 GiB，无法打开');
+    }
+    final cacheFile = await _comicCacheFile(id);
+    if (await cacheFile.exists() &&
+        (size <= 0 || await cacheFile.length() == size) &&
+        (sourceFingerprint.isEmpty ||
+            await _epubSourceFingerprint(cacheFile.path) == sourceFingerprint)) {
+      return cacheFile.path;
+    }
+    final staged = await _stageEpubCopy(fileUri, size, cacheFile.parent);
+    try {
+      if (sourceFingerprint.isNotEmpty &&
+          await _epubSourceFingerprint(staged.path) != sourceFingerprint) {
+        throw StateError('漫画源文件已变化，请重新扫描');
+      }
+      await staged.rename(cacheFile.path);
+      return cacheFile.path;
+    } finally {
+      await staged.parent.delete(recursive: true);
+    }
+  }
+
+  Future<({ComicArchivePackage package, _CachedComicSession? session})>
+  _acquireComicSession(LocalBook book, String localPath) async {
+    if (_disposed || book.sourceFingerprint.isEmpty) {
+      return (
+        package: await ComicArchivePackage.openFile(localPath),
+        session: null,
+      );
+    }
+    final stat = await File(localPath).stat();
+    final modifiedMicros = stat.modified.microsecondsSinceEpoch;
+    final existing = _comicSessionCache.remove(book.id);
+    if (existing != null) {
+      if (!existing.evicted &&
+          stat.type == FileSystemEntityType.file &&
+          existing.localPath == localPath &&
+          existing.fileSize == stat.size &&
+          existing.fileModifiedMicros == modifiedMicros &&
+          existing.sourceFingerprint == book.sourceFingerprint) {
+        existing.activeReaders++;
+        _comicSessionCache[book.id] = existing;
+        return (package: existing.package, session: existing);
+      }
+      _evictComicSession(existing);
+    }
+    final package = await ComicArchivePackage.openFile(localPath);
+    if (_disposed || bookFor(book.id)?.sourceFingerprint != book.sourceFingerprint) {
+      return (package: package, session: null);
+    }
+    final session = _CachedComicSession(
+      localPath: localPath,
+      fileSize: stat.size,
+      fileModifiedMicros: modifiedMicros,
+      sourceFingerprint: book.sourceFingerprint,
+      package: package,
+    )..activeReaders = 1;
+    while (_comicSessionCache.length >= _epubSessionCacheMaxEntries) {
+      final oldestKey = _comicSessionCache.keys.first;
+      final oldest = _comicSessionCache.remove(oldestKey);
+      if (oldest != null) _evictComicSession(oldest);
+    }
+    _comicSessionCache[book.id] = session;
+    return (package: package, session: session);
+  }
+
+  Future<ComicFolderManifest?> loadComicFolderManifest(int bookId) async {
+    final cached = _comicManifestCache[bookId];
+    if (cached != null) return cached;
+    final file = _comicManifestFile(bookId);
+    if (!await file.exists()) return null;
+    try {
+      final raw = jsonDecode(await file.readAsString());
+      if (raw is! Map) return null;
+      final manifest = ComicFolderManifest.fromJson(
+        Map<String, Object?>.from(raw),
+      );
+      if (!_disposed) _comicManifestCache[bookId] = manifest;
+      return manifest;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Uint8List> readComicFolderPage(ComicFolderPageEntry entry) async {
+    final uri = entry.uri;
+    if (uri.startsWith('content:')) {
+      return LocalPlatform.readLocalBytes(uri);
+    }
+    final file = uri.startsWith('file:')
+        ? File.fromUri(Uri.parse(uri))
+        : File(uri);
+    return file.readAsBytes();
+  }
+
+  Future<Uint8List> readComicArchivePage(int bookId, int pageIndex) async {
+    final book = bookFor(bookId);
+    if (book == null || book.kind != LocalBookKind.comic || book.isComicFolder) {
+      throw StateError('漫画归档不存在，请重新扫描');
+    }
+    final cacheKey = _epubImageKey(book, 'page:$pageIndex');
+    final useCache = book.sourceFingerprint.isNotEmpty;
+    if (useCache) {
+      final hit = _epubImageCache.remove(cacheKey);
+      if (hit != null) {
+        _epubImageCache[cacheKey] = hit;
+        return hit;
+      }
+    }
+    final localPath = await _comicLocalPath(
+      id: book.id,
+      fileUri: book.fileUri,
+      size: book.size,
+      sourceKey: book.sourceKey,
+      sourceFingerprint: book.sourceFingerprint,
+    );
+    final acquired = await _acquireComicSession(book, localPath);
+    final package = acquired.package;
+    final session = acquired.session;
+    try {
+      final bytes = package.readPageSync(pageIndex);
+      if (useCache && !_disposed && bytes.isNotEmpty) {
+        _cacheEpubImage(cacheKey, bytes);
+      }
+      return bytes;
+    } finally {
+      if (session == null) {
+        package.close();
+      } else {
+        session.activeReaders--;
+        session.releaseIfIdle();
+      }
+    }
+  }
+
+  Future<
+    ({
+      List<String> pages,
+      List<({String title, int startPage, int pageCount})> chapters,
+      List<int> pageToSpineChapter,
+      bool isRtl,
+    })
+  >
+  loadEpubMangaDescriptor(int bookId) async {
+    var book = bookFor(bookId);
+    if (book == null || book.kind != LocalBookKind.epub) {
+      throw StateError('EPUB 书籍不存在，请重新扫描');
+    }
+    if (book.chapterSplitVersion != _chapterSplitVersion &&
+        book.sourceFingerprint.isNotEmpty &&
+        _activeScan == null) {
+      final current = book;
+      book = await _synchronized(() => _upgradeEpubChaptersIfNeeded(current));
+    }
+    final localPath = await _epubLocalPath(
+      id: book.id,
+      fileUri: book.fileUri,
+      size: book.size,
+      sourceKey: book.sourceKey,
+      sourceFingerprint: book.sourceFingerprint,
+    );
+    final acquired = await _acquireEpubSession(book, localPath);
+    final package = acquired.package;
+    final session = acquired.session;
+    try {
+      final extracted = await package.extractMangaPages();
+      return (
+        pages: extracted.pages,
+        chapters: extracted.chapters,
+        pageToSpineChapter: extracted.pageToSpineChapter,
+        isRtl: package.isRtlProgression,
+      );
+    } finally {
+      if (session == null) {
+        await package.close();
+      } else {
+        session.activeReaders--;
+        await session.releaseIfIdle();
+      }
+    }
+  }
+
+  Future<Uint8List> readEpubMangaEntry(int bookId, String entryPath) async {
+    final book = bookFor(bookId);
+    if (book == null || book.kind != LocalBookKind.epub) {
+      throw StateError('EPUB 书籍不存在，请重新扫描');
+    }
+    final cacheKey = _epubImageKey(book, entryPath);
+    final useCache = book.sourceFingerprint.isNotEmpty;
+    if (useCache) {
+      final hit = _epubImageCache.remove(cacheKey);
+      if (hit != null) {
+        _epubImageCache[cacheKey] = hit;
+        return hit;
+      }
+    }
+    final localPath = await _epubLocalPath(
+      id: book.id,
+      fileUri: book.fileUri,
+      size: book.size,
+      sourceKey: book.sourceKey,
+      sourceFingerprint: book.sourceFingerprint,
+    );
+    final acquired = await _acquireEpubSession(book, localPath);
+    final package = acquired.package;
+    final session = acquired.session;
+    try {
+      final bytes = await package.readEntry(entryPath);
+      if (useCache && !_disposed && bytes.isNotEmpty) {
+        _cacheEpubImage(cacheKey, bytes);
+      }
+      return bytes;
+    } finally {
+      if (session == null) {
+        await package.close();
+      } else {
+        session.activeReaders--;
+        await session.releaseIfIdle();
+      }
+    }
+  }
+
+  bool _canLoadCoverForBook(LocalBook book) {
+    if (_disposed) return false;
+    return switch (book.kind) {
+      LocalBookKind.comic => book.pageCount > 0,
+      LocalBookKind.epub =>
+        (book.coverEntry != null && book.coverEntry!.isNotEmpty) ||
+            book.isComicEpub,
+      LocalBookKind.pdf => book.pageCount > 0,
+      LocalBookKind.txt => false,
+    };
+  }
+
+  Future<Uint8List> extractLocalCoverBytes(int id) async {
+    final book = bookFor(id);
+    if (book == null || !_canLoadCoverForBook(book)) {
+      throw const FormatException('本地书籍没有可用封面');
+    }
+    File? diskCache;
+    try {
+      final cacheRoot = await getApplicationCacheDirectory();
+      final coverDir = Directory('${cacheRoot.path}/local_covers');
+      await coverDir.create(recursive: true);
+      final sigSource = book.sourceFingerprint.isNotEmpty
+          ? book.sourceFingerprint
+          : '${book.size}_${book.modified}_${book.coverEntry ?? ""}';
+      final sig = sha256.convert(utf8.encode(sigSource)).toString().substring(0, 12);
+      diskCache = File('${coverDir.path}/cover_${book.id}_$sig.bin');
+      if (await diskCache.exists()) {
+        final cached = await diskCache.readAsBytes();
+        if (cached.isNotEmpty) return cached;
+      }
+    } catch (_) {
+      diskCache = null;
+    }
+
+    Uint8List bytes = Uint8List(0);
+    if (book.kind == LocalBookKind.comic) {
+      if (book.isComicFolder) {
+        final manifest = await loadComicFolderManifest(book.id);
+        if (manifest != null && manifest.pages.isNotEmpty) {
+          final idx = manifest.coverPageIndex.clamp(0, manifest.pages.length - 1);
+          bytes = await readComicFolderPage(manifest.pages[idx]);
+        }
+      } else {
+        final localPath = await _comicLocalPath(
+          id: book.id,
+          fileUri: book.fileUri,
+          size: book.size,
+          sourceKey: book.sourceKey,
+          sourceFingerprint: book.sourceFingerprint,
+        );
+        final acquired = await _acquireComicSession(book, localPath);
+        try {
+          final coverEntry = book.coverEntry ?? acquired.package.coverEntry;
+          bytes = coverEntry.isNotEmpty
+              ? acquired.package.readEntrySync(coverEntry)
+              : acquired.package.readPageSync(0);
+        } finally {
+          if (acquired.session == null) {
+            await acquired.package.close();
+          } else {
+            acquired.session!.activeReaders--;
+            acquired.session!.releaseIfIdle();
+          }
+        }
+      }
+    } else if (book.kind == LocalBookKind.epub) {
+      if (book.coverEntry != null && book.coverEntry!.isNotEmpty) {
+        bytes = await readEpubMangaEntry(book.id, book.coverEntry!);
+      } else if (book.isComicEpub) {
+        final desc = await loadEpubMangaDescriptor(book.id);
+        if (desc.pages.isNotEmpty) {
+          bytes = await readEpubMangaEntry(book.id, desc.pages.first);
+        }
+      }
+    } else if (book.kind == LocalBookKind.pdf) {
+      final renderedPath = await LocalPlatform.renderPdfPage(
+        book.fileUri,
+        0,
+        480,
+      );
+      if (renderedPath.isNotEmpty) {
+        final renderedFile = File(renderedPath);
+        if (await renderedFile.exists()) {
+          bytes = await renderedFile.readAsBytes();
+        }
+      }
+    }
+
+    if (bytes.isEmpty) {
+      throw const FormatException('本地书籍没有可用封面');
+    }
+    if (diskCache != null && bytes.length <= 24 * 1024 * 1024) {
+      try {
+        await diskCache.writeAsBytes(bytes, flush: false);
+      } catch (_) {}
+    }
+    return bytes;
   }
 }
 

@@ -1686,7 +1686,8 @@ class NovelCover extends StatelessWidget {
             pushing ? from : to,
           ),
           endOcclusion: PaperCoverPlane.occlusionFromHero(pushing ? to : from),
-          backingColor: novel.coverUrl == null
+          backingColor:
+              (novel.coverUrl == null && !LegacyCover.hasLocalCover(novel.id))
               ? accent
               : Theme.of(context).colorScheme.surface,
           child: FittedBox(
@@ -1775,7 +1776,9 @@ class NovelCover extends StatelessWidget {
         ),
       ),
     );
-    final rawFace = novel.coverUrl == null
+    final hasCover =
+        novel.coverUrl != null || LegacyCover.hasLocalCover(novel.id);
+    final rawFace = !hasCover
         ? fallback
         : Builder(
             builder: (context) {
@@ -1867,7 +1870,8 @@ class CoverGlow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (novel.coverUrl == null || !PerformanceScope.of(context).blur) {
+    if ((novel.coverUrl == null && !LegacyCover.hasLocalCover(novel.id)) ||
+        !PerformanceScope.of(context).blur) {
       return const SizedBox.shrink();
     }
     final dark = Theme.of(context).brightness == Brightness.dark;
