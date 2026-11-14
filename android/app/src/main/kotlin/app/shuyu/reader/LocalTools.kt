@@ -8,6 +8,8 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PersistableBundle
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -40,8 +42,10 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
     fun attachActivity(activity: Activity) {
         this.activity = activity
     }
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
-    private val requests = LocalToolRequests { callback -> activity.runOnUiThread { callback() } }
+    private val prefsIo = Executors.newSingleThreadExecutor()
+    private val requests = LocalToolRequests { callback -> mainHandler.post(callback) }
     private data class Pending(val result: MethodChannel.Result, val export: String?)
     private var pending: Pending? = null
     private var pendingShare: MethodChannel.Result? = null
@@ -65,26 +69,6 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         private const val SCAN_TIMEOUT_MS = 60000L
         private const val PDF_CACHE_MAX_BYTES = 256L * 1024 * 1024
         private const val PDF_CACHE_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
-        private val libraryRecordKey =
-            Regex("^(chapter|shelf_added|novel_meta|reading_position|reader_bookmarks|book_reader_style|reader_illustrations|chapter_progress_anchor|local_progress_migration)_[1-9][0-9]{0,9}$")
-        private val allowedLibraryPreferenceKeys = setOf(
-            "theme", "readerFontSize", "readerLineHeight", "reduceMotion",
-            "glassBlur", "glassOpacity", "readerKeepScreenOn", "checkAppUpdates",
-            "appTypeface", "appFontId", "appCustomFont", "importedFonts", "readerTypeface",
-            "appLanguage", "localTxtEncoding", "hapticPreferences", "haptic_preferences_v1", "haptics_v1",
-            "appPalette", "app_palette_v1",
-            "readerPreferences", "reading_activity_v1", "reading_moments_v1",
-            "reading_widget_cards_v1", "reader_purification_rules_v1",
-            "reader_purification_enabled_v1", "reader_paragraph_edits_v1",
-            "shelfSort", "shelfFilter", "lowPerformanceMode",
-            "performanceGlass", "performanceBlur", "performanceEdgeBlur",
-            "performanceMotion", "performanceShelf3d", "shelf", "reading_history_hidden",
-            "recentSearches", "local_shelf_removed", "tag_defs", "tag_map",
-            // 2026-11 UI round (additive; mirrors UiPreferenceKeys.all in Dart).
-            "glassTier", "glassAdvanced", "motionLevel", "randomPickPace",
-            "pdfNightInvert", "shelfLayout", "tagMatchMode", "paletteVariant",
-            "mangaBookModes",
-        )
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -331,11 +315,12 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                     "prepareLocalText", "fingerprintLocalText", "copyDocumentToFile" -> 120000L
                     "scanLocalFolder" -> SCAN_TIMEOUT_MS
                     "queryTreePermission", "readLocalText", "readLocalBytes",
-                    "pdfPageCount", "renderPdfPage" -> IO_TIMEOUT_MS
+                    "pdfPageCount", "renderPdfPage", "writeLibraryPreferences" -> IO_TIMEOUT_MS
                     else -> null
                 }
                 if (!requests.begin(result, timeout)) return true
-                val work = io.submit {
+                val executor = if (call.method == "writeLibraryPreferences") prefsIo else io
+                val work = executor.submit {
                     if (!requests.active(result)) return@submit
                     try {
                         val response: Any = when (call.method) {
@@ -371,7 +356,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                                 call.argument<Int>("widthPx") ?: 1200,
                             )
                         }
-                        activity.runOnUiThread {
+                        mainHandler.post {
                             if (!requests.complete(result) { result.success(response) }) {
                                 if (call.method == "prepareLocalText") {
                                     val path = if (response is String) response else (response as? Map<*, *>)?.get("path") as? String
@@ -641,7 +626,9 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
     /** One Editor commit for all library keys; the Dart rollback journal brackets it. */
     private fun writeLibraryPreferences(changes: Map<String, Any?>): Boolean {
         require(changes.keys.all(::isAllowedLibraryPreferenceKey))
-        val editor = activity.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE).edit()
+        val editor = activity.applicationContext
+            .getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            .edit()
         for ((key, value) in changes) {
             val prefixed = "flutter.$key"
             when (value) {
@@ -667,11 +654,6 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
             }
         }
         return editor.commit()
-    }
-
-    private fun isAllowedLibraryPreferenceKey(key: String): Boolean {
-        if (key in allowedLibraryPreferenceKeys) return true
-        return libraryRecordKey.matches(key)
     }
 
     private fun allowedStorageRoots(): List<File> = listOfNotNull(
@@ -1267,8 +1249,34 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         pendingFont = null
         activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         io.shutdownNow()
+        prefsIo.shutdownNow()
     }
 }
+
+internal val libraryRecordKey =
+    Regex("^(chapter|shelf_added|novel_meta|reading_position|reader_bookmarks|book_reader_style|reader_illustrations|chapter_progress_anchor|local_progress_migration)_[1-9][0-9]{0,9}$")
+
+internal val allowedLibraryPreferenceKeys = setOf(
+    "theme", "readerFontSize", "readerLineHeight", "reduceMotion",
+    "glassBlur", "glassOpacity", "readerKeepScreenOn", "checkAppUpdates",
+    "appTypeface", "appFontId", "appCustomFont", "importedFonts", "readerTypeface",
+    "appLanguage", "localTxtEncoding", "hapticPreferences", "haptic_preferences_v1", "haptics_v1",
+    "appPalette", "app_palette_v1",
+    "readerPreferences", "reading_activity_v1", "reading_moments_v1",
+    "reading_widget_cards_v1", "reader_purification_rules_v1",
+    "reader_purification_enabled_v1", "reader_paragraph_edits_v1",
+    "shelfSort", "shelfFilter", "lowPerformanceMode",
+    "performanceGlass", "performanceBlur", "performanceEdgeBlur",
+    "performanceMotion", "performanceShelf3d", "shelf", "reading_history_hidden",
+    "recentSearches", "local_shelf_removed", "tag_defs", "tag_map",
+    // 2026-11 UI round (additive; mirrors UiPreferenceKeys.all in Dart).
+    "glassTier", "glassAdvanced", "motionLevel", "randomPickPace",
+    "pdfNightInvert", "shelfLayout", "tagMatchMode", "paletteVariant",
+    "mangaBookModes",
+)
+
+internal fun isAllowedLibraryPreferenceKey(key: String): Boolean =
+    key in allowedLibraryPreferenceKeys || libraryRecordKey.matches(key)
 
 internal fun isPathInsideAllowedRoots(candidate: File, allowedRoots: Iterable<File>): Boolean {
     val canonicalCandidate = try {

@@ -637,7 +637,7 @@ class LibraryState extends ChangeNotifier {
     }
     await _queuePositionWrite(() async {
       if (_readerStore.readerTypeface == choice) return;
-      await _commitLibraryRecords({'readerTypeface': choice});
+      await writeLibraryPreference(_prefs, 'readerTypeface', choice);
       _readerStore.readerTypeface = choice;
       if (!_disposed) {
         _application.notifyListeners();
@@ -3103,7 +3103,12 @@ class LibraryState extends ChangeNotifier {
     }
     await _queuePositionWrite(() async {
       if (_performanceStore.haptics == value) return;
-      await _commitLibraryRecords(value.toRecords());
+      final encoded = value.toRecords()[HapticPreferences.preferenceKey]!;
+      await writeLibraryPreference(
+        _prefs,
+        HapticPreferences.preferenceKey,
+        encoded,
+      );
       _performanceStore.haptics = value;
       if (!_disposed) {
         _application.notifyListeners();
