@@ -324,6 +324,7 @@ class TagStore extends ChangeNotifier {
   /// 新装迁移时本地为空，等同于完整恢复。
   Future<void> importTagRecords(Map<String, Object> records) =>
       _change(() async {
+        final idRemap = <String, String>{};
         final defsRaw = records['tag_defs'];
         if (defsRaw is String) {
           try {
@@ -331,11 +332,33 @@ class TagStore extends ChangeNotifier {
             if (list is List) {
               for (final entry in list.whereType<Map<String, Object?>>()) {
                 try {
-                final tag = Tag.fromJson(entry);
-                if (tag.id.isEmpty || !isValidFilenameTag(tag.name)) continue;
-                if (tag.name.length > 64) continue;
-                if (_tags.any((t) => t.id == tag.id)) continue;
-                _tags.add(tag);
+                  final tag = Tag.fromJson(entry);
+                  final cleanName = tag.name.trim();
+                  if (tag.id.isEmpty || !isValidFilenameTag(cleanName)) {
+                    continue;
+                  }
+                  if (cleanName.length > 64) continue;
+                  final sameId = _tags.where((t) => t.id == tag.id).firstOrNull;
+                  if (sameId != null) {
+                    idRemap[tag.id] = sameId.id;
+                    continue;
+                  }
+                  final sameName = _tags
+                      .where((t) => t.name.trim() == cleanName)
+                      .firstOrNull;
+                  if (sameName != null) {
+                    idRemap[tag.id] = sameName.id;
+                    continue;
+                  }
+                  final normalized = cleanName == tag.name
+                      ? tag
+                      : Tag(
+                          id: tag.id,
+                          name: cleanName,
+                          colorIndex: tag.colorIndex,
+                        );
+                  _tags.add(normalized);
+                  idRemap[tag.id] = normalized.id;
                 } catch (_) {
                   continue;
                 }
@@ -360,6 +383,7 @@ class TagStore extends ChangeNotifier {
                 }
                 final ids = value
                     .whereType<String>()
+                    .map((id) => idRemap[id] ?? id)
                     .where((id) => id.isNotEmpty && knownIds.contains(id))
                     .toSet();
                 if (ids.isEmpty) return;

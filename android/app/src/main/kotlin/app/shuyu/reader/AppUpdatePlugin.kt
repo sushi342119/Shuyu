@@ -114,14 +114,32 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
         require(archive.packageName == context.packageName) { "安装包不属于本应用" }
         require(archive.versionName == version && code(archive) > code(current)) { "安装包版本不匹配或不是较新版本" }
         val signed = if (Build.VERSION.SDK_INT >= 28) {
-            val old = current.signingInfo ?: throw IllegalArgumentException("无法读取当前签名")
-            val next = archive.signingInfo ?: throw IllegalArgumentException("安装包缺少有效签名")
-            if (old.hasMultipleSigners() || next.hasMultipleSigners()) {
-                old.apkContentsSigners.toSet() == next.apkContentsSigners.toSet()
+            val old = current.signingInfo
+            val next = archive.signingInfo
+            if (old != null && next != null) {
+                if (old.hasMultipleSigners() || next.hasMultipleSigners()) {
+                    old.apkContentsSigners.toSet() == next.apkContentsSigners.toSet()
+                } else {
+                    next.signingCertificateHistory.orEmpty().contains(old.apkContentsSigners.singleOrNull())
+                }
             } else {
-                next.signingCertificateHistory.orEmpty().contains(old.apkContentsSigners.singleOrNull())
+                // Android 9 (API 28) AOSP bug: getPackageArchiveInfo with GET_SIGNING_CERTIFICATES
+                // can return signingInfo == null for valid APKs; fall back to GET_SIGNATURES.
+                val legacyArchive = context.packageManager.getPackageArchiveInfo(
+                    apk.path,
+                    PackageManager.GET_SIGNATURES,
+                ) ?: throw IllegalArgumentException("安装包缺少有效签名")
+                val legacyCurrent = context.packageManager.getPackageInfo(
+                    context.packageName,
+                    PackageManager.GET_SIGNATURES,
+                )
+                !legacyArchive.signatures.isNullOrEmpty() &&
+                    legacyCurrent.signatures.orEmpty().toSet() == legacyArchive.signatures.orEmpty().toSet()
             }
-        } else current.signatures.orEmpty().toSet() == archive.signatures.orEmpty().toSet() && !archive.signatures.isNullOrEmpty()
+        } else {
+            !archive.signatures.isNullOrEmpty() &&
+                current.signatures.orEmpty().toSet() == archive.signatures.orEmpty().toSet()
+        }
         require(signed) { "安装包签名与当前版本不一致，无法覆盖升级" }
         return apk
     }

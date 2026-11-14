@@ -253,18 +253,51 @@ class GithubUpdateSource implements UpdateSource {
     final client = _clientFactory()
       ..connectionTimeout = const Duration(seconds: 12);
     try {
-      final request = await client.getUrl(
-        Uri.https('api.github.com', '/repos/$repository/releases/latest'),
+      var target = Uri.https(
+        'api.github.com',
+        '/repos/$repository/releases/latest',
       );
-      request.headers.set(
-        HttpHeaders.acceptHeader,
-        'application/vnd.github+json',
-      );
-      request.headers.set(HttpHeaders.userAgentHeader, 'Wenku8-Flutter');
-      request.headers.set('X-GitHub-Api-Version', '2022-11-28');
-      final response = await request.close().timeout(
-        const Duration(seconds: 20),
-      );
+      HttpClientResponse? response;
+      for (var hop = 0; hop <= 3; hop++) {
+        if (target.scheme != 'https' ||
+            target.host != 'api.github.com' ||
+            target.userInfo.isNotEmpty ||
+            target.port != 443) {
+          throw const FormatException('更新检查重定向地址无效');
+        }
+        final request = await client
+            .getUrl(target)
+            .timeout(const Duration(seconds: 15));
+        try {
+          request.followRedirects = false;
+          request.maxRedirects = 0;
+        } catch (_) {}
+        request.headers.set(
+          HttpHeaders.acceptHeader,
+          'application/vnd.github+json',
+        );
+        request.headers.set(HttpHeaders.userAgentHeader, 'Wenku8-Flutter');
+        request.headers.set('X-GitHub-Api-Version', '2022-11-28');
+        final current = await request.close().timeout(
+          const Duration(seconds: 20),
+        );
+        if (HttpDownload.redirectStatuses.contains(current.statusCode)) {
+          final location = current.headers.value(HttpHeaders.locationHeader);
+          try {
+            await current.drain<void>();
+          } catch (_) {}
+          if (hop == 3 || location == null || location.trim().isEmpty) {
+            throw const FormatException('更新检查重定向无效');
+          }
+          target = target.resolve(location.trim());
+          continue;
+        }
+        response = current;
+        break;
+      }
+      if (response == null) {
+        throw const FormatException('更新检查重定向过多');
+      }
       if (response.statusCode == 404) return null;
       if (response.statusCode != 200) {
         throw HttpException('GitHub ${response.statusCode}');
@@ -407,10 +440,12 @@ class AppUpdates extends ChangeNotifier {
     final last =
         _lastAttempt ??
         (stored == null ? null : DateTime.fromMillisecondsSinceEpoch(stored));
+    final elapsed = last == null ? null : now.difference(last);
     if (automatic &&
         (!autoCheck ||
-            (last != null &&
-                now.difference(last) < const Duration(hours: 6)))) {
+            (elapsed != null &&
+                !elapsed.isNegative &&
+                elapsed < const Duration(hours: 6)))) {
       return;
     }
     checking = true;

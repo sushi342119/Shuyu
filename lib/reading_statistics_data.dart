@@ -323,6 +323,7 @@ class ReadingStatisticsData {
             ),
       ],
     );
+    periodLongestStreak = analysis.longestStreak.days;
   }
 
   final int period;
@@ -343,7 +344,7 @@ class ReadingStatisticsData {
   late final List<Novel> collectionBooks;
   late final List<StatisticsAuthor> genres;
   late final List<StatisticsExcerpt> excerpts;
-  late final int currentStreak, longestStreak;
+  late final int currentStreak, longestStreak, periodLongestStreak;
   late final int readingBooks, bookmarks, underlines, onlineBooks, localBooks;
   late final int authorCount, unknownAuthors;
   late final List<int> progressBands;

@@ -164,16 +164,11 @@ class ReadingActivityStore extends ChangeNotifier {
     while (remaining > 0) {
       // Local construction handles skipped/repeated DST hours. A repeated hour
       // belongs to the same civil bucket, with its actual elapsed milliseconds.
-      final boundary = _collectDetails
-          ? DateTime(cursor.year, cursor.month, cursor.day, cursor.hour + 1)
-          : DateTime(cursor.year, cursor.month, cursor.day + 1);
-      final portion = min(
-        remaining,
-        boundary.difference(cursor).inMilliseconds,
+      final boundaryMs = _millisecondsToBucketBoundary(
+        cursor,
+        hourly: _collectDetails,
       );
-      if (portion <= 0) {
-        throw StateError('Local reading-hour boundary did not advance');
-      }
+      final portion = min(remaining, boundaryMs);
       final date = _dateKey(cursor);
       final counter = source.putIfAbsent(date, _ActivityCounter.new);
       counter.milliseconds += portion;
@@ -205,6 +200,44 @@ class ReadingActivityStore extends ChangeNotifier {
     }
     _changed();
     await _persist?.call();
+  }
+
+  static int _millisecondsToBucketBoundary(
+    DateTime cursor, {
+    required bool hourly,
+  }) {
+    final candidate = hourly
+        ? DateTime(cursor.year, cursor.month, cursor.day, cursor.hour + 1)
+        : DateTime(cursor.year, cursor.month, cursor.day + 1);
+    final candidateMs = candidate.difference(cursor).inMilliseconds;
+    if (candidateMs > 0 && candidate.timeZoneOffset == cursor.timeZoneOffset) {
+      return candidateMs;
+    }
+    bool sameBucket(DateTime t) =>
+        t.year == cursor.year &&
+        t.month == cursor.month &&
+        t.day == cursor.day &&
+        (!hourly || t.hour == cursor.hour);
+    const stepMs = 10 * 60 * 1000;
+    final maxMs = hourly ? 3 * 3600 * 1000 : 26 * 3600 * 1000;
+    var prev = 0;
+    var upper = stepMs;
+    while (upper < maxMs &&
+        sameBucket(cursor.add(Duration(milliseconds: upper)))) {
+      prev = upper;
+      upper += stepMs;
+    }
+    var low = prev + 1;
+    var high = min(upper, maxMs);
+    while (low < high) {
+      final mid = (low + high) ~/ 2;
+      if (sameBucket(cursor.add(Duration(milliseconds: mid)))) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return max(1, low);
   }
 
   /// Encodes the complete local ledger, including the local writer identity.
@@ -248,7 +281,8 @@ class ReadingActivityStore extends ChangeNotifier {
 }
 
 /// Low-frequency elapsed-time sampler. The reader owns visibility eligibility;
-/// this class never infers reading from gestures or from saved positions.
+/// [idleTimeout] caps unattended keep-screen-on inflation until the next user
+/// or playback interaction calls [notifyInteraction].
 class ReadingActivitySession {
   ReadingActivitySession({
     required this.store,
@@ -256,6 +290,7 @@ class ReadingActivitySession {
     DateTime Function()? now,
     Duration Function()? elapsed,
     this.interval = const Duration(seconds: 30),
+    this.idleTimeout = const Duration(minutes: 5),
   }) : _now = now ?? DateTime.now {
     _elapsed = elapsed ?? (() => _clock.elapsed);
     _clock.start();
@@ -264,29 +299,56 @@ class ReadingActivitySession {
   final ReadingActivityStore store;
   final int bookId;
   final Duration interval;
+  final Duration? idleTimeout;
   final DateTime Function() _now;
   final Stopwatch _clock = Stopwatch();
   late final Duration Function() _elapsed;
   DateTime? _startedAt;
   Duration? _startedElapsed;
+  Duration? _lastInteractionElapsed;
   _ActivitySessionToken? _session;
   Timer? _timer;
+  bool _eligible = false;
+  bool _idlePaused = false;
   bool _disposed = false;
 
   bool get active => _startedAt != null;
 
+  void _startSegment(Duration nowElapsed) {
+    _startedAt = _now();
+    _startedElapsed = nowElapsed;
+    _session = store._beginSession(bookId, _startedAt!);
+    _timer?.cancel();
+    _timer = Timer.periodic(interval, (_) => _settle(restart: true));
+  }
+
+  /// Refreshes the idle deadline and resumes if paused solely due to idleness.
+  void notifyInteraction() {
+    if (_disposed) return;
+    final nowElapsed = _elapsed();
+    _lastInteractionElapsed = nowElapsed;
+    if (_eligible && _idlePaused && !active) {
+      _idlePaused = false;
+      _startSegment(nowElapsed);
+    }
+  }
+
   /// Pausing settles immediately; resuming starts a new monotonic segment.
   void setActive(bool value) {
-    if (_disposed || active == value) return;
+    if (_disposed) return;
+    _eligible = value;
     if (!value) {
+      _idlePaused = false;
+      if (!active) return;
       _timer?.cancel();
       _timer = null;
       _settle(restart: false);
     } else {
-      _startedAt = _now();
-      _startedElapsed = _elapsed();
-      _session = store._beginSession(bookId, _startedAt!);
-      _timer = Timer.periodic(interval, (_) => _settle(restart: true));
+      if (active) return;
+      _idlePaused = false;
+      final nowElapsed = _elapsed();
+      _lastInteractionElapsed = nowElapsed;
+      _startSegment(nowElapsed);
     }
   }
 
@@ -295,7 +357,19 @@ class ReadingActivitySession {
         startElapsed = _startedElapsed,
         session = _session;
     if (start == null || startElapsed == null || session == null) return;
-    final endElapsed = _elapsed();
+    var endElapsed = _elapsed();
+    if (idleTimeout != null && _lastInteractionElapsed != null) {
+      final idleDeadline = _lastInteractionElapsed! + idleTimeout!;
+      if (endElapsed >= idleDeadline) {
+        endElapsed = idleDeadline < startElapsed ? startElapsed : idleDeadline;
+        if (restart) {
+          restart = false;
+          _idlePaused = true;
+          _timer?.cancel();
+          _timer = null;
+        }
+      }
+    }
     _startedAt = restart ? _now() : null;
     _startedElapsed = restart ? endElapsed : null;
     if (!restart) _session = null;

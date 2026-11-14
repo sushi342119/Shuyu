@@ -138,6 +138,18 @@ class WebDavTransport {
     await res.drain<void>();
   }
 
+  Future<void> delete(Uri uri, {bool redirects = true}) async {
+    final res = await http.request(
+      'DELETE',
+      uri,
+      allowHttp: allowHttp,
+      redirects: redirects,
+      headers: headersFor,
+      allowedStatuses: const {200, 202, 204, 404},
+    );
+    await res.drain<void>();
+  }
+
   Future<Uint8List> getBytes(
     Uri uri, {
     bool redirects = true,

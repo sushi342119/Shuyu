@@ -296,6 +296,7 @@ class UserFontStore extends ChangeNotifier {
           transfer,
           cancellation: cancellation,
           expectedBytes: spec.transferBytes,
+          expectedSha256: spec.sha256,
           from: spec.sourceUrls.map(Uri.parse).toList(),
           onProgress: (value) {
             if (!_disposed) downloadChanges.value = value;

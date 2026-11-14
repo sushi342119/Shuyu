@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -34,11 +35,20 @@ class HttpTtsEngineConfig {
   final String bodyTemplate;
   final String contentType;
 
+  String get configSignature {
+    final sortedKeys = headers.keys.toList()..sort();
+    final canonicalHeaders = [
+      for (final k in sortedKeys) '$k:${headers[k]}',
+    ].join('\n');
+    final payload = '$url\n$method\n$contentType\n$bodyTemplate\n$canonicalHeaders';
+    return sha256.convert(utf8.encode(payload)).toString().substring(0, 12);
+  }
+
   SpeechVoice toSpeechVoice() => SpeechVoice(
     id: id,
     label: '$name · 自定义HTTP',
     source: ListeningSource.custom,
-    engine: 'http_tts',
+    engine: 'http_tts:$configSignature',
   );
 
   Map<String, dynamic> toJson() => {
@@ -231,24 +241,61 @@ class HttpTtsStore extends ChangeNotifier {
     '  ',
   ).convert([for (final e in _engines) e.toJson()]);
 
+  static const int maxAudioBytes = 16 * 1024 * 1024;
+
+  static String _escapeXml(String input) => input
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&apos;');
+
+  static final RegExp _templatePlaceholderPattern = RegExp(
+    r'\{\{java\.encodeURI\(speakText\)\}\}'
+    r'|\{\{speakTextXml\}\}'
+    r'|\{\{speakTextJson\}\}'
+    r'|\{\{speakText\}\}'
+    r'|\{\{speakSpeedRate\}\}'
+    r'|\{\{speakSpeed\}\}'
+    r'|\$\{speakText\}'
+    r'|\$\{speakSpeed\}',
+  );
+
   static String substituteTemplate(
     String template, {
     required String text,
     required double speed,
     required bool urlEncodeText,
+    String? contentType,
   }) {
-    final encodedText = urlEncodeText
-        ? Uri.encodeComponent(text)
-        : jsonEncode(text).substring(1, jsonEncode(text).length - 1);
+    final uriEncoded = Uri.encodeComponent(text);
+    final jsonFull = jsonEncode(text);
+    final jsonEscaped = jsonFull.substring(1, jsonFull.length - 1);
+    final xmlEscaped = _escapeXml(text);
+    final lowerType = (contentType ?? '').toLowerCase();
+    final trimmedTemplate = template.trimLeft();
+    final isXml =
+        !urlEncodeText &&
+        (lowerType.contains('xml') ||
+            lowerType.contains('ssml') ||
+            trimmedTemplate.startsWith('<speak') ||
+            trimmedTemplate.startsWith('<?xml'));
+    final defaultText = urlEncodeText
+        ? uriEncoded
+        : (isXml ? xmlEscaped : jsonEscaped);
     final intSpeed = (speed * 10).round().clamp(5, 30).toString();
     final rateSpeed = speed.toStringAsFixed(2);
-    return template
-        .replaceAll('{{java.encodeURI(speakText)}}', Uri.encodeComponent(text))
-        .replaceAll('{{speakText}}', encodedText)
-        .replaceAll('{{speakSpeed}}', intSpeed)
-        .replaceAll('{{speakSpeedRate}}', rateSpeed)
-        .replaceAll(r'${speakText}', encodedText)
-        .replaceAll(r'${speakSpeed}', intSpeed);
+    return template.replaceAllMapped(_templatePlaceholderPattern, (match) {
+      return switch (match[0]) {
+        '{{java.encodeURI(speakText)}}' => uriEncoded,
+        '{{speakTextXml}}' => xmlEscaped,
+        '{{speakTextJson}}' => jsonEscaped,
+        '{{speakText}}' || r'${speakText}' => defaultText,
+        '{{speakSpeedRate}}' => rateSpeed,
+        '{{speakSpeed}}' || r'${speakSpeed}' => intSpeed,
+        _ => match[0]!,
+      };
+    });
   }
 
   Future<Uint8List> synthesize(
@@ -258,8 +305,7 @@ class HttpTtsStore extends ChangeNotifier {
     double speed = 1.0,
   }) async {
     await ensureInitialized();
-    final config =
-        engineById(voice.id) ?? (_engines.isNotEmpty ? _engines.first : null);
+    final config = engineById(voice.id);
     if (config == null || config.url.trim().isEmpty) {
       throw const SpeechFailure('未找到对应的自定义 HTTP 朗读引擎，请重新配置');
     }
@@ -292,7 +338,10 @@ class HttpTtsStore extends ChangeNotifier {
           config.bodyTemplate,
           text: text,
           speed: speed,
-          urlEncodeText: config.contentType.contains('urlencoded'),
+          urlEncodeText: config.contentType.toLowerCase().contains(
+            'urlencoded',
+          ),
+          contentType: config.contentType,
         );
         final bodyBytes = utf8.encode(bodyStr);
         request.contentLength = bodyBytes.length;
@@ -305,9 +354,21 @@ class HttpTtsStore extends ChangeNotifier {
         await response.drain<void>();
         throw SpeechFailure('自定义 HTTP 语音返回错误（HTTP ${response.statusCode}）');
       }
+      if (response.contentLength > maxAudioBytes) {
+        throw const SpeechFailure(
+          '自定义 HTTP 音频体积超出上限',
+          kind: SpeechFailureKind.content,
+        );
+      }
       final builder = BytesBuilder(copy: false);
-      await for (final chunk in response) {
+      await for (final chunk in response.timeout(const Duration(seconds: 25))) {
         cancellation.check();
+        if (builder.length + chunk.length > maxAudioBytes) {
+          throw const SpeechFailure(
+            '自定义 HTTP 音频体积超出上限',
+            kind: SpeechFailureKind.content,
+          );
+        }
         builder.add(chunk);
       }
       final bytes = builder.takeBytes();

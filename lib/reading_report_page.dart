@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
@@ -32,6 +34,14 @@ class ReadingReportPage extends StatefulWidget {
   final DateTime? now;
   final ReadingReportRange? initialRange;
 
+  static const double maxPosterPixelSide = 8000.0;
+
+  static double posterPixelRatioForSize(Size size) {
+    final maxSide = math.max(size.width, size.height);
+    if (maxSide <= 0 || !maxSide.isFinite) return 1.0;
+    return math.min(2.5, maxPosterPixelSide / maxSide).clamp(0.5, 2.5);
+  }
+
   @override
   State<ReadingReportPage> createState() => _ReadingReportPageState();
 }
@@ -40,6 +50,7 @@ class _ReadingReportPageState extends State<ReadingReportPage> {
   final _posterKey = GlobalKey();
   ReadingReportOptions _options = const ReadingReportOptions();
   late ReadingStatisticsData _data;
+  bool _savingPoster = false;
 
   DateTime get _now => widget.now ?? DateTime.now();
 
@@ -97,20 +108,32 @@ class _ReadingReportPageState extends State<ReadingReportPage> {
   }
 
   Future<void> _savePoster(String? token) async {
-    await WidgetsBinding.instance.endOfFrame;
-    final boundary =
-        _posterKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-    if (boundary == null) throw StateError('报告画布尚未就绪');
-    final image = await boundary.toImage(pixelRatio: 2.5);
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-    image.dispose();
-    if (byteData == null) throw StateError('报告生成失败');
-    await LocalPlatform.saveImageToGallery(
-      byteData.buffer.asUint8List(),
-      'wenku8-reading-report-${DateTime.now().millisecondsSinceEpoch}.png',
-      authorizationToken: token,
-    );
-    if (mounted) showNovelFeedback(context, '阅读报告已保存到相册');
+    if (_savingPoster) return;
+    _savingPoster = true;
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      final boundary =
+          _posterKey.currentContext?.findRenderObject()
+              as RenderRepaintBoundary?;
+      if (boundary == null) throw StateError('报告画布尚未就绪');
+      final ratio = ReadingReportPage.posterPixelRatioForSize(boundary.size);
+      final image = await boundary.toImage(pixelRatio: ratio);
+      ByteData? byteData;
+      try {
+        byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      } finally {
+        image.dispose();
+      }
+      if (byteData == null) throw StateError('报告生成失败');
+      await LocalPlatform.saveImageToGallery(
+        byteData.buffer.asUint8List(),
+        'wenku8-reading-report-${DateTime.now().millisecondsSinceEpoch}.png',
+        authorizationToken: token,
+      );
+      if (mounted) showNovelFeedback(context, '阅读报告已保存到相册');
+    } finally {
+      _savingPoster = false;
+    }
   }
 
   @override
@@ -254,7 +277,7 @@ class _ReadingReportPageState extends State<ReadingReportPage> {
                               Expanded(
                                 child: _ReportMetricTile(
                                   label: '最长连续',
-                                  value: '${_data.longestStreak} 天',
+                                  value: '${_data.periodLongestStreak} 天',
                                   foreground: exportTheme.foreground,
                                   muted: exportTheme.muted,
                                 ),

@@ -15,6 +15,7 @@ class DownloadableFont {
     required this.sourceUrls,
     this.traditional = false,
     this.archiveEntry,
+    this.sha256,
     int? transferBytes,
   }) : transferBytes = transferBytes ?? bytes;
 
@@ -24,6 +25,7 @@ class DownloadableFont {
   final List<String> sourceUrls;
   final bool traditional;
   final String? archiveEntry;
+  final String? sha256;
   String get id => typeface.name;
   String get name => typeface.label;
   String get sizeLabel => '${(transferBytes / 1048576).toStringAsFixed(1)} MiB';

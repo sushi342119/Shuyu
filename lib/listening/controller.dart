@@ -200,6 +200,8 @@ class ListeningController {
   int _generation = 0;
   int _consecutiveFailures = 0;
   int _playEpoch = 0;
+  int _targetParagraph = 0;
+  bool _targetUseSavedCursor = false;
   bool _desiredPlaying = false, _loading = false, _disposed = false;
   bool _atSegmentEnd = false;
   DateTime _lastSave = DateTime.fromMillisecondsSinceEpoch(0);
@@ -408,6 +410,8 @@ class ListeningController {
     _desiredPlaying = autoplay;
     _consecutiveFailures = 0;
     _loading = true;
+    _targetParagraph = paragraph;
+    _targetUseSavedCursor = resume;
     var cursor = resume ? savedCursor(novel.id) : null;
     _emit(
       novel: novel,
@@ -545,6 +549,8 @@ class ListeningController {
           selected += recovered;
         }
       }
+      _targetParagraph = segments[selected].paragraph;
+      _targetUseSavedCursor = false;
       _emit(segments: segments, segment: selected);
       final restore =
           cursor != null &&
@@ -865,7 +871,21 @@ class ListeningController {
         state.phase == ListeningPhase.stopped ||
         state.phase == ListeningPhase.completed ||
         _currentFile == null) {
-      await start(state.novel!, chapter: state.chapter, resume: true);
+      if (state.current != null &&
+          state.phase != ListeningPhase.stopped &&
+          state.phase != ListeningPhase.completed) {
+        await _jumpToSegment(state.segment, autoplay: true);
+      } else if (state.phase == ListeningPhase.stopped ||
+          state.phase == ListeningPhase.completed) {
+        await start(state.novel!, chapter: state.chapter, resume: true);
+      } else {
+        await start(
+          state.novel!,
+          chapter: state.chapter,
+          paragraph: _targetParagraph,
+          resume: _targetUseSavedCursor,
+        );
+      }
     } else {
       _emit(phase: ListeningPhase.playing);
       final generation = _generation;
@@ -920,6 +940,106 @@ class ListeningController {
     );
     _updateTimeline();
     await saveCursor();
+  }
+
+  static Duration _estimatedSegmentDuration(SpeechSegment segment) => Duration(
+    milliseconds: (segment.text.length.clamp(1, 1000000) * 220).clamp(
+      500,
+      600000,
+    ),
+  );
+
+  Duration _segmentDurationAt(int index, ListeningSnapshot state) {
+    if (index == state.segment &&
+        !_loading &&
+        progress.value.duration > Duration.zero) {
+      return progress.value.duration;
+    }
+    final segment = state.segments[index];
+    final measured = _clipDurations[segment];
+    if (measured != null && measured > Duration.zero) return measured;
+    return _estimatedSegmentDuration(segment);
+  }
+
+  Future<void> seekChapterPosition(Duration position) async {
+    if (snapshot.value.current == null) return;
+    final clamped = position < Duration.zero ? Duration.zero : position;
+    await seekRelative(clamped - chapterProgress.value.position);
+  }
+
+  Future<void> seekRelative(Duration delta) async {
+    final state = snapshot.value;
+    if (state.current == null || state.segments.isEmpty) return;
+    final currentIndex = state.segment;
+    final currentDuration = _segmentDurationAt(currentIndex, state);
+    final currentPosition = _loading ? Duration.zero : progress.value.position;
+    final targetMs = currentPosition.inMilliseconds + delta.inMilliseconds;
+    if (!_loading &&
+        _output != null &&
+        progress.value.duration > Duration.zero &&
+        targetMs >= 0 &&
+        targetMs <= progress.value.duration.inMilliseconds) {
+      await seek(Duration(milliseconds: targetMs));
+      return;
+    }
+    if (targetMs >= 0) {
+      if (targetMs <= currentDuration.inMilliseconds) {
+        final fraction = currentDuration.inMilliseconds <= 0
+            ? 0.0
+            : (targetMs / currentDuration.inMilliseconds).clamp(0.0, 1.0);
+        await _jumpToSegment(
+          currentIndex,
+          autoplay: _desiredPlaying,
+          fraction: fraction,
+        );
+        return;
+      }
+      var remainingMs = targetMs - currentDuration.inMilliseconds;
+      for (var i = currentIndex + 1; i < state.segments.length; i++) {
+        final dur = _segmentDurationAt(i, state).inMilliseconds;
+        if (remainingMs <= dur || i == state.segments.length - 1) {
+          final fraction = dur <= 0 ? 0.0 : (remainingMs / dur).clamp(0.0, 1.0);
+          await _jumpToSegment(
+            i,
+            autoplay: _desiredPlaying,
+            fraction: fraction,
+          );
+          return;
+        }
+        remainingMs -= dur;
+      }
+      if (!_loading &&
+          _output != null &&
+          progress.value.duration > Duration.zero) {
+        await seek(progress.value.duration);
+      } else {
+        await _jumpToSegment(
+          state.segments.length - 1,
+          autoplay: _desiredPlaying,
+          fraction: 1.0,
+        );
+      }
+      return;
+    }
+    var backMs = -targetMs;
+    if (currentIndex == 0) {
+      if (!_loading && _output != null) {
+        await seek(Duration.zero);
+      } else {
+        await _jumpToSegment(0, autoplay: _desiredPlaying, fraction: 0.0);
+      }
+      return;
+    }
+    for (var i = currentIndex - 1; i >= 0; i--) {
+      final dur = _segmentDurationAt(i, state).inMilliseconds;
+      if (backMs <= dur || i == 0) {
+        final posMs = (dur - backMs).clamp(0, dur);
+        final fraction = dur <= 0 ? 0.0 : (posMs / dur).clamp(0.0, 1.0);
+        await _jumpToSegment(i, autoplay: _desiredPlaying, fraction: fraction);
+        return;
+      }
+      backMs -= dur;
+    }
   }
 
   Future<void> seekChapterFraction(double fraction) async {
@@ -1088,7 +1208,8 @@ class ListeningController {
         await start(
           state.novel!,
           chapter: state.chapter,
-          resume: true,
+          paragraph: _targetParagraph,
+          resume: _targetUseSavedCursor,
           autoplay: _desiredPlaying,
         );
       } else if (state.active && state.current != null) {
@@ -1221,11 +1342,14 @@ class ListeningController {
       await stop();
     } finally {
       _disposed = true;
+      final opening = _opening;
       try {
         await Future.wait([
           if (_positions != null) _positions!.cancel(),
           if (_completions != null) _completions!.cancel(),
           if (_output != null) _output!.dispose(),
+          if (opening != null)
+            opening.then((o) => o.dispose(), onError: (Object _) {}),
         ]);
       } finally {
         snapshot.dispose();

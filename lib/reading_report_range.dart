@@ -63,19 +63,57 @@ class ReadingReportDateSheet extends StatefulWidget {
 }
 
 class _ReadingReportDateSheetState extends State<ReadingReportDateSheet> {
-  late DateTime _start =
-      widget.range.from ??
-      DateTime(
-        widget.today.year,
-        widget.today.month,
-        widget.today.day - widget.range.period + 1,
-      );
-  late DateTime _end = widget.range.until ?? widget.today;
+  late DateTime _today;
+  late DateTime _minDate;
+  late DateTime _start;
+  late DateTime _end;
   bool _editingEnd = false;
+
+  static DateTime _dayOnly(DateTime value) =>
+      DateTime(value.year, value.month, value.day);
+
+  static DateTime _clampDay(DateTime value, DateTime min, DateTime max) {
+    final normalized = _dayOnly(value);
+    if (normalized.isBefore(min)) return min;
+    if (normalized.isAfter(max)) return max;
+    return normalized;
+  }
+
+  void _syncBounds() {
+    _today = _dayOnly(widget.today);
+    _minDate = DateTime(_today.year < 2020 ? _today.year : 2020, 1, 1);
+    final rawEnd = widget.range.until ?? _today;
+    _end = _clampDay(rawEnd, _minDate, _today);
+    final rawStart =
+        widget.range.from ??
+        DateTime(
+          _today.year,
+          _today.month,
+          _today.day - widget.range.period + 1,
+        );
+    _start = _clampDay(rawStart, _minDate, _end);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _syncBounds();
+  }
+
+  @override
+  void didUpdateWidget(covariant ReadingReportDateSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.today != widget.today || oldWidget.range != widget.range) {
+      _syncBounds();
+    }
+  }
+
   String _date(DateTime value) => '${value.year}.${value.month}.${value.day}';
 
   void _changeDate(DateTime value) {
-    final date = DateTime(value.year, value.month, value.day);
+    final date = _editingEnd
+        ? _clampDay(value, _start, _today)
+        : _clampDay(value, _minDate, _end);
     final previous = _editingEnd ? _end : _start;
     if (DateUtils.isSameDay(previous, date)) return;
     setState(() => _editingEnd ? _end = date : _start = date);
@@ -126,14 +164,8 @@ class _ReadingReportDateSheetState extends State<ReadingReportDateSheet> {
             ),
             mode: CupertinoDatePickerMode.date,
             initialDateTime: _editingEnd ? _end : _start,
-            minimumDate: _editingEnd
-                ? _start
-                : DateTime(
-                    widget.today.year < 2020 ? widget.today.year : 2020,
-                    1,
-                    1,
-                  ),
-            maximumDate: _editingEnd ? widget.today : _end,
+            minimumDate: _editingEnd ? _start : _minDate,
+            maximumDate: _editingEnd ? _today : _end,
             onDateTimeChanged: _changeDate,
           ),
         ),

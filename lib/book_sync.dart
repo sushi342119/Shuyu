@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'book_documents.dart';
 import 'book_import_limits.dart';
+import 'catalog.dart';
 import 'cloud_sources.dart';
 import 'library_backup.dart';
 import 'library_state.dart';
@@ -111,11 +112,21 @@ class BookSyncBundle {
 }
 
 Uint8List encodeBookSync(BookSyncBundle bundle) {
+  const maxUncompressedBytes = 512 * 1024 * 1024;
   final zip = Archive();
   final books = <Map<String, Object>>[];
+  var totalUncompressed = 0;
+  void addCheckedFile(String name, List<int> data) {
+    totalUncompressed += data.length;
+    if (totalUncompressed > maxUncompressedBytes) {
+      throw const FormatException('同步内容展开大小超过 512 MiB 上限，请减少同步书籍后重试');
+    }
+    zip.addFile(ArchiveFile(name, data.length, data));
+  }
+
   for (final (i, book) in bundle.books.indexed) {
     final path = 'books/$i/original';
-    zip.addFile(ArchiveFile(path, book.bytes.length, book.bytes));
+    addCheckedFile(path, book.bytes);
     books.add({
       'name': book.name,
       'path': path,
@@ -123,7 +134,7 @@ Uint8List encodeBookSync(BookSyncBundle bundle) {
     });
     if (book.text case final text?) {
       final bytes = utf8.encode(text);
-      zip.addFile(ArchiveFile('books/$i/decoded.txt', bytes.length, bytes));
+      addCheckedFile('books/$i/decoded.txt', bytes);
     }
   }
   final metadata = utf8.encode(
@@ -139,15 +150,15 @@ Uint8List encodeBookSync(BookSyncBundle bundle) {
   if (metadata.length > LibraryBackup.maxBytes) {
     throw const FormatException('同步书目超过 4 MiB，请减少单次同步的书目与分卷');
   }
-  zip.addFile(ArchiveFile('manifest.json', metadata.length, metadata));
+  addCheckedFile('manifest.json', metadata);
   if (bundle.bookMetadata != null) {
     final edits = utf8.encode(jsonEncode(bundle.bookMetadata));
     if (edits.length > LibraryBackup.maxBytes) {
       throw const FormatException('书籍信息超过同步大小限制');
     }
-    zip.addFile(ArchiveFile('book-info.json', edits.length, edits));
+    addCheckedFile('book-info.json', edits);
   }
-  zip.addFile(ArchiveFile('library.json', backup.length, backup));
+  addCheckedFile('library.json', backup);
   final bytes = ZipEncoder().encode(zip);
   if (bytes.length > 256 * 1024 * 1024) {
     throw const FormatException('同步文件超过 256 MB，请减少本地书籍后重试');
@@ -424,24 +435,33 @@ class BookSync extends ChangeNotifier {
   Future<void> _merge(BookSyncBundle bundle) async {
     final backup = await LibraryBackup.parse(bundle.backup);
     final localStore = books ?? state.localLibrary;
+    final importedNovels = <Novel>[];
     if (syncOriginals && localStore != null && bundle.books.isNotEmpty) {
       final tempDir = await Directory.systemTemp.createTemp('wenku8_sync_in_');
       try {
         for (final (i, input) in bundle.books.indexed) {
           final tempFile = File('${tempDir.path}/sync_$i');
           await tempFile.writeAsBytes(input.bytes, flush: true);
-          await localStore.importCloudFile(
+          final novel = await localStore.importCloudFile(
             input.name,
             tempFile.path,
             decodedText: input.text,
           );
+          importedNovels.add(novel);
         }
       } finally {
         if (await tempDir.exists()) await tempDir.delete(recursive: true);
       }
     }
     if (syncReading) {
-      await state.restoreBackup(backup);
+      await state.restoreBackup(backup, importTags: syncCategories);
+    } else {
+      if (importedNovels.isNotEmpty) {
+        await state.addShelfBooks(importedNovels);
+      }
+      if (syncCategories) {
+        await state.restoreBackupTagsOnly(backup);
+      }
     }
   }
 
@@ -470,20 +490,35 @@ class BookSync extends ChangeNotifier {
       }
       status = '正在合并书籍与阅读记录';
       _notify();
-      final backup = syncReading
-          ? await state.createBackup()
-          : remote != null
-          ? await LibraryBackup.parse(remote.backup)
-          : await LibraryBackup.fromRecords(const {});
+      final backup = await state.createSyncBackup(
+        syncReading: syncReading,
+        syncCategories: syncCategories,
+        remote: remote != null ? await LibraryBackup.parse(remote.backup) : null,
+      );
+      final encodedBackup = await backup.encode();
       final originals = <LocalBookInput>[];
-      var total = 0;
+      var total =
+          utf8.encode(encodedBackup).length +
+          (remote?.organization == null
+              ? 0
+              : utf8.encode(jsonEncode(remote!.organization)).length) +
+          (remote?.bookMetadata == null
+              ? 0
+              : utf8.encode(jsonEncode(remote!.bookMetadata)).length) +
+          (remote?.series == null
+              ? 0
+              : utf8.encode(jsonEncode(remote!.series)).length) +
+          64 * 1024;
       if (!syncOriginals) originals.addAll(remote?.books ?? const []);
       final localStore = books ?? state.localLibrary;
       if (syncOriginals && localStore != null) {
         for (final book in localStore.books) {
           final exported = await localStore.exportSyncOriginal(book.id);
           if (exported == null) continue;
-          total += exported.bytes.length + (exported.text?.length ?? 0) * 3;
+          final textBytes = exported.text == null
+              ? 0
+              : utf8.encode(exported.text!).length;
+          total += exported.bytes.length + textBytes;
           if (originals.length >= 200 || total > 512 * 1024 * 1024) {
             throw const FormatException('一次最多同步 200 本、512 MB 原书，请整理本地书库');
           }
@@ -499,7 +534,7 @@ class BookSync extends ChangeNotifier {
       final bytes = await compute(
         encodeBookSync,
         BookSyncBundle(
-          await backup.encode(),
+          encodedBackup,
           originals,
           organization: remote?.organization,
           bookMetadata: remote?.bookMetadata,
