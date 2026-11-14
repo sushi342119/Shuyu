@@ -26,7 +26,7 @@ class _ReadingHistoryPageState extends State<ReadingHistoryPage> {
   final Map<int, Future<Novel?>> _requests = {};
 
   Novel? _known(int id) {
-    if (widget.repository case final OfflineNovelRepository offline) {
+    if (offlineRepositoryForBook(widget.repository, id) case final offline?) {
       final book = offline.cache.book(id)?.novel;
       if (book != null) return book;
     }
@@ -35,7 +35,7 @@ class _ReadingHistoryPageState extends State<ReadingHistoryPage> {
 
   Future<Novel?> _resolve(int id) async {
     Novel? book;
-    if (widget.repository case final OfflineNovelRepository offline) {
+    if (offlineRepositoryForBook(widget.repository, id) case final offline?) {
       book = await offline.cachedBook(id);
     }
     book ??= await widget.repository.find(id);

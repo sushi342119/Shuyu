@@ -705,6 +705,151 @@ class ReaderPurificationStore extends ChangeNotifier {
     }
   }
 
+  Map<String, Object> exportBackupRecords() => {
+    preferenceKey: jsonEncode([for (final rule in _rules) rule.toJson()]),
+    enabledPreferenceKey: _enabled,
+    if (_paragraphEdits.isNotEmpty)
+      editsPreferenceKey: jsonEncode(_paragraphEdits),
+  };
+
+  ({
+    Map<String, Object> changed,
+    List<ReaderPurificationRule> rules,
+    Map<String, String> edits,
+    bool enabled,
+  })
+  prepareMergedBackupRecords(
+    Map<String, Object> records, {
+    required int? Function(int rawId) mapBookId,
+    bool importPreferences = false,
+  }) {
+    var nextEnabled = _enabled;
+    if (importPreferences &&
+        records[enabledPreferenceKey] is bool) {
+      nextEnabled = records[enabledPreferenceKey] as bool;
+    }
+
+    var nextRules = [..._rules];
+    if (records[preferenceKey] case final String rawRules) {
+      final decoded = jsonDecode(rawRules);
+      if (decoded is List) {
+        final incomingParsed = <ReaderPurificationRule>[];
+        for (final item in decoded) {
+          final parsed = ReaderPurificationRule.fromJson(item);
+          if (parsed == null) continue;
+          if (parsed.scopeBookId != null) {
+            final mappedId = mapBookId(parsed.scopeBookId!);
+            if (mappedId == null) continue;
+            incomingParsed.add(parsed.copyWith(scopeBookId: mappedId));
+          } else {
+            incomingParsed.add(parsed);
+          }
+        }
+        final incomingById = {for (final r in incomingParsed) r.id: r};
+        final builtInIds = {for (final p in builtInPresets) p.id};
+        final mergedPresets = <ReaderPurificationRule>[
+          for (final preset in builtInPresets)
+            preset.copyWith(
+              enabled:
+                  (_rules
+                          .where((r) => r.id == preset.id)
+                          .firstOrNull
+                          ?.enabled ??
+                      preset.enabled) ||
+                  (incomingById[preset.id]?.enabled ?? false),
+            ),
+        ];
+        final mergedCustom = <ReaderPurificationRule>[
+          for (final existing in _rules)
+            if (!existing.builtIn && !builtInIds.contains(existing.id))
+              existing,
+        ];
+        final seenIds = {for (final r in mergedCustom) r.id};
+        final seenSignatures = {for (final r in mergedCustom) r.signature};
+        for (final custom in incomingParsed) {
+          if (custom.builtIn || builtInIds.contains(custom.id)) continue;
+          if (seenSignatures.contains(custom.signature)) continue;
+          var candidate = custom;
+          if (!seenIds.add(candidate.id)) {
+            var suffix = 1;
+            var nextId = '${candidate.id}_import_$suffix';
+            while (!seenIds.add(nextId)) {
+              suffix++;
+              nextId = '${candidate.id}_import_$suffix';
+            }
+            candidate = ReaderPurificationRule(
+              id: nextId,
+              name: candidate.name,
+              pattern: candidate.pattern,
+              replacement: candidate.replacement,
+              isRegex: candidate.isRegex,
+              enabled: candidate.enabled,
+              scopeBookId: candidate.scopeBookId,
+              scopeBookTitle: candidate.scopeBookTitle,
+              applyToTitle: candidate.applyToTitle,
+              applyToContent: candidate.applyToContent,
+              importScope: candidate.importScope,
+              excludeScope: candidate.excludeScope,
+              sourceUrl: candidate.sourceUrl,
+              unsupportedReason: candidate.unsupportedReason,
+            );
+          }
+          seenSignatures.add(candidate.signature);
+          mergedCustom.add(candidate);
+        }
+        nextRules = [...mergedPresets, ...mergedCustom];
+      }
+    }
+
+    final nextEdits = {..._paragraphEdits};
+    if (records[editsPreferenceKey] case final String rawEdits) {
+      final decoded = jsonDecode(rawEdits);
+      if (decoded is Map) {
+        for (final entry in decoded.entries) {
+          final k = entry.key;
+          final v = entry.value;
+          if (k is! String || v is! String) continue;
+          final parts = k.split(':');
+          if (parts.length != 3) continue;
+          final rawBookId = int.tryParse(parts[0]);
+          if (rawBookId == null) continue;
+          final mappedBookId = mapBookId(rawBookId);
+          if (mappedBookId == null) continue;
+          final remappedKey = '$mappedBookId:${parts[1]}:${parts[2]}';
+          nextEdits.putIfAbsent(remappedKey, () => v);
+        }
+      }
+    }
+
+    final changed = <String, Object>{
+      if (records.containsKey(preferenceKey))
+        preferenceKey: jsonEncode([for (final r in nextRules) r.toJson()]),
+      if (importPreferences && records.containsKey(enabledPreferenceKey))
+        enabledPreferenceKey: nextEnabled,
+      if (records.containsKey(editsPreferenceKey) && nextEdits.isNotEmpty)
+        editsPreferenceKey: jsonEncode(nextEdits),
+    };
+    return (
+      changed: changed,
+      rules: nextRules,
+      edits: nextEdits,
+      enabled: nextEnabled,
+    );
+  }
+
+  void applyMergedBackupRecords({
+    required List<ReaderPurificationRule> rules,
+    required Map<String, String> edits,
+    required bool enabled,
+  }) {
+    _loaded = true;
+    _rules = rules;
+    _paragraphEdits = edits;
+    _enabled = enabled;
+    _invalidateCaches();
+    notifyListeners();
+  }
+
   static String _editKey(int bookId, int chapterIndex, int paragraphIndex) =>
       '$bookId:$chapterIndex:$paragraphIndex';
 

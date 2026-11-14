@@ -30,6 +30,7 @@ import 'user_fonts.dart';
 import 'font_catalog.dart';
 import 'app_palette.dart';
 import 'reader_preferences.dart';
+import 'reader_purification.dart';
 import 'ui_preferences.dart';
 
 part 'library_backup_merge.dart';
@@ -185,8 +186,8 @@ class ReadingPosition {
           : null,
       paragraphFraction: number('paragraphFraction', 0).clamp(0, 1),
       textScale: number('textScale', 1).clamp(.5, 5),
-      typeface: value['typeface'] == 'sourceHanSerif'
-          ? 'sourceHanSerif'
+      typeface: validFontChoice(value['typeface'], follow: true)
+          ? value['typeface'] as String
           : 'system',
     );
   }
@@ -230,6 +231,20 @@ class ReaderBookmark {
       ? annotation.style.label
       : '书签';
   bool get isUnderline => underlineRanges.isNotEmpty;
+
+  ReaderBookmark copyWithId(String newId) => ReaderBookmark(
+    id: newId,
+    chapterTitle: chapterTitle,
+    position: position,
+    quote: quote,
+    category: category,
+    categoryAt: categoryAt,
+    underlineRanges: underlineRanges,
+    annotation: _annotation,
+    rangeUpdatedAt: rangeUpdatedAt,
+    createdAt: createdAt,
+    createdOffsetMinutes: createdOffsetMinutes,
+  );
 
   ReaderBookmark withCategory(String value, int at) => ReaderBookmark(
     id: id,
@@ -1056,11 +1071,20 @@ class LibraryState extends ChangeNotifier {
   int lastReadAt(int id) => _positions[id]?.updatedAt ?? 0;
 
   bool finishedReading(Novel novel) {
-    final position = positionFor(novel.id);
     final count = novel.chapters.isEmpty
         ? novel.chapterCount
         : novel.chapters.length;
-    if (position == null || count <= 0 || position.fraction < .995) {
+    if (count <= 0) return false;
+    final position = positionFor(novel.id);
+    if (position == null) {
+      final book = _localChapters?.bookFor(novel.id);
+      if (book?.kind == LocalBookKind.pdf) {
+        return _chapters.containsKey(novel.id) &&
+            chapterFor(novel.id) >= count - 1;
+      }
+      return false;
+    }
+    if (position.fraction < .995) {
       return false;
     }
     if (position.chapterId > 0 && novel.chapters.isNotEmpty) {
@@ -1112,8 +1136,8 @@ class LibraryState extends ChangeNotifier {
       );
     }
     await _queuePositionWrite(() async {
-      final nextSort = ['recentRead', 'recentAdded', 'title'].contains(sort)
-          ? sort!
+      final nextSort = sort != null && shelfSortValues.contains(sort)
+          ? sort
           : _appearanceStore.shelfSort;
       final nextFilter =
           ['all', 'unread', 'reading', 'finished', 'untagged'].contains(filter)
@@ -1288,6 +1312,15 @@ class LibraryState extends ChangeNotifier {
       chapter >= 0 &&
           chapter < novel.chapters.length &&
           _localChapters!.acceptsChapter(novel.id, novel.chapters[chapter]);
+
+  bool _acceptLocalSavePosition(Novel novel, int chapter) {
+    if (_acceptLocalPosition(novel, chapter)) return true;
+    final book = _localChapters?.bookFor(novel.id);
+    return book != null &&
+        book.kind == LocalBookKind.pdf &&
+        chapter >= 0 &&
+        chapter < book.pageCount;
+  }
 
   /// All consumers are prepared together before any progress is overwritten.
   /// Replay writes the journal's target records, never reinterprets new offsets.
@@ -2737,7 +2770,7 @@ class LibraryState extends ChangeNotifier {
         ),
       );
     }
-    if (!_acceptLocalPosition(novel, chapter)) return Future.value();
+    if (!_acceptLocalSavePosition(novel, chapter)) return Future.value();
     if (novel.id <= 0 ||
         !offset.isFinite ||
         !maximum.isFinite ||
@@ -2796,7 +2829,7 @@ class LibraryState extends ChangeNotifier {
       _historyChanged();
     }
     return _queuePositionWrite(() async {
-      if (!_acceptLocalPosition(novel, chapter)) {
+      if (!_acceptLocalSavePosition(novel, chapter)) {
         rollbackRejected();
         return;
       }
@@ -2831,7 +2864,7 @@ class LibraryState extends ChangeNotifier {
     }
     if (_appearanceStore.theme == mode) {
       if (_appearanceStore.hasThemeMismatch(mode)) {
-        await _appearanceStore.writeTheme(mode);
+        await _queuePositionWrite(() => _appearanceStore.writeTheme(mode));
       }
       return;
     }
@@ -2840,7 +2873,9 @@ class LibraryState extends ChangeNotifier {
     _appearance.notifyListeners();
     _settings.notifyListeners();
     notifyListeners();
-    await _appearanceStore.writeTheme(mode);
+    await _queuePositionWrite(
+      () => _appearanceStore.writeTheme(_appearanceStore.theme),
+    );
   }
 
   /// 确保当前选中的导入或下载字体已通过 FontLoader 加载（启动时调用）。
@@ -2968,9 +3003,13 @@ class LibraryState extends ChangeNotifier {
       _settings.notifyListeners();
     }
     if (persist) {
-      await _readerStore.writeTypography(
-        fontSize: fontSize?.isFinite == true ? font : null,
-        lineHeight: lineHeight?.isFinite == true ? spacing : null,
+      final writeFont = fontSize?.isFinite == true;
+      final writeSpacing = lineHeight?.isFinite == true;
+      await _queuePositionWrite(
+        () => _readerStore.writeTypography(
+          fontSize: writeFont ? _readerStore.fontSize : null,
+          lineHeight: writeSpacing ? _readerStore.lineHeight : null,
+        ),
       );
     }
   }
@@ -3012,7 +3051,9 @@ class LibraryState extends ChangeNotifier {
     }
     if (_performanceStore.reduceMotion == value) {
       if (_performanceStore.hasReduceMotionMismatch(value)) {
-        await _performanceStore.writeReduceMotion(value);
+        await _queuePositionWrite(
+          () => _performanceStore.writeReduceMotion(value),
+        );
       }
       return;
     }
@@ -3021,7 +3062,9 @@ class LibraryState extends ChangeNotifier {
     _appearance.notifyListeners();
     _settings.notifyListeners();
     notifyListeners();
-    await _performanceStore.writeReduceMotion(value);
+    await _queuePositionWrite(
+      () => _performanceStore.writeReduceMotion(_performanceStore.reduceMotion),
+    );
   }
 
   Future<void> setGlassBlur(double value, {bool persist = true}) async {
@@ -3039,7 +3082,9 @@ class LibraryState extends ChangeNotifier {
       notifyListeners();
     }
     if (persist) {
-      await _appearanceStore.writeGlassBlur(next);
+      await _queuePositionWrite(
+        () => _appearanceStore.writeGlassBlur(_appearanceStore.glassBlur),
+      );
     }
   }
 
@@ -3060,7 +3105,9 @@ class LibraryState extends ChangeNotifier {
       notifyListeners();
     }
     if (persist) {
-      await _appearanceStore.writeGlassOpacity(next);
+      await _queuePositionWrite(
+        () => _appearanceStore.writeGlassOpacity(_appearanceStore.glassOpacity),
+      );
     }
   }
 
@@ -3117,7 +3164,7 @@ class LibraryState extends ChangeNotifier {
       _settings.notifyListeners();
       notifyListeners();
     }
-    await writeLibraryPreference(_prefs, key, value);
+    await _queuePositionWrite(() => writeLibraryPreference(_prefs, key, value));
   }
 
   /// Null selects the automatic tier (stored as "auto", never removed, so a

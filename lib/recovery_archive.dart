@@ -13,6 +13,19 @@ void recordRecoveryFailure(String operation, Object error) {
   debugPrint('$operation: $message');
 }
 
+const maxRecoveryArchiveEntries = 16;
+const maxRecoveryRawChars = 64 * 1024;
+
+String _truncateUtf16Safe(String input, int maxChars) {
+  if (input.length <= maxChars) return input;
+  var end = maxChars;
+  if (end > 0) {
+    final prev = input.codeUnitAt(end - 1);
+    if (prev >= 0xD800 && prev <= 0xDBFF) end--;
+  }
+  return input.substring(0, end);
+}
+
 Future<void> archiveRecoveryRecord(
   SharedPreferences prefs,
   String key,
@@ -26,16 +39,42 @@ Future<void> archiveRecoveryRecord(
         ? List<String>.of(previous)
         : <String>[
             if (previous != null)
-              jsonEncode({'raw': previous, 'reason': 'invalid_archive'}),
+              jsonEncode({
+                'raw': previous is String
+                    ? _truncateUtf16Safe(previous, maxRecoveryRawChars)
+                    : _truncateUtf16Safe('$previous', maxRecoveryRawChars),
+                'reason': 'invalid_archive',
+              }),
           ];
+    var truncated = false;
+    Object boundedRaw = raw;
+    if (raw is String && raw.length > maxRecoveryRawChars) {
+      boundedRaw = _truncateUtf16Safe(raw, maxRecoveryRawChars);
+      truncated = true;
+    } else if (raw is! String && raw is! num && raw is! bool) {
+      String encoded;
+      try {
+        encoded = jsonEncode(raw);
+      } catch (_) {
+        encoded = '$raw';
+      }
+      if (encoded.length > maxRecoveryRawChars) {
+        boundedRaw = _truncateUtf16Safe(encoded, maxRecoveryRawChars);
+        truncated = true;
+      }
+    }
     records.add(
       jsonEncode({
-        'raw': raw,
+        'raw': boundedRaw,
+        if (truncated) 'truncated': true,
         'reason': reason,
         'details': ?details,
         'archivedAt': DateTime.now().millisecondsSinceEpoch,
       }),
     );
+    if (records.length > maxRecoveryArchiveEntries) {
+      records.removeRange(0, records.length - maxRecoveryArchiveEntries);
+    }
     if (!await prefs.setStringList(key, records)) {
       throw StateError('恢复记录隔离失败：$key');
     }

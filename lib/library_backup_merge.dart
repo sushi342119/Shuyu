@@ -1,23 +1,54 @@
 part of 'library_state.dart';
 
 extension LibraryBackupMerge on LibraryState {
-  Map<String, Object> _backupRecords() {
+  Future<Map<String, Object>> _collectBackupRecords(
+    LibraryBackupOptions options,
+  ) async {
     final tagStore = TagStore.maybeShared;
     if (tagStore == null) {
       throw const LibraryBackupUnavailable('标签未加载，已拒绝生成备份或恢复前快照；请重启并成功加载标签后重试');
     }
+    if (options.includePurification) {
+      await ReaderPurificationStore.shared.ensureLoaded();
+    }
+    final appLanguage = _prefs.get('appLanguage');
+    final checkAppUpdates = _prefs.get('checkAppUpdates');
+    final localTxtEncoding = _prefs.get('localTxtEncoding');
     return {
       'shelf': _shelf.map((id) => '$id').toList(),
-      'local_shelf_removed': _prefs.getStringList('local_shelf_removed') ?? <String>[],
+      'local_shelf_removed':
+          _prefs.getStringList('local_shelf_removed') ?? <String>[],
       'reading_history_hidden': _hiddenHistory.map((id) => '$id').toList(),
       'recentSearches': _recentSearches,
-      ..._appearanceStore.toBackupRecords(),
-      ..._readerStore.toBackupRecords(),
-      ..._performanceStore.toBackupRecords(),
-      for (final entry in _added.entries) 'shelf_added_${entry.key}': entry.value,
+      if (options.includePreferences) ...{
+        ..._appearanceStore.toBackupRecords(),
+        ..._readerStore.toBackupRecords(),
+        ..._performanceStore.toBackupRecords(),
+        if (appLanguage is String &&
+            const [
+              'system',
+              'simplified',
+              'hongKong',
+              'taiwan',
+            ].contains(appLanguage))
+          'appLanguage': appLanguage,
+        if (checkAppUpdates is bool) 'checkAppUpdates': checkAppUpdates,
+        if (localTxtEncoding is String &&
+            localTextEncodingOptions.containsKey(localTxtEncoding))
+          'localTxtEncoding': localTxtEncoding,
+      },
+      if (options.includePurification)
+        ...ReaderPurificationStore.shared.exportBackupRecords(),
+      if (options.includeReadingStats) ...{
+        ReadingActivityStore.preferenceKey: readingActivity.encode(),
+        ReadingMomentsStore.preferenceKey: readingMoments.encode(),
+      },
+      for (final entry in _added.entries)
+        'shelf_added_${entry.key}': entry.value,
       for (final entry in _known.entries)
         'novel_meta_${entry.key}': jsonEncode(entry.value.toSnapshot()),
-      for (final entry in _chapters.entries) 'chapter_${entry.key}': entry.value,
+      for (final entry in _chapters.entries)
+        'chapter_${entry.key}': entry.value,
       for (final entry in _positions.entries)
         'reading_position_${entry.key}': jsonEncode(entry.value.toJson()),
       for (final entry in _bookmarks.entries)
@@ -28,32 +59,44 @@ extension LibraryBackupMerge on LibraryState {
     };
   }
 
-  Future<LibraryBackup> createBackup() async {
+  Future<LibraryBackup> createBackup({
+    LibraryBackupOptions options = LibraryBackupOptions.all,
+  }) async {
     _requireShelfLoaded();
     if (_restoreBarrier case final barrier?) {
-      return barrier.future.then((_) => createBackup());
+      return barrier.future.then((_) => createBackup(options: options));
     }
     late LibraryBackup backup;
     await _queuePositionWrite(() async {
       _requireShelfLoaded();
-      backup = await LibraryBackup.fromLocalRecords(_backupRecords());
+      backup = await LibraryBackup.fromLocalRecords(
+        await _collectBackupRecords(options),
+      );
       _recordOmittedCovers(backup);
     });
     return backup;
   }
 
-  String? get preRestoreBackup => _prefs.getString('library_pre_restore_snapshot_v1');
+  String? get preRestoreBackup =>
+      _prefs.getString('library_pre_restore_snapshot_v1');
 
   /// Merge, do not replace: current newer positions and metadata win. Memory is
   /// published only after all keys commit, with a rollback journal across kills.
   Future<void> restoreBackup(
     LibraryBackup backup, {
     bool importPreferences = false,
+    bool importPurification = true,
+    bool importReadingStats = true,
   }) async {
     _requireShelfLoaded();
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then(
-        (_) => restoreBackup(backup, importPreferences: importPreferences),
+        (_) => restoreBackup(
+          backup,
+          importPreferences: importPreferences,
+          importPurification: importPurification,
+          importReadingStats: importReadingStats,
+        ),
       );
     }
     final barrier = Completer<void>();
@@ -61,9 +104,15 @@ extension LibraryBackupMerge on LibraryState {
     try {
       await _queuePositionWrite(() async {
         _requireShelfLoaded();
-        final previous = await LibraryBackup.fromLocalRecords(_backupRecords());
+        final previous = await LibraryBackup.fromLocalRecords(
+          await _collectBackupRecords(LibraryBackupOptions.all),
+        );
         _recordOmittedCovers(previous);
-        await writeLibraryPreference(_prefs, 'library_pre_restore_snapshot_v1', await previous.encode());
+        await writeLibraryPreference(
+          _prefs,
+          'library_pre_restore_snapshot_v1',
+          await previous.encode(),
+        );
         final records = backup.records;
         final (:remap, :collidingUnmatched) = _resolveLocalBookIdMap(
           _known,
@@ -138,24 +187,33 @@ extension LibraryBackupMerge on LibraryState {
             final id = mapBookId(rawId);
             if (id == null) continue;
             final current = marks.putIfAbsent(id, () => []);
-            final fingerprints = current.map(_bookmarkFingerprint).toSet();
             final ids = current.map((mark) => mark.id).toSet();
             for (final raw in jsonDecode(entry.value as String) as List) {
               var mark = ReaderBookmark.fromJson(
                 Map<String, dynamic>.from(raw),
               );
-              if (!fingerprints.add(_bookmarkFingerprint(mark))) continue;
+              final fingerprint = _bookmarkFingerprint(mark);
+              final existingIndex = current.indexWhere(
+                (existing) =>
+                    (mark.createdAt != null &&
+                        existing.id == mark.id &&
+                        existing.createdAt == mark.createdAt) ||
+                    _bookmarkFingerprint(existing) == fingerprint,
+              );
+              if (existingIndex >= 0) {
+                current[existingIndex] = _mergeBookmark(
+                  current[existingIndex],
+                  mark,
+                );
+                continue;
+              }
               var candidate = mark.id;
               for (var suffix = 1; ids.contains(candidate); suffix++) {
                 candidate = 'import-${mark.position.updatedAt}-$suffix';
               }
               ids.add(candidate);
               if (candidate != mark.id) {
-                mark = ReaderBookmark(
-                  id: candidate,
-                  chapterTitle: mark.chapterTitle,
-                  position: mark.position,
-                );
+                mark = mark.copyWithId(candidate);
               }
               current.add(mark);
             }
@@ -185,14 +243,16 @@ extension LibraryBackupMerge on LibraryState {
           }
         }
         final seen = <String>{};
-        final searches = <String>[
-          ..._recentSearches,
-          ...(records['recentSearches'] as List<String>? ?? const []),
-        ].map((term) => term.trim())
-            .where(LibraryState.validSearchHistory)
-            .where((term) => seen.add(term.toLowerCase()))
-            .take(12)
-            .toList();
+        final searches =
+            <String>[
+                  ..._recentSearches,
+                  ...(records['recentSearches'] as List<String>? ?? const []),
+                ]
+                .map((term) => term.trim())
+                .where(LibraryState.validSearchHistory)
+                .where((term) => seen.add(term.toLowerCase()))
+                .take(12)
+                .toList();
         changed['shelf'] = shelf.map((id) => '$id').toList();
         changed['local_shelf_removed'] = {
           ...?_prefs.getStringList('local_shelf_removed'),
@@ -204,6 +264,43 @@ extension LibraryBackupMerge on LibraryState {
         }.where((id) => !shelf.contains(int.tryParse(id))).toList();
         changed['reading_history_hidden'] = hidden.map((id) => '$id').toList();
         changed['recentSearches'] = searches;
+
+        ({
+          Map<String, Object> changed,
+          List<ReaderPurificationRule> rules,
+          Map<String, String> edits,
+          bool enabled,
+        })?
+        stagedPurification;
+        if (importPurification && backup.hasPurification) {
+          await ReaderPurificationStore.shared.ensureLoaded();
+          stagedPurification = ReaderPurificationStore.shared
+              .prepareMergedBackupRecords(
+                records,
+                mapBookId: mapBookId,
+                importPreferences: importPreferences,
+              );
+          changed.addAll(stagedPurification.changed);
+        }
+
+        final incomingActivity = importReadingStats
+            ? records[ReadingActivityStore.preferenceKey] as String?
+            : null;
+        final incomingMoments = importReadingStats
+            ? records[ReadingMomentsStore.preferenceKey] as String?
+            : null;
+        if (incomingActivity != null) {
+          changed[ReadingActivityStore.preferenceKey] = readingActivity
+              .mergedRecord(incomingActivity);
+        }
+        if (incomingMoments != null) {
+          changed[ReadingMomentsStore.preferenceKey] = readingMoments
+              .mergedRecord(
+                incomingMoments,
+                importPreferences: importPreferences,
+              );
+        }
+
         if (importPreferences) {
           for (final key in backupPreferenceKeys) {
             if (records[key] case final value?) changed[key] = value;
@@ -245,6 +342,23 @@ extension LibraryBackupMerge on LibraryState {
         }
         if (tagRecords.isNotEmpty) {
           await TagStore.shared.importTagRecords(tagRecords);
+        }
+        if (stagedPurification != null) {
+          ReaderPurificationStore.shared.applyMergedBackupRecords(
+            rules: stagedPurification.rules,
+            edits: stagedPurification.edits,
+            enabled: stagedPurification.enabled,
+          );
+        }
+        if (incomingActivity != null) {
+          await readingActivity.mergeRecord(incomingActivity, persist: false);
+        }
+        if (incomingMoments != null) {
+          await readingMoments.mergeRecord(
+            incomingMoments,
+            persist: false,
+            importPreferences: importPreferences,
+          );
         }
         final oldShelf = {..._shelf};
         _shelf
@@ -381,7 +495,57 @@ extension LibraryBackupMerge on LibraryState {
 
   static String _bookmarkFingerprint(ReaderBookmark bookmark) {
     final position = {...bookmark.position.toJson()}..remove('updatedAt');
-    return jsonEncode(position);
+    return jsonEncode({
+      'position': position,
+      'isUnderline': bookmark.isUnderline,
+      if (bookmark.isUnderline)
+        'ranges': [for (final range in bookmark.underlineRanges) range.toJson()],
+      if (bookmark.quote.isNotEmpty) 'quote': bookmark.quote,
+    });
+  }
+
+  static ReaderBookmark _mergeBookmark(
+    ReaderBookmark existing,
+    ReaderBookmark incoming,
+  ) {
+    final takeIncomingRange = incoming.rangeUpdatedAt > existing.rangeUpdatedAt;
+    final takeIncomingCategory =
+        incoming.categoryAt > existing.categoryAt ||
+        (existing.categoryAt == 0 &&
+            existing.category.isEmpty &&
+            incoming.category.isNotEmpty);
+    final takeIncomingAnnotation =
+        incoming.annotation.updatedAt > existing.annotation.updatedAt ||
+        (existing.annotation.updatedAt == 0 &&
+            existing.annotation.isEmpty &&
+            !incoming.annotation.isEmpty);
+    return ReaderBookmark(
+      id: existing.id,
+      chapterTitle: takeIncomingRange
+          ? incoming.chapterTitle
+          : existing.chapterTitle,
+      position: takeIncomingRange ? incoming.position : existing.position,
+      quote: takeIncomingRange
+          ? incoming.quote
+          : (existing.quote.isNotEmpty ? existing.quote : incoming.quote),
+      category: takeIncomingCategory ? incoming.category : existing.category,
+      categoryAt: takeIncomingCategory
+          ? incoming.categoryAt
+          : existing.categoryAt,
+      underlineRanges: takeIncomingRange
+          ? incoming.underlineRanges
+          : existing.underlineRanges,
+      annotation: takeIncomingAnnotation
+          ? incoming.annotation
+          : existing.annotation,
+      rangeUpdatedAt: takeIncomingRange
+          ? incoming.rangeUpdatedAt
+          : existing.rangeUpdatedAt,
+      createdAt: existing.createdAt ?? incoming.createdAt,
+      createdOffsetMinutes: existing.createdAt != null
+          ? existing.createdOffsetMinutes
+          : incoming.createdOffsetMinutes,
+    );
   }
 
   void _recordOmittedCovers(LibraryBackup backup) {

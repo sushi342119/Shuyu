@@ -166,7 +166,16 @@ class UserFontStore extends ChangeNotifier {
     }
   }
 
-  Future<void> load() async {
+  Future<void>? _loading;
+  Future<void>? _saving;
+  int _saveSeq = 0;
+
+  Future<void> load() {
+    if (_loaded) return Future.value();
+    return _loading ??= _loadImpl().whenComplete(() => _loading = null);
+  }
+
+  Future<void> _loadImpl() async {
     if (_loaded) return;
     final root = await _root();
     for (final font in downloadableFonts) {
@@ -335,18 +344,34 @@ class UserFontStore extends ChangeNotifier {
 
   void cancelDownload() => _cancellation?.cancel();
 
-  Future<void> _save() async {
-    final root = await _root();
-    await root.create(recursive: true);
-    final temp = File('${root.path}/fonts.json.part');
-    await temp.writeAsString(
-      jsonEncode(_fonts.map((font) => font.toJson()).toList()),
-      flush: true,
-    );
-    await temp.rename('${root.path}/fonts.json');
-    try {
-      await _prefs?.remove('importedFonts');
-    } catch (_) {}
+  Future<void> _save() {
+    Future<void> write() async {
+      final root = await _root();
+      await root.create(recursive: true);
+      final temp = File('${root.path}/fonts.json.${++_saveSeq}.part');
+      try {
+        await temp.writeAsString(
+          jsonEncode(_fonts.map((font) => font.toJson()).toList()),
+          flush: true,
+        );
+        await temp.rename('${root.path}/fonts.json');
+      } finally {
+        try {
+          if (await temp.exists()) await temp.delete();
+        } catch (_) {}
+      }
+      try {
+        await _prefs?.remove('importedFonts');
+      } catch (_) {}
+    }
+
+    final previous = _saving;
+    final next = previous == null ? write() : previous.then((_) => write());
+    final barrier = next.then<void>((_) {}, onError: (Object _) {});
+    _saving = barrier;
+    return next.whenComplete(() {
+      if (identical(_saving, barrier)) _saving = null;
+    });
   }
 
   Future<UserFont> importFile(String name, String path) async {
@@ -404,6 +429,10 @@ class UserFontStore extends ChangeNotifier {
     final file = File(filePath);
     if (!await isPrivateFontFile(file)) {
       throw StateError('字体文件不在应用字体目录内');
+    }
+    await load();
+    if (_fonts.length >= 20) {
+      throw const FormatException('最多保留 20 款导入字体，请先移除不用的字体');
     }
     final ext = filePath.split('.').last.toLowerCase();
     final id =

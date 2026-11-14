@@ -56,7 +56,7 @@ class ReaderSettingsPreferenceStore {
       2.2,
     );
     readerTypeface = switch (_prefs.get('readerTypeface')) {
-      final String value when value.isNotEmpty => value,
+      final String value when validFontChoice(value, follow: true) => value,
       _ => followAppFont,
     };
     keepScreenOn = _prefs.get('readerKeepScreenOn') == true;
@@ -118,6 +118,7 @@ class ReaderSettingsPreferenceStore {
     'readerFontSize': fontSize,
     'readerLineHeight': lineHeight,
     'appFontId': appFontId,
+    'readerTypeface': readerTypeface,
     UiPreferenceKeys.pdfNightInvert: pdfNightInvert,
     UiPreferenceKeys.readerPreferences: jsonEncode(readerPreferences.toJson()),
     'readerKeepScreenOn': keepScreenOn,
@@ -131,13 +132,17 @@ class ReaderSettingsPreferenceStore {
       lineHeight = value.toDouble();
     }
     if (records['appFontId'] case final String value) {
-      if (value == appFontSystem.id || value == appFontSourceHanSerif.id) {
+      if (validFontChoice(value)) {
         appFontId = value;
       }
     } else if (records['appTypeface'] case final String value) {
-      appFontId = value == 'sourceHanSerif'
-          ? appFontSourceHanSerif.id
-          : appFontSystem.id;
+      if (validFontChoice(value)) {
+        appFontId = value;
+      }
+    }
+    if (records['readerTypeface'] case final String value
+        when validFontChoice(value, follow: true)) {
+      readerTypeface = value;
     }
     if (records['readerKeepScreenOn'] case final bool value) {
       keepScreenOn = value;
@@ -180,11 +185,10 @@ class AppearancePreferenceStore {
     }
     glassBlur = _readClampedPreference(_prefs, 'glassBlur', 8, 0, 24);
     glassOpacity = _readClampedPreference(_prefs, 'glassOpacity', .87, 0, 1);
-    shelfSort = switch (_prefs.get('shelfSort')) {
-      'recentAdded' => 'recentAdded',
-      'title' => 'title',
-      _ => 'recentRead',
-    };
+    final rawSort = _prefs.get('shelfSort');
+    shelfSort = rawSort is String && shelfSortValues.contains(rawSort)
+        ? rawSort
+        : 'recentRead';
     shelfFilter = switch (_prefs.get('shelfFilter')) {
       'unread' => 'unread',
       'reading' => 'reading',
@@ -254,6 +258,7 @@ class AppearancePreferenceStore {
 
   Map<String, Object> toBackupRecords() => {
     'theme': theme.name,
+    AppPalettePreferences.key: appPalette.encode(),
     'glassBlur': glassBlur,
     'glassOpacity': glassOpacity,
     UiPreferenceKeys.glassTier: glassTier?.name ?? glassTierAuto,
@@ -273,13 +278,23 @@ class AppearancePreferenceStore {
         orElse: () => ThemeMode.system,
       );
     }
+    if (records[AppPalettePreferences.key] case final String value) {
+      try {
+        appPalette = AppPalettePreferences.decode(value);
+      } on FormatException {
+        /* Keep existing palette if malformed. */
+      }
+    }
     if (records['glassBlur'] case final num value) {
       glassBlur = value.toDouble();
     }
     if (records['glassOpacity'] case final num value) {
       glassOpacity = value.toDouble();
     }
-    if (records['shelfSort'] case final String value) shelfSort = value;
+    if (records['shelfSort'] case final String value
+        when shelfSortValues.contains(value)) {
+      shelfSort = value;
+    }
     if (records['shelfFilter'] case final String value) shelfFilter = value;
     loadUiPreferences();
     resetRetired();

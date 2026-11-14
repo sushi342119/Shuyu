@@ -100,7 +100,7 @@ Future<ReaderAnnotationContext?> loadOfflineReaderAnnotationContext({
   required ReadingPosition anchor,
   Novel? novel,
 }) async {
-  final offline = repository is OfflineNovelRepository ? repository : null;
+  final offline = offlineRepositoryForBook(repository, novelId);
   if (offline != null) await offline.cache.load();
   final localStore = state.localLibrary;
   final localBook = localStore?.bookFor(novelId);
@@ -347,12 +347,8 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
 
   Novel? _known(int id) =>
       widget.state.localLibrary?.novelFor(id) ??
-      (widget.repository is OfflineNovelRepository
-          ? (widget.repository as OfflineNovelRepository).cache
-                    .book(id)
-                    ?.novel ??
-                widget.state.cachedNovel(id)
-          : widget.state.cachedNovel(id));
+      offlineRepositoryForBook(widget.repository, id)?.cache.book(id)?.novel ??
+      widget.state.cachedNovel(id);
 
   Future<void> _open(int id, ReaderBookmark mark) async {
     if (_opening != null) return;

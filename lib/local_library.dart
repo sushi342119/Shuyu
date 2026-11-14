@@ -4549,7 +4549,17 @@ class CompositeNovelRepository extends NovelRepository {
   final NovelRepository remote;
 
   @override
+  NovelRepository? get remoteRepository => remote;
+
+  @override
   Future<List<Novel>> list() => remote.list();
+
+  @override
+  Future<NovelPage> browse({
+    NovelSort sort = NovelSort.lastUpdate,
+    int page = 1,
+    bool refresh = false,
+  }) => remote.browse(sort: sort, page: page, refresh: refresh);
 
   @override
   Future<Novel?> find(int id) =>
