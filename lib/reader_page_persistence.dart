@@ -1,7 +1,11 @@
 part of 'pages.dart';
 
 extension _ReaderPagePersistence on _ReaderPageState {
-  ReadingPosition? _positionForParagraph(int paragraphIndex, int startOffset) {
+  ReadingPosition? _positionForParagraph(
+    int paragraphIndex,
+    int startOffset, {
+    bool purifiedOffset = false,
+  }) {
     final content = _currentContent;
     if (content == null ||
         _novel.chapters.isEmpty ||
@@ -9,12 +13,19 @@ extension _ReaderPagePersistence on _ReaderPageState {
         paragraphIndex >= content.paragraphs.length) {
       return _currentPosition(bookmark: true);
     }
+    final rawStartOffset = purifiedOffset
+        ? _purifyParagraphAt(
+            content.paragraphs,
+            _chapter,
+            paragraphIndex,
+          ).rawOffsetFor(startOffset)
+        : startOffset;
     final base = _currentPosition(bookmark: true);
     final chapter = _novel.chapters[_chapter];
     final length = content.paragraphs[paragraphIndex].length;
     final fraction = length <= 0
         ? 0.0
-        : (startOffset / length).clamp(0.0, 1.0);
+        : (rawStartOffset / length).clamp(0.0, 1.0);
     return ReadingPosition(
       chapter: _chapter,
       chapterId: chapter.id,
@@ -39,7 +50,8 @@ extension _ReaderPagePersistence on _ReaderPageState {
   ) {
     if (_novel.chapters.isEmpty) return const [];
     final fallbackChapterId = _novel.chapters[_chapter].id;
-    final contentRevision = _currentContent?.revision ?? '';
+    final content = _currentContent;
+    final contentRevision = content?.revision ?? '';
     final byChapter = <int, List<ReaderQuoteRange>>{};
     for (final range in selection.ranges) {
       final chapterId = range.chapter ?? fallbackChapterId;
@@ -53,12 +65,46 @@ extension _ReaderPagePersistence on _ReaderPageState {
             : a.start.compareTo(b.start));
       final first = ranges.first;
       final last = ranges.last;
+      final chapterIdx = _novel.chapters.indexWhere((c) => c.id == entry.key);
+      final targetChapter = chapterIdx >= 0 ? chapterIdx : _chapter;
+      var startOffset = first.start;
+      var endOffset = last.end;
+      if (content != null && targetChapter == _chapter) {
+        if (first.paragraph == last.paragraph) {
+          final p = _purifyParagraphAt(
+            content.paragraphs,
+            targetChapter,
+            first.paragraph,
+          );
+          final (rawStart, rawEnd) = p.rawRangeFor(first.start, last.end);
+          startOffset = rawStart;
+          endOffset = rawEnd;
+        } else {
+          final firstP = _purifyParagraphAt(
+            content.paragraphs,
+            targetChapter,
+            first.paragraph,
+          );
+          final lastP = _purifyParagraphAt(
+            content.paragraphs,
+            targetChapter,
+            last.paragraph,
+          );
+          final (rawStart, _) = firstP.rawRangeFor(
+            first.start,
+            firstP.text.length,
+          );
+          final (_, rawEnd) = lastP.rawRangeFor(0, last.end);
+          startOffset = rawStart;
+          endOffset = rawEnd;
+        }
+      }
       final candidate = ReaderUnderlineRange(
         chapterId: entry.key,
         startParagraph: first.paragraph,
-        startOffset: first.start,
+        startOffset: startOffset,
         endParagraph: last.paragraph,
-        endOffset: last.end,
+        endOffset: endOffset,
         contentRevision: contentRevision,
       );
       if (candidate.isValid) out.add(candidate);
@@ -73,6 +119,12 @@ extension _ReaderPagePersistence on _ReaderPageState {
   }) {
     if (_novel.chapters.isEmpty) return null;
     final targetChapterId = chapterId ?? _novel.chapters[_chapter].id;
+    final content = _currentContent;
+    final purified =
+        content != null && targetChapterId == _novel.chapters[_chapter].id
+        ? _purifyParagraphAt(content.paragraphs, _chapter, paragraph)
+        : null;
+    final rawOffset = purified?.rawOffsetFor(offset) ?? offset;
     for (final mark in widget.state.bookmarksFor(_novel.id)) {
       if (!mark.isUnderline) continue;
       for (final range in mark.underlineRanges) {
@@ -81,10 +133,24 @@ extension _ReaderPagePersistence on _ReaderPageState {
             paragraph > range.endParagraph) {
           continue;
         }
-        if (paragraph == range.startParagraph && offset < range.startOffset) {
+        if (purified != null && !purified.isIdentity) {
+          if (range.startParagraph == range.endParagraph) {
+            final projected = purified.purifiedRangeFor(
+              range.startOffset,
+              range.endOffset,
+            );
+            if (projected != null &&
+                offset >= projected.$1 &&
+                offset < projected.$2) {
+              return mark;
+            }
+          }
+        }
+        if (paragraph == range.startParagraph &&
+            rawOffset < range.startOffset) {
           continue;
         }
-        if (paragraph == range.endParagraph && offset >= range.endOffset) {
+        if (paragraph == range.endParagraph && rawOffset >= range.endOffset) {
           continue;
         }
         return mark;
@@ -213,7 +279,11 @@ extension _ReaderPagePersistence on _ReaderPageState {
     final ranges = _selectionToUnderlineRanges(selection);
     if (ranges.isEmpty) return;
     final first = selection.ranges.first;
-    final position = _positionForParagraph(first.paragraph, first.start);
+    final position = _positionForParagraph(
+      first.paragraph,
+      first.start,
+      purifiedOffset: true,
+    );
     if (position == null) return;
     try {
       final added = await widget.state.toggleUnderline(
@@ -233,7 +303,11 @@ extension _ReaderPagePersistence on _ReaderPageState {
     final ranges = _selectionToUnderlineRanges(selection);
     if (ranges.isEmpty) return;
     final first = selection.ranges.first;
-    final position = _positionForParagraph(first.paragraph, first.start);
+    final position = _positionForParagraph(
+      first.paragraph,
+      first.start,
+      purifiedOffset: true,
+    );
     if (position == null) return;
     final mark = await showReaderAnnotationEditor(
       context,
@@ -297,7 +371,11 @@ extension _ReaderPagePersistence on _ReaderPageState {
       return;
     }
     final first = selection.ranges.first;
-    final position = _positionForParagraph(first.paragraph, first.start);
+    final position = _positionForParagraph(
+      first.paragraph,
+      first.start,
+      purifiedOffset: true,
+    );
     if (position == null) return;
     try {
       final mark = await widget.state.addBookmark(
@@ -317,7 +395,11 @@ extension _ReaderPagePersistence on _ReaderPageState {
 
   Future<void> _purifySelection(ReaderQuoteSelection selection) async {
     final first = selection.ranges.first;
-    final position = _positionForParagraph(first.paragraph, first.start);
+    final position = _positionForParagraph(
+      first.paragraph,
+      first.start,
+      purifiedOffset: true,
+    );
     await _openPurificationInChapter(position, selection.quote);
   }
 

@@ -11,6 +11,7 @@ import 'local_platform.dart';
 import 'reader_pagination.dart';
 import 'reader_preferences.dart';
 import 'reader_reflow.dart';
+import 'reader_rich_content.dart';
 import 'reader_selection.dart';
 import 'reader_text.dart';
 import 'reader_underline.dart';
@@ -103,8 +104,8 @@ class ReaderVolumePaging extends StatefulWidget {
 }
 
 class _ReaderVolumePagingState extends State<ReaderVolumePaging> {
-  bool _applied = false;
-  bool _handler = false;
+  static final List<_ReaderVolumePagingState> _activeOwners = [];
+  static bool? _lastAppliedNative;
 
   bool get _active => widget.enabled && LocalPlatform.volumePaging;
 
@@ -121,30 +122,42 @@ class _ReaderVolumePagingState extends State<ReaderVolumePaging> {
   }
 
   void _sync() {
-    final active = _active;
-    if (active && !_handler) {
-      _handler = true;
+    if (_active) {
+      if (!_activeOwners.contains(this)) {
+        _activeOwners.add(this);
+      }
+    } else {
+      _activeOwners.remove(this);
+    }
+    _syncGlobalChannel();
+  }
+
+  static void _syncGlobalChannel() {
+    final top = _activeOwners.lastOrNull;
+    if (top != null) {
       AppWindowInsets.channel.setMethodCallHandler((call) async {
-        if (call.method == 'page' && call.arguments is int && mounted) {
-          widget.onPage(call.arguments as int);
+        final currentTop = _activeOwners.lastOrNull;
+        if (call.method == 'page' &&
+            call.arguments is int &&
+            currentTop != null &&
+            currentTop.mounted) {
+          currentTop.widget.onPage(call.arguments as int);
         }
         return null;
       });
-    } else if (!active && _handler) {
-      _handler = false;
+    } else {
       AppWindowInsets.channel.setMethodCallHandler(null);
     }
-    if (active == _applied) return;
-    _applied = active;
-    unawaited(_apply(active));
+    final shouldEnable = top != null;
+    if (_lastAppliedNative == shouldEnable) return;
+    _lastAppliedNative = shouldEnable;
+    unawaited(_apply(shouldEnable));
   }
 
   static Future<void> _apply(bool volumePaging) async {
     try {
       await AppWindowInsets.channel.invokeMethod<void>('apply', {
         'volumePaging': volumePaging,
-        'brightness': -1.0,
-        'hideStatusBar': false,
       });
     } on PlatformException catch (_) {
     } on MissingPluginException catch (_) {}
@@ -152,8 +165,9 @@ class _ReaderVolumePagingState extends State<ReaderVolumePaging> {
 
   @override
   void dispose() {
-    if (_handler) AppWindowInsets.channel.setMethodCallHandler(null);
-    if (_applied) unawaited(_apply(false));
+    if (_activeOwners.remove(this)) {
+      _syncGlobalChannel();
+    }
     super.dispose();
   }
 
@@ -168,8 +182,11 @@ Widget readerPageBody(
   ReaderLeaf page,
   TextStyle style, {
   bool compressPunctuation = true,
+  bool justify = false,
+  Map<int, ReaderRichParagraph> formats = const {},
   int? chapterId,
   List<ReaderAnnotationRange> annotations = const [],
+  Widget Function(ReaderPageFragment fragment)? imageBuilder,
 }) => Builder(
   builder: (context) {
     final scheme = Theme.of(context).colorScheme;
@@ -177,10 +194,16 @@ Widget readerPageBody(
     final baseColor = style.color ?? scheme.onSurface;
     final fragments = [
       for (final fragment in page.fragments)
-        if (!fragment.image && !fragment.rule && fragment.text.isNotEmpty)
+        if (fragment.image || fragment.rule || fragment.text.isNotEmpty)
           fragment,
     ];
-    Widget buildFragment(ReaderPageFragment fragment) {
+    Widget buildTextFragment(ReaderPageFragment fragment) {
+      final rawFormat =
+          formats[fragment.paragraph] ?? const ReaderRichParagraph();
+      final format = rawFormat.empty
+          ? rawFormat
+          : rawFormat.slice(fragment.start, fragment.end);
+      final paragraphStyle = format.textStyle(style);
       final marks = annotations.isEmpty
           ? const <ReaderTextMark>[]
           : clipReaderParagraphMarks(
@@ -189,27 +212,63 @@ Widget readerPageBody(
               textLength: fragment.text.length,
               fragmentStart: fragment.start,
             );
-      final children = marks.isEmpty
-          ? [TextSpan(text: fragment.text)]
-          : buildReaderMarkedSpans(
-              text: fragment.text,
-              marks: marks,
-              baseTextColor: baseColor,
-              dark: dark,
-            );
+      final List<InlineSpan> children;
+      if (marks.isEmpty) {
+        children = format.spans(fragment.text);
+      } else {
+        final marked = buildReaderMarkedSpans(
+          text: fragment.text,
+          marks: marks,
+          baseTextColor: paragraphStyle.color ?? baseColor,
+          dark: dark,
+        );
+        if (format.emphasis.isEmpty) {
+          children = marked;
+        } else {
+          final merged = <InlineSpan>[];
+          var cursor = 0;
+          for (final span in marked) {
+            if (span is! TextSpan || (span.text?.isEmpty ?? true)) {
+              merged.add(span);
+              continue;
+            }
+            final subText = span.text!;
+            final subFormat = format.slice(cursor, cursor + subText.length);
+            for (final emphSpan in subFormat.spans(subText)) {
+              if (emphSpan is TextSpan) {
+                merged.add(
+                  TextSpan(
+                    text: emphSpan.text,
+                    style: (span.style ?? const TextStyle()).merge(
+                      emphSpan.style,
+                    ),
+                  ),
+                );
+              } else {
+                merged.add(emphSpan);
+              }
+            }
+            cursor += subText.length;
+          }
+          children = merged;
+        }
+      }
       Widget text = Text.rich(
         readerParagraphSpan(
           children: children,
-          style: style,
+          style: paragraphStyle,
           indent: fragment.indent,
           compressPunctuation: compressPunctuation,
+        ),
+        textAlign: format.textAlign(
+          justify ? TextAlign.justify : TextAlign.start,
         ),
         softWrap: true,
       );
       if (marks.any((m) => m.style == ReaderMarkStyle.outline)) {
         text = ReaderAnnotationOutlines(
           marks: marks,
-          baseTextColor: baseColor,
+          baseTextColor: paragraphStyle.color ?? baseColor,
           dark: dark,
           leadingPlaceholders: fragment.indent ? 1 : 0,
           child: text,
@@ -224,20 +283,30 @@ Widget readerPageBody(
         for (var i = 0; i < fragments.length; i++)
           Positioned.fromRect(
             rect: fragments[i].rect,
-            child: ReaderSelectionFragment(
-              paragraph: fragments[i].paragraph,
-              chapter: chapterId,
-              baseOffset: fragments[i].start,
-              leadingPlaceholders: fragments[i].indent ? 1 : 0,
-              text: fragments[i].text,
-              child: ReaderFragmentMotion(
-                fragment: fragments[i],
-                index: i,
-                count: fragments.length,
-                previousBuilder: buildFragment,
-                child: buildFragment(fragments[i]),
-              ),
-            ),
+            child: fragments[i].rule
+                ? Center(
+                    child: Divider(
+                      height: 1,
+                      thickness: 1,
+                      color: Theme.of(context).dividerColor,
+                    ),
+                  )
+                : fragments[i].image
+                ? (imageBuilder?.call(fragments[i]) ?? const SizedBox.shrink())
+                : ReaderSelectionFragment(
+                    paragraph: fragments[i].paragraph,
+                    chapter: chapterId,
+                    baseOffset: fragments[i].start,
+                    leadingPlaceholders: fragments[i].indent ? 1 : 0,
+                    text: fragments[i].text,
+                    child: ReaderFragmentMotion(
+                      fragment: fragments[i],
+                      index: i,
+                      count: fragments.length,
+                      previousBuilder: buildTextFragment,
+                      child: buildTextFragment(fragments[i]),
+                    ),
+                  ),
           ),
       ],
     );

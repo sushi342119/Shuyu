@@ -5,6 +5,10 @@ import 'dart:typed_data';
 import 'package:html/parser.dart' as html_parser;
 
 import 'chapter_splitter.dart';
+import 'gbk_codec.dart';
+
+const int maxMobiDecodedBytes = 256 * 1024 * 1024;
+const int _maxMobiRecordDecompressedBytes = 1024 * 1024;
 
 class MobiBookData {
   const MobiBookData({
@@ -31,12 +35,18 @@ bool isMobiFileName(String name) {
 }
 
 /// Decompresses a single PalmDOC LZ77 compressed record.
-Uint8List decompressPalmDocLz77(Uint8List input) {
+Uint8List decompressPalmDocLz77(
+  Uint8List input, {
+  int maxOutputBytes = _maxMobiRecordDecompressedBytes,
+}) {
   final out = BytesBuilder(copy: false);
   final buffer = <int>[];
   var i = 0;
   final len = input.length;
   while (i < len) {
+    if (buffer.length > maxOutputBytes) {
+      throw const FormatException('MOBI/AZW3 单条记录解压体积异常');
+    }
     final b = input[i++];
     if (b == 0x00) {
       buffer.add(0x00);
@@ -63,6 +73,9 @@ Uint8List decompressPalmDocLz77(Uint8List input) {
       buffer.add(0x20);
       buffer.add(b ^ 0x80);
     }
+  }
+  if (buffer.length > maxOutputBytes) {
+    throw const FormatException('MOBI/AZW3 单条记录解压体积异常');
   }
   out.add(buffer);
   return out.takeBytes();
@@ -111,10 +124,22 @@ Uint8List _trimRecordTrailingBytes(Uint8List record, int extraDataFlags) {
 }
 
 String _decodeMobiBytes(Uint8List bytes, int textEncoding) {
+  if (bytes.isEmpty) return '';
   if (textEncoding == 1252) {
     return latin1.decode(bytes, allowInvalid: true);
   }
-  return utf8.decode(bytes, allowMalformed: true);
+  if (textEncoding == 936 || textEncoding == 54936 || textEncoding == 950) {
+    return decodeGbkBytes(bytes);
+  }
+  try {
+    return utf8.decode(bytes, allowMalformed: false);
+  } on FormatException {
+    try {
+      return decodeGbkBytes(bytes, allowMalformed: false);
+    } on FormatException {
+      return utf8.decode(bytes, allowMalformed: true);
+    }
+  }
 }
 
 /// Converts MOBI / KF8 HTML markup into clean plain text with preserved
@@ -189,37 +214,134 @@ MobiBookData extractMobiBook(
   }
 
   final offsets = <int>[];
+  var monotonic = true;
   for (var i = 0; i < recordCount; i++) {
-    offsets.add(_readUint32BE(bytes, 78 + i * 8));
+    final off = _readUint32BE(bytes, 78 + i * 8);
+    if (i > 0 && off < offsets[i - 1]) monotonic = false;
+    offsets.add(off);
+  }
+  List<int>? sortedUniqueOffsets;
+  if (!monotonic) {
+    sortedUniqueOffsets = offsets
+        .where((o) => o >= 0 && o <= bytes.length)
+        .toSet()
+        .toList()
+      ..sort();
   }
 
   Uint8List recordAt(int index) {
     final start = offsets[index];
-    final end = index + 1 < offsets.length ? offsets[index + 1] : bytes.length;
-    if (start < 0 || start >= bytes.length || end <= start) {
-      return Uint8List(0);
+    if (start < 0 || start >= bytes.length) return Uint8List(0);
+    int end;
+    if (monotonic) {
+      end = index + 1 < offsets.length ? offsets[index + 1] : bytes.length;
+    } else {
+      final sorted = sortedUniqueOffsets!;
+      var lo = 0;
+      var hi = sorted.length;
+      while (lo < hi) {
+        final mid = (lo + hi) ~/ 2;
+        if (sorted[mid] <= start) {
+          lo = mid + 1;
+        } else {
+          hi = mid;
+        }
+      }
+      end = lo < sorted.length ? sorted[lo] : bytes.length;
     }
+    if (end <= start) return Uint8List(0);
     return Uint8List.sublistView(bytes, start, math.min(end, bytes.length));
   }
 
   final pdbTitleBytes = Uint8List.sublistView(bytes, 0, 32);
   final zeroIdx = pdbTitleBytes.indexOf(0);
-  final pdbTitle = utf8
-      .decode(
-        zeroIdx >= 0
-            ? Uint8List.sublistView(pdbTitleBytes, 0, zeroIdx)
-            : pdbTitleBytes,
-        allowMalformed: true,
-      )
-      .trim();
+  final rawPdbTitle = zeroIdx >= 0
+      ? Uint8List.sublistView(pdbTitleBytes, 0, zeroIdx)
+      : pdbTitleBytes;
+
+  ({String title, String author, String description, int encoding})
+  extractMetadata(int headerRecordIndex) {
+    final rec = recordAt(headerRecordIndex);
+    var encoding = 65001;
+    var parsedTitle = '';
+    var parsedAuthor = '';
+    var parsedDesc = '';
+    if (rec.length >= 32) {
+      final mobiMagic = ascii.decode(
+        Uint8List.sublistView(rec, 16, 20),
+        allowInvalid: true,
+      );
+      if (mobiMagic == 'MOBI') {
+        final headerLen = _readUint32BE(rec, 20);
+        encoding = _readUint32BE(rec, 28);
+        final fullNameOffset = _readUint32BE(rec, 84);
+        final fullNameLength = _readUint32BE(rec, 88);
+        if (fullNameOffset > 0 &&
+            fullNameLength > 0 &&
+            fullNameOffset + fullNameLength <= rec.length) {
+          parsedTitle = _decodeMobiBytes(
+            Uint8List.sublistView(
+              rec,
+              fullNameOffset,
+              fullNameOffset + fullNameLength,
+            ),
+            encoding,
+          ).trim();
+        }
+        final exthFlags = rec.length >= 132 ? _readUint32BE(rec, 128) : 0;
+        final exthStart = 16 + headerLen;
+        if ((exthFlags & 0x40) != 0 && exthStart + 12 <= rec.length) {
+          final exthMagic = ascii.decode(
+            Uint8List.sublistView(rec, exthStart, exthStart + 4),
+            allowInvalid: true,
+          );
+          if (exthMagic == 'EXTH') {
+            final exthCount = _readUint32BE(rec, exthStart + 8);
+            var pos = exthStart + 12;
+            for (var i = 0; i < exthCount && pos + 8 <= rec.length; i++) {
+              final recType = _readUint32BE(rec, pos);
+              final recLen = _readUint32BE(rec, pos + 4);
+              if (recLen < 8 || pos + recLen > rec.length) break;
+              final payload = Uint8List.sublistView(
+                rec,
+                pos + 8,
+                pos + recLen,
+              );
+              final value = _decodeMobiBytes(payload, encoding).trim();
+              if (value.isNotEmpty) {
+                if (recType == 100 && parsedAuthor.isEmpty) {
+                  parsedAuthor = value;
+                } else if (recType == 503) {
+                  parsedTitle = value;
+                } else if (recType == 103 && parsedDesc.isEmpty) {
+                  parsedDesc = _mobiHtmlToText(value);
+                }
+              }
+              pos += recLen;
+            }
+          }
+        }
+      }
+    }
+    return (
+      title: parsedTitle,
+      author: parsedAuthor,
+      description: parsedDesc,
+      encoding: encoding,
+    );
+  }
 
   String extractHeaderAndText(int headerRecordIndex) {
     final rec0 = recordAt(headerRecordIndex);
     if (rec0.length < 16) return '';
     final compression = _readUint16BE(rec0, 0);
     final textRecordCount = _readUint16BE(rec0, 8);
+    final encryptionType = _readUint16BE(rec0, 12);
+    if (encryptionType != 0) {
+      throw const FormatException('不支持受 DRM 加密保护的 MOBI/AZW3 文件');
+    }
     if (compression != 1 && compression != 2) {
-      throw const FormatException('暂不支持 Huff/CDIC 或受 DRM 加密的 MOBI/AZW3 文件');
+      throw const FormatException('暂不支持 Huff/CDIC 压缩的 MOBI/AZW3 文件');
     }
     var textEncoding = 65001;
     var extraDataFlags = 0;
@@ -237,98 +359,70 @@ MobiBookData extractMobiBook(
       }
     }
     final textBytes = BytesBuilder(copy: false);
-    final maxRec = math.min(recordCount - 1, headerRecordIndex + textRecordCount);
+    var totalDecompressed = 0;
+    final maxRec = math.min(
+      recordCount - 1,
+      headerRecordIndex + textRecordCount,
+    );
     for (var r = headerRecordIndex + 1; r <= maxRec; r++) {
       final rawRec = recordAt(r);
       if (rawRec.isEmpty) continue;
       final trimmed = _trimRecordTrailingBytes(rawRec, extraDataFlags);
-      if (compression == 2) {
-        textBytes.add(decompressPalmDocLz77(trimmed));
-      } else {
-        textBytes.add(trimmed);
+      final chunk = compression == 2
+          ? decompressPalmDocLz77(trimmed)
+          : trimmed;
+      totalDecompressed += chunk.length;
+      if (totalDecompressed > maxMobiDecodedBytes) {
+        throw const FormatException('MOBI/AZW3 解压后正文超过 256 MiB 上限');
       }
+      textBytes.add(chunk);
     }
     final decoded = _decodeMobiBytes(textBytes.takeBytes(), textEncoding);
     return _mobiHtmlToText(decoded);
   }
 
-  final rec0 = recordAt(0);
-  var textEncoding = 65001;
-  var title = '';
-  var author = '';
-  var description = '';
+  final meta0 = extractMetadata(0);
+  var title = meta0.title;
+  var author = meta0.author;
+  var description = meta0.description;
+  final pdbTitle = _decodeMobiBytes(rawPdbTitle, meta0.encoding).trim();
 
-  if (rec0.length >= 32) {
-    final mobiMagic = ascii.decode(
-      Uint8List.sublistView(rec0, 16, 20),
-      allowInvalid: true,
-    );
-    if (mobiMagic == 'MOBI') {
-      final headerLen = _readUint32BE(rec0, 20);
-      textEncoding = _readUint32BE(rec0, 28);
-      final fullNameOffset = _readUint32BE(rec0, 84);
-      final fullNameLength = _readUint32BE(rec0, 88);
-      if (fullNameOffset > 0 &&
-          fullNameLength > 0 &&
-          fullNameOffset + fullNameLength <= rec0.length) {
-        title = _decodeMobiBytes(
-          Uint8List.sublistView(
-            rec0,
-            fullNameOffset,
-            fullNameOffset + fullNameLength,
-          ),
-          textEncoding,
-        ).trim();
+  String mobi6Text = '';
+  FormatException? primaryError;
+  try {
+    mobi6Text = extractHeaderAndText(0);
+  } on FormatException catch (error) {
+    primaryError = error;
+  }
+
+  // Prefer the KF8/AZW3 section in combo MOBI6+KF8 files whenever KF8 yields
+  // valid content (combo MOBI6 headers often hold a short compatibility stub).
+  String kf8Text = '';
+  for (var i = 1; i < recordCount - 1; i++) {
+    final rec = recordAt(i);
+    if (rec.length == 8 &&
+        ascii.decode(rec, allowInvalid: true) == 'BOUNDARY') {
+      final metaKf8 = extractMetadata(i + 1);
+      if (title.isEmpty && metaKf8.title.isNotEmpty) title = metaKf8.title;
+      if (author.isEmpty && metaKf8.author.isNotEmpty) author = metaKf8.author;
+      if (description.isEmpty && metaKf8.description.isNotEmpty) {
+        description = metaKf8.description;
       }
-      final exthFlags = rec0.length >= 132 ? _readUint32BE(rec0, 128) : 0;
-      final exthStart = 16 + headerLen;
-      if ((exthFlags & 0x40) != 0 && exthStart + 12 <= rec0.length) {
-        final exthMagic = ascii.decode(
-          Uint8List.sublistView(rec0, exthStart, exthStart + 4),
-          allowInvalid: true,
-        );
-        if (exthMagic == 'EXTH') {
-          final exthCount = _readUint32BE(rec0, exthStart + 8);
-          var pos = exthStart + 12;
-          for (var i = 0; i < exthCount && pos + 8 <= rec0.length; i++) {
-            final recType = _readUint32BE(rec0, pos);
-            final recLen = _readUint32BE(rec0, pos + 4);
-            if (recLen < 8 || pos + recLen > rec0.length) break;
-            final payload = Uint8List.sublistView(
-              rec0,
-              pos + 8,
-              pos + recLen,
-            );
-            final value = _decodeMobiBytes(payload, textEncoding).trim();
-            if (value.isNotEmpty) {
-              if (recType == 100 && author.isEmpty) {
-                author = value;
-              } else if (recType == 503) {
-                title = value;
-              } else if (recType == 103 && description.isEmpty) {
-                description = _mobiHtmlToText(value);
-              }
-            }
-            pos += recLen;
-          }
-        }
+      try {
+        kf8Text = extractHeaderAndText(i + 1);
+      } on FormatException catch (error) {
+        primaryError ??= error;
       }
+      if (kf8Text.isNotEmpty) break;
     }
   }
 
-  var text = extractHeaderAndText(0);
-  // Check for hybrid KF8/AZW3 BOUNDARY record if primary text is empty.
+  final text = kf8Text.isNotEmpty &&
+          (mobi6Text.isEmpty || kf8Text.length * 2 >= mobi6Text.length)
+      ? kf8Text
+      : mobi6Text;
   if (text.isEmpty) {
-    for (var i = 1; i < recordCount - 1; i++) {
-      final rec = recordAt(i);
-      if (rec.length == 8 &&
-          ascii.decode(rec, allowInvalid: true) == 'BOUNDARY') {
-        text = extractHeaderAndText(i + 1);
-        if (text.isNotEmpty) break;
-      }
-    }
-  }
-  if (text.isEmpty) {
+    if (primaryError != null) throw primaryError;
     throw const FormatException('MOBI/AZW3 正文内容为空');
   }
 

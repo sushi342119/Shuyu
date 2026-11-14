@@ -92,6 +92,52 @@ class ReaderSelectionController extends ValueNotifier<bool> {
         merged.add(current);
       }
     }
+    while (merged.isNotEmpty) {
+      final (range, seg) = merged.first;
+      var trimLead = 0;
+      while (trimLead < seg.length && seg[trimLead].trim().isEmpty) {
+        trimLead++;
+      }
+      if (trimLead == 0) break;
+      if (trimLead >= seg.length || range.start + trimLead >= range.end) {
+        merged.removeAt(0);
+      } else {
+        merged[0] = (
+          ReaderQuoteRange(
+            range.paragraph,
+            range.start + trimLead,
+            range.end,
+            chapter: range.chapter,
+          ),
+          seg.substring(trimLead),
+        );
+        break;
+      }
+    }
+    while (merged.isNotEmpty) {
+      final (range, seg) = merged.last;
+      var trimTrail = 0;
+      while (trimTrail < seg.length &&
+          seg[seg.length - 1 - trimTrail].trim().isEmpty) {
+        trimTrail++;
+      }
+      if (trimTrail == 0) break;
+      if (trimTrail >= seg.length || range.end - trimTrail <= range.start) {
+        merged.removeLast();
+      } else {
+        merged[merged.length - 1] = (
+          ReaderQuoteRange(
+            range.paragraph,
+            range.start,
+            range.end - trimTrail,
+            chapter: range.chapter,
+          ),
+          seg.substring(0, seg.length - trimTrail),
+        );
+        break;
+      }
+    }
+    if (merged.isEmpty) return null;
     final buffer = StringBuffer();
     for (var i = 0; i < merged.length; i++) {
       if (i > 0 &&
@@ -101,8 +147,8 @@ class ReaderSelectionController extends ValueNotifier<bool> {
       }
       buffer.write(merged[i].$2);
     }
-    final text = buffer.toString().trim();
-    if (text.isEmpty) return null;
+    final text = buffer.toString();
+    if (text.trim().isEmpty) return null;
     final first = merged.first.$1;
     final last = merged.last.$1;
     return ReaderQuoteSelection(
@@ -715,7 +761,7 @@ class _SentenceRegistrar extends SelectionRegistrar {
   void remove(Selectable selectable) {
     final wrapper = _wrappers.remove(selectable);
     if (wrapper != null) {
-      onChanged(null);
+      onChanged(_wrappers.values.lastOrNull);
       parent.remove(wrapper);
       wrapper.dispose();
     }

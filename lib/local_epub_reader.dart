@@ -305,15 +305,46 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
 
   Future<({List<EpubBlock> blocks, Map<String, Uint8List> images})> _load() {
     if (_future == null || _futureChapter != _chapter) {
-      _futureChapter = _chapter;
+      final requestedChapter = _chapter;
+      _futureChapter = requestedChapter;
       _future = widget.local
-          .epubChapter(widget.novel.id, _chapter)
+          .epubChapter(widget.novel.id, requestedChapter)
           .then((result) {
+            if (_chapter == requestedChapter) {
+              _loadedBlocks = result.blocks;
+            }
             _syncNovelFromStore();
             return result;
           });
     }
     return _future!;
+  }
+
+  List<EpubBlock> _loadedBlocks = const [];
+
+  String _rawChapterTitle() => _total == 0 ? '' : _novel.chapters[_chapter].title;
+
+  PurifiedParagraph _purifyBlockAt(
+    int blockIndex, {
+    List<EpubBlock>? blocks,
+  }) {
+    final sourceBlocks = blocks ?? _loadedBlocks;
+    if (blockIndex < 0 || blockIndex >= sourceBlocks.length) {
+      return const PurifiedParagraph('');
+    }
+    final block = sourceBlocks[blockIndex];
+    if (block.kind == EpubBlockKind.image) {
+      return const PurifiedParagraph('');
+    }
+    return ReaderPurificationStore.shared.purifyParagraphWithMap(
+      block.text ?? '',
+      bookId: _novel.id,
+      bookTitle: _novel.title,
+      chapterIndex: _chapter,
+      paragraphIndex: blockIndex,
+      chapterTitle: _rawChapterTitle(),
+      isFirstParagraph: blockIndex == 0,
+    );
   }
 
   /// 切章时保存：章序号 + 章首位置（新章从头开始）。
@@ -367,6 +398,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       if (_chapter != chapter) {
         _future = null;
         _futureChapter = null;
+        _loadedBlocks = const [];
       }
       _chapter = chapter;
       _chapterVisit++;
@@ -415,6 +447,10 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     final hit = _selection.hitOffsetAt(details.globalPosition);
     if (hit != null && _total > 0) {
       final targetChapterId = hit.chapter ?? _novel.chapters[_chapter].id;
+      final purified = targetChapterId == _novel.chapters[_chapter].id
+          ? _purifyBlockAt(hit.paragraph)
+          : null;
+      final rawOffset = purified?.rawOffsetFor(hit.offset) ?? hit.offset;
       for (final mark in widget.state.bookmarksFor(_novel.id)) {
         if (!mark.isUnderline) continue;
         for (final range in mark.underlineRanges) {
@@ -423,12 +459,26 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
               hit.paragraph > range.endParagraph) {
             continue;
           }
+          if (purified != null &&
+              !purified.isIdentity &&
+              range.startParagraph == range.endParagraph) {
+            final projected = purified.purifiedRangeFor(
+              range.startOffset,
+              range.endOffset,
+            );
+            if (projected != null &&
+                hit.offset >= projected.$1 &&
+                hit.offset < projected.$2) {
+              unawaited(_editMark(mark));
+              return;
+            }
+          }
           if (hit.paragraph == range.startParagraph &&
-              hit.offset < range.startOffset) {
+              rawOffset < range.startOffset) {
             continue;
           }
           if (hit.paragraph == range.endParagraph &&
-              hit.offset >= range.endOffset) {
+              rawOffset >= range.endOffset) {
             continue;
           }
           unawaited(_editMark(mark));
@@ -467,12 +517,32 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     if (ranges.isEmpty) return const [];
     final first = ranges.first;
     final last = ranges.last;
+    var startOffset = first.start;
+    var endOffset = last.end;
+    if (_loadedBlocks.isNotEmpty) {
+      if (first.paragraph == last.paragraph) {
+        final p = _purifyBlockAt(first.paragraph);
+        final (rawStart, rawEnd) = p.rawRangeFor(first.start, last.end);
+        startOffset = rawStart;
+        endOffset = rawEnd;
+      } else {
+        final firstP = _purifyBlockAt(first.paragraph);
+        final lastP = _purifyBlockAt(last.paragraph);
+        final (rawStart, _) = firstP.rawRangeFor(
+          first.start,
+          firstP.text.length,
+        );
+        final (_, rawEnd) = lastP.rawRangeFor(0, last.end);
+        startOffset = rawStart;
+        endOffset = rawEnd;
+      }
+    }
     final candidate = ReaderUnderlineRange(
       chapterId: chapterId,
       startParagraph: first.paragraph,
-      startOffset: first.start,
+      startOffset: startOffset,
       endParagraph: last.paragraph,
-      endOffset: last.end,
+      endOffset: endOffset,
     );
     return candidate.isValid
         ? canonicalReaderUnderlineRanges([candidate])
@@ -683,6 +753,49 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     }
   }
 
+  Future<void> _openPurificationInChapter({
+    int? paragraphIndex,
+    String? initialPattern,
+  }) async {
+    final chapterParagraphs = _loadedBlocks.isEmpty
+        ? null
+        : <String>[
+            for (final b in _loadedBlocks)
+              b.kind == EpubBlockKind.image ? '[插图]' : (b.text ?? ''),
+          ];
+    final clampedParagraph =
+        chapterParagraphs == null || chapterParagraphs.isEmpty
+        ? 0
+        : (paragraphIndex ?? 0).clamp(0, chapterParagraphs.length - 1);
+    await showReaderPurificationSheet(
+      context: context,
+      reduceMotion: widget.state.reduceMotion,
+      bookId: _novel.id,
+      bookTitle: _novel.title,
+      chapterIndex: _chapter,
+      chapterTitle: _total > 0 ? _rawChapterTitle() : null,
+      chapterParagraphs: chapterParagraphs,
+      initialParagraphIndex: clampedParagraph,
+      initialPattern: initialPattern,
+    );
+  }
+
+  Future<void> _purifySelection(ReaderQuoteSelection selection) async {
+    if (_sheetOpen) return;
+    final first = selection.ranges.firstOrNull;
+    _sheetOpen = true;
+    _syncReadingActivity();
+    try {
+      await _openPurificationInChapter(
+        paragraphIndex: first?.paragraph,
+        initialPattern: selection.quote,
+      );
+    } finally {
+      _sheetOpen = false;
+      _syncReadingActivity();
+    }
+  }
+
   Future<void> _settings({bool bookmarks = false}) async {
     if (_sheetOpen || _total == 0) return;
     _selection.clear();
@@ -710,6 +823,8 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
           action.bookmark.position,
         );
         if (chapter != null) _goTo(chapter, restart: true);
+      } else if (action is ReaderOpenPurification) {
+        await _openPurificationInChapter();
       }
     } finally {
       _sheetOpen = false;
@@ -746,6 +861,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     // 因此 dispose 不保证立即释放全部图片内存。
     _future = null;
     _futureChapter = null;
+    _loadedBlocks = const [];
     _jumpTicket++;
     // 有未落盘的滚动时补存一次（与 TXT 退出时 finalSave 一致，不通知监听者）。
     // dispose 时列表可能已先卸载，用滚动监听里缓存的 offset/maximum。
@@ -777,10 +893,17 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     setState(() {
       _future = null;
       _futureChapter = null;
+      _loadedBlocks = const [];
     });
   }
 
-  String _chapterTitle() => _total == 0 ? '' : _novel.chapters[_chapter].title;
+  String _chapterTitle() => _total == 0
+      ? ''
+      : ReaderPurificationStore.shared.purifyTitle(
+          _novel.chapters[_chapter].title,
+          bookId: _novel.id,
+          bookTitle: _novel.title,
+        );
 
   @override
   Widget build(BuildContext context) => ReaderPaperScope(
@@ -831,6 +954,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
         onAnnotate: _annotateSelection,
         onBookmark: _bookmarkSelection,
         isBookmarked: _isSelectionBookmarked,
+        onPurify: _purifySelection,
         child: GestureDetector(
           key: const ValueKey('reader-content-tap'),
           behavior: HitTestBehavior.translucent,
@@ -931,6 +1055,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
         ],
       ),
       statusListenable: _progressValue,
+      statusExtraListenable: ReaderPurificationStore.shared,
       statusTextBuilder: (progress) =>
           '${_chapterTitle()} · ${(progress * 100).round()}%',
     );
@@ -968,6 +1093,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
           );
         }
         final data = snapshot.data!;
+        _loadedBlocks = data.blocks;
         _chapterReady = data.blocks.isNotEmpty;
         _syncReadingActivity();
         // 懒加载：只构建可见块，不是一次性把整章所有块（含图片 widget）
@@ -1016,6 +1142,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
               return _block(
                 index - 1,
                 data.blocks[index - 1],
+                data.blocks,
                 data.images,
                 cacheWidth,
               );
@@ -1029,6 +1156,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
   Widget _block(
     int blockIndex,
     EpubBlock block,
+    List<EpubBlock> allBlocks,
     Map<String, Uint8List> images,
     int cacheWidth,
   ) {
@@ -1047,12 +1175,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
               ),
       );
     }
-    final purified = ReaderPurificationStore.shared.purifyParagraph(
-      block.text ?? '',
-      bookId: _novel.id,
-      bookTitle: _novel.title,
-      chapterIndex: _chapter,
-    );
+    final purified = _purifyBlockAt(blockIndex, blocks: allBlocks);
     final chapterId = _total > 0 ? _novel.chapters[_chapter].id : null;
     final style = TextStyle(
       fontSize: widget.state.fontSize,
@@ -1064,28 +1187,36 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       child: ReaderSelectionFragment(
         paragraph: blockIndex,
         chapter: chapterId,
-        text: purified,
+        text: purified.text,
         child: AnimatedBuilder(
           animation: widget.state.underlineChanges,
           builder: (context, _) {
-            final annotations = chapterId == null
+            final rawAnnotations = chapterId == null
                 ? const <ReaderAnnotationRange>[]
                 : widget.state.annotationsFor(_novel.id, chapterId: chapterId);
+            final annotations = rawAnnotations.isEmpty || purified.isIdentity
+                ? rawAnnotations
+                : ReaderPurificationStore.shared.mapAnnotationsToPurified(
+                    rawAnnotations,
+                    resolveParagraph: (pIdx) => pIdx == blockIndex
+                        ? purified
+                        : _purifyBlockAt(pIdx, blocks: allBlocks),
+                  );
             final marks = annotations.isEmpty
                 ? const <ReaderTextMark>[]
                 : clipReaderParagraphMarks(
                     annotations,
                     paragraph: blockIndex,
-                    textLength: purified.length,
+                    textLength: purified.text.length,
                   );
             if (marks.isEmpty) {
-              return Text(purified, style: style);
+              return Text(purified.text, style: style);
             }
             final dark = Theme.of(context).brightness == Brightness.dark;
             final baseColor =
                 style.color ?? Theme.of(context).colorScheme.onSurface;
             final spans = buildReaderMarkedSpans(
-              text: purified,
+              text: purified.text,
               marks: marks,
               baseTextColor: baseColor,
               dark: dark,

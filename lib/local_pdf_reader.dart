@@ -48,6 +48,9 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
   bool _addingBookmark = false;
   final Map<int, Future<String>> _pending = {};
 
+  static final Map<String, int> _activePdfReaders = <String, int>{};
+  String? _openedFileUri;
+
   int get _pageCount {
     final book = widget.local.bookFor(widget.novel.id);
     return book?.pageCount ?? 0;
@@ -63,6 +66,11 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    final openedUri = widget.local.bookFor(widget.novel.id)?.fileUri;
+    if (openedUri != null && openedUri.isNotEmpty) {
+      _openedFileUri = openedUri;
+      _activePdfReaders[openedUri] = (_activePdfReaders[openedUri] ?? 0) + 1;
+    }
     _readingActivity = ReadingActivitySession(
       store: widget.state.readingActivity,
       bookId: widget.novel.id,
@@ -106,9 +114,15 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _readingActivity.dispose();
-    final book = widget.local.bookFor(widget.novel.id);
-    if (book != null) {
-      unawaited(LocalPlatform.clearPdfCache(book.fileUri).catchError((_) {}));
+    final openedUri = _openedFileUri ?? widget.local.bookFor(widget.novel.id)?.fileUri;
+    if (openedUri != null && openedUri.isNotEmpty) {
+      final remaining = (_activePdfReaders[openedUri] ?? 1) - 1;
+      if (remaining <= 0) {
+        _activePdfReaders.remove(openedUri);
+        unawaited(LocalPlatform.clearPdfCache(openedUri).catchError((_) {}));
+      } else {
+        _activePdfReaders[openedUri] = remaining;
+      }
     }
     _controller.dispose();
     _chrome.dispose();
@@ -337,6 +351,11 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
 
   Widget _readerScaffold(BuildContext context) {
     final count = _pageCount;
+    if (count > 0 && _page >= count) {
+      _page = count - 1;
+    } else if (count == 0 && _page != 0) {
+      _page = 0;
+    }
     final theme = Theme.of(context);
     final darkPaper = theme.brightness == Brightness.dark;
     return AnimatedBuilder(

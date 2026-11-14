@@ -414,7 +414,9 @@ Future<ReaderPagination?> paginateReader({
           var low = starts.last, high = display.length;
           while (low < high) {
             final middle = (low + high) ~/ 2;
-            final at = paragraph.getLineNumberAt(middle);
+            final at =
+                paragraph.getLineNumberAt(middle) ??
+                (middle > low ? paragraph.getLineNumberAt(middle - 1) : null);
             if (at != null && at < line) {
               low = middle + 1;
             } else {

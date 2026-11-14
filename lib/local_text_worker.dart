@@ -55,6 +55,22 @@ class _LocalTextWorker extends LocalTextWorkerClient {
             'byteLength': byteLength,
           })
           as String;
+
+  Future<List<LocalChapterIndex>> splitCustom(
+    String path, {
+    String? customPattern,
+    int maxChapterChars = 0,
+    bool? enableChapterExtensions,
+  }) async =>
+      await run({
+            'op': 'splitCustom',
+            'path': path,
+            'customPattern': customPattern,
+            'maxChapterChars': maxChapterChars,
+            'enableChapterExtensions':
+                enableChapterExtensions ?? this.enableChapterExtensions,
+          })
+          as List<LocalChapterIndex>;
 }
 
 void _textWorkerMain(SendPort ready) async {
@@ -108,6 +124,12 @@ void _textWorkerMain(SendPort ready) async {
           normalize: job['normalize'] == true,
           maxBytes: job['maxBytes'] as int?,
           preserveBom: job['preserveBom'] == true,
+          enableChapterExtensions: job['enableChapterExtensions'] == true,
+        ),
+        'splitCustom' => await _splitCustomTextFile(
+          path,
+          customPattern: job['customPattern'] as String?,
+          maxChapterChars: (job['maxChapterChars'] as int?) ?? 0,
           enableChapterExtensions: job['enableChapterExtensions'] == true,
         ),
         _ => throw ArgumentError('未知文本任务：$op'),
@@ -170,7 +192,7 @@ Stream<List<int>> _boundedTextBytes(String path, int? maxBytes) async* {
 Future<String> _readSmallText(String path, bool preserveBom) async {
   final text = StringBuffer();
   await for (final chunk in _decodeTextChunks(
-    _boundedTextBytes(path, localTextMaxReadCodeUnits),
+    _boundedTextBytes(path, localTextMaxReadCodeUnits * 4),
     preserveBom,
   )) {
     if (text.length + chunk.length > localTextMaxReadCodeUnits) {
@@ -179,6 +201,33 @@ Future<String> _readSmallText(String path, bool preserveBom) async {
     text.write(chunk);
   }
   return text.toString();
+}
+
+Future<List<LocalChapterIndex>> _splitCustomTextFile(
+  String path, {
+  String? customPattern,
+  int maxChapterChars = 0,
+  required bool enableChapterExtensions,
+}) async {
+  const maxCustomSplitCodeUnits = 32 * 1024 * 1024;
+  final text = StringBuffer();
+  await for (final chunk in _decodeTextChunks(
+    _boundedTextBytes(path, maxCustomSplitCodeUnits * 4),
+    true,
+  )) {
+    if (text.length + chunk.length > maxCustomSplitCodeUnits) {
+      throw const FormatException('TXT 正文过大，暂不支持整书正则重分章');
+    }
+    text.write(chunk);
+  }
+  final loaded = text.toString();
+  if (loaded.isEmpty) return const <LocalChapterIndex>[];
+  return splitLocalChaptersCustom(
+    loaded,
+    customPattern: customPattern,
+    maxChapterChars: maxChapterChars,
+    enableChapterExtensions: enableChapterExtensions,
+  );
 }
 
 class _TextSeekIndex {

@@ -23,6 +23,7 @@ import 'filename_tags.dart';
 import 'local_record_removal.dart';
 import 'portable_book_prepare.dart';
 import 'recovery_archive.dart';
+import 'regex_safety.dart';
 import 'wenku_errors.dart';
 
 part 'local_text_worker.dart';
@@ -143,6 +144,8 @@ String _formatWordCount(int count) {
 String formatLocalWordCount(int count) => _formatWordCount(count);
 
 class LocalBook {
+  static const Object _unset = Object();
+
   const LocalBook({
     required this.id,
     required this.title,
@@ -168,6 +171,8 @@ class LocalBook {
     this.sourceFingerprint = '',
     this.epubChapterHrefs = const <String>[],
     this.coverEntry,
+    this.customTocPattern,
+    this.customMaxChapterChars = 0,
   });
 
   final int id;
@@ -200,6 +205,15 @@ class LocalBook {
 
   /// EPUB 封面图在 ZIP 内的路径；无封面或非 EPUB 书为 null。
   final String? coverEntry;
+
+  /// 用户为单本 TXT 指定的目录正则与超长分节上限。
+  final String? customTocPattern;
+  final int customMaxChapterChars;
+
+  bool get hasCustomChapterSplit =>
+      (customTocPattern != null && customTocPattern!.isNotEmpty) ||
+      customMaxChapterChars > 0;
+
   String get revision => _bookRevisionCache[this] ??= sha256
       .convert(
         utf8.encode(
@@ -240,6 +254,8 @@ class LocalBook {
     String? sourceFingerprint,
     List<String>? epubChapterHrefs,
     String? coverEntry,
+    Object? customTocPattern = _unset,
+    int? customMaxChapterChars,
   }) => LocalBook(
     id: id,
     title: title ?? this.title,
@@ -262,6 +278,10 @@ class LocalBook {
     sourceFingerprint: sourceFingerprint ?? this.sourceFingerprint,
     epubChapterHrefs: epubChapterHrefs ?? this.epubChapterHrefs,
     coverEntry: coverEntry ?? this.coverEntry,
+    customTocPattern: identical(customTocPattern, _unset)
+        ? this.customTocPattern
+        : customTocPattern as String?,
+    customMaxChapterChars: customMaxChapterChars ?? this.customMaxChapterChars,
   );
 
   Map<String, Object?> toJson() => {
@@ -286,10 +306,15 @@ class LocalBook {
     'sourceFingerprint': sourceFingerprint,
     if (epubChapterHrefs.isNotEmpty) 'epubChapterHrefs': epubChapterHrefs,
     if (coverEntry?.isNotEmpty ?? false) 'coverEntry': coverEntry,
+    if (customTocPattern != null && customTocPattern!.isNotEmpty)
+      'customTocPattern': customTocPattern,
+    if (customMaxChapterChars > 0)
+      'customMaxChapterChars': customMaxChapterChars,
   };
 
   factory LocalBook.fromJson(Map<String, Object?> json) {
     final chapters = json['chapters'];
+    final rawCustomToc = json['customTocPattern'] as String?;
     return LocalBook(
       id: (json['id'] as num).toInt(),
       title: json['title'] as String? ?? '未知标题',
@@ -325,6 +350,11 @@ class LocalBook {
           const <String>[],
       coverEntry:
           json['coverEntry'] is String ? json['coverEntry'] as String : null,
+      customTocPattern: (rawCustomToc == null || rawCustomToc.trim().isEmpty)
+          ? null
+          : rawCustomToc.trim(),
+      customMaxChapterChars:
+          (json['customMaxChapterChars'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -974,14 +1004,36 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
 
     final source = _sourceFile(book);
-    final root = await Directory(await appFolderPath).resolveSymbolicLinks();
+    final isCloudImported = book.sourceId == 'cloud:imported';
+    final allowedDir = isCloudImported
+        ? Directory('${_booksDir.path}/cloud_originals')
+        : Directory(await appFolderPath);
+    if (!await allowedDir.exists()) {
+      throw StateError('文件不在本地书库目录内');
+    }
+    final root = await allowedDir.resolveSymbolicLinks();
     final resolved = await source.resolveSymbolicLinks();
     final separator = Platform.pathSeparator;
     if (!resolved.startsWith('$root$separator')) {
       throw StateError('文件不在本地书库目录内');
     }
     final parent = source.parent;
-    final target = File('${parent.path}/$targetName');
+    var diskTargetName = targetName;
+    if (isCloudImported) {
+      final currentDiskName = source.uri.pathSegments.isNotEmpty
+          ? source.uri.pathSegments.last
+          : source.path.split(separator).last;
+      final prefixMatch = RegExp(
+        r'^[0-9a-f]{16}_',
+      ).firstMatch(currentDiskName);
+      if (prefixMatch != null) {
+        diskTargetName = '${prefixMatch.group(0)!}$targetName';
+      }
+    }
+    if (utf8.encode(diskTargetName).length > 255) {
+      throw ArgumentError('文件名超过 255 字节，请缩短书名或标签');
+    }
+    final target = File('${parent.path}/$diskTargetName');
     if (target.path != source.path && await target.exists()) {
       throw StateError('同名文件已存在');
     }
@@ -997,9 +1049,21 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   File _sourceFile(LocalBook book) {
     final locator = book.sourceKey.isNotEmpty ? book.sourceKey : book.fileUri;
     if (locator.isEmpty) throw StateError('文件路径无效');
-    return locator.startsWith('file:')
-        ? File.fromUri(Uri.parse(locator))
-        : File(locator);
+    if (locator.startsWith('file:')) {
+      if (locator.startsWith('file://') &&
+          !locator.contains('%') &&
+          File(locator.substring('file://'.length)).isAbsolute) {
+        return File(locator.substring('file://'.length));
+      }
+      final parsed = Uri.tryParse(locator);
+      if (parsed != null && parsed.scheme == 'file') {
+        return File.fromUri(parsed);
+      }
+      if (locator.startsWith('file://')) {
+        return File(locator.substring('file://'.length));
+      }
+    }
+    return File(locator);
   }
 
   /// Saves a renamed source location before committing its tag mapping. A
@@ -1307,12 +1371,24 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         ),
     ]);
     if (book.kind != LocalBookKind.txt) return novelWithChapters(book);
-    final text = await _readBookText(book);
-    if (text.isEmpty) return novelWithChapters(book);
-    final nextChapters = splitLocalChaptersCustom(
-      text,
-      customPattern: customPattern,
-      maxChapterChars: maxChapterChars,
+    final trimmedPattern = customPattern?.trim();
+    final effectivePattern =
+        (trimmedPattern == null || trimmedPattern.isEmpty)
+        ? null
+        : trimmedPattern;
+    if (effectivePattern != null) {
+      final unsafe = detectUnsafeRegexPattern(effectivePattern);
+      if (unsafe != null) {
+        throw FormatException(unsafe);
+      }
+      RegExp(effectivePattern, multiLine: true);
+    }
+    final effectiveMaxChars = maxChapterChars > 0 ? maxChapterChars : 0;
+    final ensured = await _ensureBookTextPath(book);
+    final nextChapters = await _textWorker.splitCustom(
+      ensured.path,
+      customPattern: effectivePattern,
+      maxChapterChars: effectiveMaxChars,
       enableChapterExtensions:
           _chapterSplitVersionFor(book) == _extendedChapterSplitVersion,
     );
@@ -1322,10 +1398,20 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       chapterSplitVersion: _chapterSplitVersionFor(book),
       customTitle: book.customTitle,
       customAuthor: book.customAuthor,
+      customTocPattern: effectivePattern,
+      customMaxChapterChars: effectiveMaxChars,
     );
+    final chaptersChanged =
+        updated.revision != book.revision && book.chapters.isNotEmpty;
+    if (chaptersChanged) {
+      await _stageChapterRemaps([_remapFor(book, updated)]);
+    }
     _replaceBook(index, updated);
     await _saveIndex();
-    return novelWithChapters(updated);
+    if (chaptersChanged && migrateProgress != null) {
+      await _ensureReadyInLock(id);
+    }
+    return novelWithChapters(bookFor(id) ?? updated);
   });
 
   bool _isBookReadyWithoutLock(LocalBook book) {
@@ -1672,13 +1758,29 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   Future<void> _removeStagingFiles() async {
     final dir = _booksDir;
     if (!await dir.exists()) return;
+    final referencedPaths = <String>{
+      for (final book in _books) textPathFor(book),
+      for (final book in _savedBookRefs.values) textPathFor(book),
+      for (final remap in _readPendingChapterRemaps()) ...[
+        if (remap.oldTextPath.isNotEmpty) remap.oldTextPath,
+        if (remap.newTextPath.isNotEmpty) remap.newTextPath,
+      ],
+    };
+    final snapshotPattern = RegExp(r'^book_\d+(?:_[0-9a-f]+)?\.txt$');
     await for (final entry in dir.list(followLinks: false)) {
-      if (entry is! File ||
-          !(entry.path.endsWith('.staging') ||
-              entry.path.endsWith('.staging.importing') ||
-              entry.path.endsWith('index.json.tmp'))) {
-        continue;
-      }
+      if (entry is! File) continue;
+      final base = entry.uri.pathSegments.isNotEmpty
+          ? entry.uri.pathSegments.last
+          : entry.path.split(Platform.pathSeparator).last;
+      final isTemp =
+          base.endsWith('.staging') ||
+          base.endsWith('.staging.importing') ||
+          base.endsWith('.upgrading') ||
+          base == 'index.json.tmp';
+      final isOrphanSnapshot =
+          snapshotPattern.hasMatch(base) &&
+          !referencedPaths.contains(entry.path);
+      if (!isTemp && !isOrphanSnapshot) continue;
       try {
         await entry.delete();
       } on FileSystemException {
@@ -2718,6 +2820,31 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     LocalBook? existing,
   }) async {
     final kind = localBookKindForFileName(name);
+    if (kind == LocalBookKind.pdf) {
+      final uri = Uri.file(path).toString();
+      final pages = await LocalPlatform.pdfPageCount(uri);
+      if (pages <= 0) return null;
+      final pdfId = existing?.id ?? _nextId();
+      final sourceFingerprint = await _streamFileSha256(File(path));
+      return LocalBook(
+        id: pdfId,
+        title: _titleFromName(name),
+        author: _authorFromName(name),
+        fileUri: uri,
+        fileName: name,
+        kind: LocalBookKind.pdf,
+        size: size,
+        modified: modified,
+        chapters: const [],
+        pageCount: pages,
+        sourceFingerprint: sourceFingerprint,
+        sourceId: sourceId,
+        sourceKey: sourceKey,
+        customTitle: existing?.customTitle,
+        customAuthor: existing?.customAuthor,
+        chapterSplitVersion: _chapterSplitVersion,
+      );
+    }
     if (kind == LocalBookKind.epub) {
       final epubId = existing?.id ?? _nextId();
       try {
@@ -2783,6 +2910,19 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
     final processed = await _importText(path, id, direct: true);
     if (processed.inputLength == 0) return null;
+    var chapters = processed.chapters;
+    if (existing != null && existing.hasCustomChapterSplit) {
+      final customChapters = await _textWorker.splitCustom(
+        '${_booksDir.path}/book_${id}_${processed.fingerprint}.txt',
+        customPattern: existing.customTocPattern,
+        maxChapterChars: existing.customMaxChapterChars,
+        enableChapterExtensions:
+            _activeChapterSplitVersion == _extendedChapterSplitVersion,
+      );
+      if (customChapters.isNotEmpty) {
+        chapters = customChapters;
+      }
+    }
     return LocalBook(
       id: id,
       title: _titleFromName(name),
@@ -2794,7 +2934,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       modified: modified,
       textFingerprint: processed.fingerprint,
       sourceFingerprint: processed.sourceFingerprint,
-      chapters: processed.chapters,
+      chapters: chapters,
       pageCount: 0,
       wordCount: processed.wordCount,
       sourceId: sourceId,
@@ -2802,6 +2942,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       customTitle: existing?.customTitle,
       customAuthor: existing?.customAuthor,
       chapterSplitVersion: _activeChapterSplitVersion,
+      customTocPattern: existing?.customTocPattern,
+      customMaxChapterChars: existing?.customMaxChapterChars ?? 0,
     );
   }
 
@@ -2835,8 +2977,10 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         !identical(bookFor(keeper.id), keeper)) {
       throw StateError('书库已变化，请重新查重后再删除');
     }
-    if (expected.sourceFingerprint.isEmpty ||
-        keeper.sourceFingerprint.isEmpty) {
+    if ((expected.sourceFingerprint.isEmpty &&
+            expected.kind != LocalBookKind.pdf) ||
+        (keeper.sourceFingerprint.isEmpty &&
+            keeper.kind != LocalBookKind.pdf)) {
       throw StateError('缺少源文件指纹，请先扫描文件夹后再清理');
     }
     final source = await _duplicateSourceIdentity(expected);
@@ -2849,15 +2993,57 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     // Also verify the retained source is accessible and unchanged. Otherwise
     // an externally deleted/modified keeper could leave no valid copy.
     for (final book in [keeper, expected]) {
-      final actual = book.fileUri.startsWith('content:')
-          ? await LocalPlatform.fingerprintLocalText(book.fileUri)
-          : await _textWorker.fingerprint(_sourceFile(book).path);
-      if (actual != book.sourceFingerprint) {
-        throw StateError('源文件已变化，请重新扫描后再清理');
-      }
+      await _verifyDuplicateBookUnchanged(book);
     }
     await _deleteBookFileUnlocked(expected);
   });
+
+  Future<String> _streamFileSha256(File file) async =>
+      (await sha256.bind(file.openRead()).first).toString();
+
+  Future<void> _verifyDuplicateBookUnchanged(LocalBook book) async {
+    if (book.sourceFingerprint.isEmpty) {
+      if (book.fileUri.startsWith('content:')) {
+        final pages = await LocalPlatform.pdfPageCount(book.fileUri);
+        if (pages <= 0 || (book.pageCount > 0 && pages != book.pageCount)) {
+          throw StateError('源文件已变化，请重新扫描后再清理');
+        }
+      } else {
+        final stat = await _sourceFile(book).stat();
+        if (stat.type != FileSystemEntityType.file ||
+            (book.size > 0 && stat.size != book.size)) {
+          throw StateError('源文件已变化，请重新扫描后再清理');
+        }
+      }
+      return;
+    }
+    String actual;
+    if (book.fileUri.startsWith('content:')) {
+      if (book.kind != LocalBookKind.txt &&
+          book.size > localTextMaxSourceBytes) {
+        final cacheFile = await _epubCacheFile(book.id);
+        final staged = await _stageEpubCopy(
+          book.fileUri,
+          book.size,
+          cacheFile.parent,
+        );
+        try {
+          actual = await _streamFileSha256(staged);
+        } finally {
+          await staged.parent.delete(recursive: true);
+        }
+      } else {
+        actual = await LocalPlatform.fingerprintLocalText(book.fileUri);
+      }
+    } else {
+      actual = book.kind == LocalBookKind.txt
+          ? await _textWorker.fingerprint(_sourceFile(book).path)
+          : await _streamFileSha256(_sourceFile(book));
+    }
+    if (actual != book.sourceFingerprint) {
+      throw StateError('源文件已变化，请重新扫描后再清理');
+    }
+  }
 
   Future<String> _duplicateSourceIdentity(LocalBook book) async {
     final locator = book.sourceKey.isNotEmpty ? book.sourceKey : book.fileUri;
@@ -3155,8 +3341,45 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     try {
       final textFile = File(textPathFor(book));
       if (await textFile.exists()) await textFile.delete();
+      final dir = _booksDir;
+      if (await dir.exists()) {
+        final prefix = 'book_${book.id}_';
+        final legacyName = 'book_${book.id}.txt';
+        final upgradingName = 'book_${book.id}.upgrading';
+        await for (final entity in dir.list(followLinks: false)) {
+          if (entity is! File) continue;
+          final base = entity.uri.pathSegments.isNotEmpty
+              ? entity.uri.pathSegments.last
+              : entity.path.split(Platform.pathSeparator).last;
+          if (base == legacyName ||
+              base == upgradingName ||
+              (base.startsWith(prefix) && base.endsWith('.txt'))) {
+            if (await entity.exists()) await entity.delete();
+          }
+        }
+      }
     } catch (_) {
       ok = false;
+    }
+    if (book.sourceId == 'cloud:imported' && book.sourceKey.isNotEmpty) {
+      final shared = _books.any(
+        (other) => other.id != book.id && other.sourceKey == book.sourceKey,
+      );
+      if (!shared) {
+        try {
+          final cloudDir = Directory('${_booksDir.path}/cloud_originals');
+          final cloudFile = File(book.sourceKey);
+          if (await cloudDir.exists() && await cloudFile.exists()) {
+            final root = await cloudDir.resolveSymbolicLinks();
+            final resolved = await cloudFile.resolveSymbolicLinks();
+            if (resolved.startsWith('$root${Platform.pathSeparator}')) {
+              await cloudFile.delete();
+            }
+          }
+        } catch (_) {
+          ok = false;
+        }
+      }
     }
     if (book.kind == LocalBookKind.pdf) {
       try {
@@ -3613,6 +3836,19 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
     final processed = await _importText(uri, id);
     if (processed.inputLength == 0) return null;
+    var chapters = processed.chapters;
+    if (existing != null && existing.hasCustomChapterSplit) {
+      final customChapters = await _textWorker.splitCustom(
+        '${_booksDir.path}/book_${id}_${processed.fingerprint}.txt',
+        customPattern: existing.customTocPattern,
+        maxChapterChars: existing.customMaxChapterChars,
+        enableChapterExtensions:
+            _activeChapterSplitVersion == _extendedChapterSplitVersion,
+      );
+      if (customChapters.isNotEmpty) {
+        chapters = customChapters;
+      }
+    }
     return LocalBook(
       id: id,
       title: title,
@@ -3624,7 +3860,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       modified: modified,
       textFingerprint: processed.fingerprint,
       sourceFingerprint: processed.sourceFingerprint,
-      chapters: processed.chapters,
+      chapters: chapters,
       pageCount: 0,
       wordCount: processed.wordCount,
       sourceId: sourceId,
@@ -3632,6 +3868,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       customTitle: existing?.customTitle,
       customAuthor: existing?.customAuthor,
       chapterSplitVersion: _activeChapterSplitVersion,
+      customTocPattern: existing?.customTocPattern,
+      customMaxChapterChars: existing?.customMaxChapterChars ?? 0,
     );
   }
 
@@ -3679,7 +3917,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         book.sourceId == 'appFolder:novels' ||
         book.sourceId == 'cloud:imported';
     final actual = direct
-        ? await _textWorker.fingerprint(book.sourceKey)
+        ? (book.kind == LocalBookKind.txt
+              ? await _textWorker.fingerprint(book.sourceKey)
+              : await _streamFileSha256(File(book.sourceKey)))
         : await LocalPlatform.fingerprintLocalText(book.fileUri);
     return actual == expected;
   }
@@ -3694,7 +3934,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     var effectiveName = name.trim().isEmpty ? '未命名书籍.txt' : name.trim();
     var bytes = await File(path).readAsBytes();
     final kind = localBookKindForFileName(effectiveName);
-    if (kind == null) {
+    if (kind == null && !isMobiFileName(effectiveName)) {
       final prepared = await PortableBookPreparer.prepareFile(
         effectiveName,
         path,
@@ -3727,6 +3967,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     final existing = _books
         .where((b) => b.sourceId == sourceId && b.sourceKey == sourceKey)
         .firstOrNull;
+    if (existing == null) {
+      await _reserveIds(1);
+    }
     final stat = await stored.stat();
     final book = await _importDirectFile(
       path: stored.path,
@@ -3792,7 +4035,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     final book = bookFor(id);
     if (book == null) return null;
     if (book.fileUri.startsWith('file://')) {
-      final file = File(Uri.parse(book.fileUri).toFilePath());
+      final file = _sourceFile(book);
       if (await file.exists()) {
         final bytes = await file.readAsBytes();
         String? text;
@@ -4038,13 +4281,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         outputPath: '${_booksDir.path}/book_${current.id}.upgrading',
       );
       readingSource = false;
-      final normalized = File(
-        '${_booksDir.path}/book_${current.id}_${processed.fingerprint}.txt',
-      );
-      await File(
-        '${_booksDir.path}/book_${current.id}.upgrading',
-      ).rename(normalized.path);
+      final upgrading = File('${_booksDir.path}/book_${current.id}.upgrading');
       if (processed.inputLength == 0) {
+        if (await upgrading.exists()) await upgrading.delete();
         return (
           wordCountBackfilled: false,
           chaptersRefreshed: false,
@@ -4052,18 +4291,39 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           sourceUnavailable: false,
         );
       }
+      final normalized = File(
+        '${_booksDir.path}/book_${current.id}_${processed.fingerprint}.txt',
+      );
+      if (!await normalized.exists()) {
+        await upgrading.rename(normalized.path);
+      } else if (await upgrading.exists()) {
+        await upgrading.delete();
+      }
       final canSplit = chaptersStale && processed.length > 0;
+      var candidateChapters = processed.chapters;
+      if (canSplit && current.hasCustomChapterSplit) {
+        final customChapters = await _textWorker.splitCustom(
+          normalized.path,
+          customPattern: current.customTocPattern,
+          maxChapterChars: current.customMaxChapterChars,
+          enableChapterExtensions:
+              _chapterSplitVersionFor(current) == _extendedChapterSplitVersion,
+        );
+        if (customChapters.isNotEmpty) {
+          candidateChapters = customChapters;
+        }
+      }
       final old = current.chapters;
       var chaptersChanged = false;
       if (canSplit) {
-        if (processed.chapters.length != old.length) {
+        if (candidateChapters.length != old.length) {
           chaptersChanged = true;
         } else {
           for (var i = 0; i < old.length; i++) {
-            if (processed.chapters[i].title != old[i].title ||
-                processed.chapters[i].offset != old[i].offset ||
-                processed.chapters[i].length != old[i].length ||
-                processed.chapters[i].volume != old[i].volume) {
+            if (candidateChapters[i].title != old[i].title ||
+                candidateChapters[i].offset != old[i].offset ||
+                candidateChapters[i].length != old[i].length ||
+                candidateChapters[i].volume != old[i].volume) {
               chaptersChanged = true;
               break;
             }
@@ -4073,7 +4333,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       final updated = current.copyWith(
         wordCount: processed.wordCount,
         textFingerprint: processed.fingerprint,
-        chapters: chaptersChanged ? processed.chapters : current.chapters,
+        chapters: chaptersChanged ? candidateChapters : current.chapters,
         chapterSplitVersion: canSplit
             ? _chapterSplitVersionFor(current)
             : current.chapterSplitVersion,
@@ -4417,6 +4677,22 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     final package = await EpubPackage.open(localPath, lenient: true);
     if (_disposed || bookFor(book.id)?.revision != book.revision) {
       return (package: package, session: null);
+    }
+    final concurrent = _epubSessionCache.remove(book.id);
+    if (concurrent != null) {
+      if (!concurrent.evicted &&
+          stat.type == FileSystemEntityType.file &&
+          concurrent.localPath == localPath &&
+          concurrent.fileSize == stat.size &&
+          concurrent.fileModifiedMicros == modifiedMicros &&
+          concurrent.bookRevision == book.revision &&
+          concurrent.sourceFingerprint == book.sourceFingerprint) {
+        await package.close();
+        concurrent.activeReaders++;
+        _epubSessionCache[book.id] = concurrent;
+        return (package: concurrent.package, session: concurrent);
+      }
+      _evictEpubSession(concurrent);
     }
     final session = _CachedEpubSession(
       localPath: localPath,

@@ -70,6 +70,7 @@ class _LocalDuplicatesPageState extends State<LocalDuplicatesPage> {
     books,
     hasRead: widget.state.hasRead,
     lastReadAt: widget.state.lastReadAt,
+    annotationCount: (id) => widget.state.bookmarksFor(id).length,
   );
 
   void _selectCopies() {
@@ -510,7 +511,7 @@ class _LocalDuplicatesPageState extends State<LocalDuplicatesPage> {
                     child: Text(
                       [
                         '${book.displayAuthor} · ${book.isMobiSource ? 'MOBI/AZW3' : book.kind.name.toUpperCase()} · ${formatLocalSize(book.size)}',
-                        '${book.wordCount == null ? '字数未知' : formatLocalWordCount(book.wordCount!)} · ${book.chapters.length} 章',
+                        '${book.wordCount == null ? '字数未知' : formatLocalWordCount(book.wordCount!)} · ${book.kind == LocalBookKind.pdf ? '${book.pageCount} 页' : '${book.chapters.length} 章'}',
                         '${_readingLabel(book.id)} · 书签／批注 ${widget.state.bookmarksFor(book.id).length} 条',
                         book.fileName,
                         book.fileUri,
