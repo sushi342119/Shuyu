@@ -48,6 +48,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
   late ReadingActivitySession _readingActivity;
   bool _activityAttached = false;
   bool _activityForeground = true;
+  bool _activityRouteCurrent = true;
   bool _chapterReady = false;
   late int _chapter;
   int _chapterVisit = 0;
@@ -61,6 +62,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     final active =
         _activityAttached &&
         _activityForeground &&
+        _activityRouteCurrent &&
         _chapterReady &&
         !_sheetOpen &&
         _total > 0;
@@ -200,6 +202,11 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
   void didChangeDependencies() {
     super.didChangeDependencies();
     _width = MediaQuery.sizeOf(context).width;
+    final routeCurrent = ModalRoute.isCurrentOf(context) ?? true;
+    if (_activityRouteCurrent != routeCurrent) {
+      _activityRouteCurrent = routeCurrent;
+      _syncReadingActivity();
+    }
   }
 
   /// 等当前章（[chapter]）加载并布局完成；postFrame 回调链 + 2 秒 watchdog，
@@ -906,9 +913,13 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
         );
 
   @override
-  Widget build(BuildContext context) => ReaderPaperScope(
-    state: widget.state,
-    child: Builder(builder: _readerScaffold),
+  Widget build(BuildContext context) => Listener(
+    behavior: HitTestBehavior.translucent,
+    onPointerDown: (_) => _readingActivity.notifyInteraction(),
+    child: ReaderPaperScope(
+      state: widget.state,
+      child: Builder(builder: _readerScaffold),
+    ),
   );
 
   List<ReaderAction> _readerActions() => [

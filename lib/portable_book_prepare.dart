@@ -102,9 +102,17 @@ class PortableBookPreparer {
         try {
           final archive = ZipDecoder().decodeBytes(bytes);
           final docEntry = archive.findFile('word/document.xml');
-          if (docEntry == null) return const [];
+          if (docEntry == null ||
+              docEntry.size < 0 ||
+              docEntry.size > 64 * 1024 * 1024) {
+            return const [];
+          }
+          final rawXml = docEntry.readBytes();
+          if (rawXml == null || rawXml.length > 64 * 1024 * 1024) {
+            return const [];
+          }
           final xml = XmlDocument.parse(
-            utf8.decode(docEntry.content as List<int>, allowMalformed: true),
+            utf8.decode(rawXml, allowMalformed: true),
           );
           final lines = <String>[];
           for (final p in xml.descendants.whereType<XmlElement>().where(
@@ -158,7 +166,8 @@ class PortableBookPreparer {
                 : '';
             if (entryExt == 'zip') continue;
             if (++count > _maxZipEntries) break;
-            if (entry.size > _maxSingleFileBytes ||
+            if (entry.size < 0 ||
+                entry.size > _maxSingleFileBytes ||
                 totalBytes + entry.size > _maxZipTotalBytes) {
               break;
             }

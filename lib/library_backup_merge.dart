@@ -87,6 +87,7 @@ extension LibraryBackupMerge on LibraryState {
     bool importPreferences = false,
     bool importPurification = true,
     bool importReadingStats = true,
+    bool importTags = true,
   }) async {
     _requireShelfLoaded();
     if (_restoreBarrier case final barrier?) {
@@ -96,6 +97,7 @@ extension LibraryBackupMerge on LibraryState {
           importPreferences: importPreferences,
           importPurification: importPurification,
           importReadingStats: importReadingStats,
+          importTags: importTags,
         ),
       );
     }
@@ -315,33 +317,17 @@ extension LibraryBackupMerge on LibraryState {
           }
         }
         await _commitLibraryRecords(changed);
-        // 标签是独立存储，合并语义与书架一致（只增不减）。
-        final tagRecords = <String, Object>{};
-        if (records['tag_defs'] case final String defs) {
-          tagRecords['tag_defs'] = defs;
-        }
-        if (records['tag_map'] case final String rawMap) {
-          if (remap.entries.any((e) => e.key != e.value) ||
-              collidingUnmatched.isNotEmpty) {
-            final decoded = jsonDecode(rawMap) as Map<String, dynamic>;
-            final remapped = <String, List<String>>{};
-            for (final entry in decoded.entries) {
-              final rawId = int.tryParse(entry.key);
-              final mappedId = rawId == null ? null : mapBookId(rawId);
-              if (rawId != null && mappedId == null) continue;
-              final targetKey = mappedId != null ? '$mappedId' : entry.key;
-              final bucket = remapped.putIfAbsent(targetKey, () => <String>[]);
-              for (final tag in (entry.value as List).cast<String>()) {
-                if (!bucket.contains(tag)) bucket.add(tag);
-              }
-            }
-            tagRecords['tag_map'] = jsonEncode(remapped);
-          } else {
-            tagRecords['tag_map'] = rawMap;
+        if (importTags) {
+          // 标签是独立存储，合并语义与书架一致（只增不减）。
+          final tagRecords = _remapTagRecords(
+            records,
+            remap: remap,
+            collidingUnmatched: collidingUnmatched,
+            mapBookId: mapBookId,
+          );
+          if (tagRecords.isNotEmpty) {
+            await TagStore.shared.importTagRecords(tagRecords);
           }
-        }
-        if (tagRecords.isNotEmpty) {
-          await TagStore.shared.importTagRecords(tagRecords);
         }
         if (stagedPurification != null) {
           ReaderPurificationStore.shared.applyMergedBackupRecords(
@@ -546,6 +532,126 @@ extension LibraryBackupMerge on LibraryState {
           ? existing.createdOffsetMinutes
           : incoming.createdOffsetMinutes,
     );
+  }
+
+  Map<String, Object> _remapTagRecords(
+    Map<String, Object> records, {
+    required Map<int, int> remap,
+    required Set<int> collidingUnmatched,
+    required int? Function(int) mapBookId,
+  }) {
+    final tagRecords = <String, Object>{};
+    if (records['tag_defs'] case final String defs) {
+      tagRecords['tag_defs'] = defs;
+    }
+    if (records['tag_map'] case final String rawMap) {
+      if (remap.entries.any((e) => e.key != e.value) ||
+          collidingUnmatched.isNotEmpty) {
+        final decoded = jsonDecode(rawMap) as Map<String, dynamic>;
+        final remapped = <String, List<String>>{};
+        for (final entry in decoded.entries) {
+          final rawId = int.tryParse(entry.key);
+          final mappedId = rawId == null ? null : mapBookId(rawId);
+          if (rawId != null && mappedId == null) continue;
+          final targetKey = mappedId != null ? '$mappedId' : entry.key;
+          final bucket = remapped.putIfAbsent(targetKey, () => <String>[]);
+          for (final tag in (entry.value as List).cast<String>()) {
+            if (!bucket.contains(tag)) bucket.add(tag);
+          }
+        }
+        tagRecords['tag_map'] = jsonEncode(remapped);
+      } else {
+        tagRecords['tag_map'] = rawMap;
+      }
+    }
+    return tagRecords;
+  }
+
+  /// Imports only tag definitions and book-tag assignments from [backup],
+  /// remapping local book IDs via `novel_meta_*` / local library fingerprints.
+  Future<void> restoreBackupTagsOnly(LibraryBackup backup) async {
+    _requireShelfLoaded();
+    if (TagStore.maybeShared == null) return;
+    final records = backup.records;
+    final known = {..._known};
+    if (_localChapters case final LocalLibraryStore localStore) {
+      for (final book in localStore.books) {
+        known.putIfAbsent(book.id, () => localStore.toNovel(book));
+      }
+    }
+    final (:remap, :collidingUnmatched) = _resolveLocalBookIdMap(
+      known,
+      records,
+    );
+    int? mapBookId(int rawId) => collidingUnmatched.contains(rawId)
+        ? null
+        : (remap[rawId] ?? rawId);
+    final tagRecords = _remapTagRecords(
+      records,
+      remap: remap,
+      collidingUnmatched: collidingUnmatched,
+      mapBookId: mapBookId,
+    );
+    if (tagRecords.isNotEmpty) {
+      await TagStore.shared.importTagRecords(tagRecords);
+    }
+  }
+
+  /// Builds outgoing [LibraryBackup] for [BookSync] honoring independent
+  /// `syncReading` and `syncCategories` switches while preserving any disabled
+  /// remote category/reading payload on the server.
+  Future<LibraryBackup> createSyncBackup({
+    required bool syncReading,
+    required bool syncCategories,
+    LibraryBackup? remote,
+  }) async {
+    if (syncReading && syncCategories) {
+      return createBackup();
+    }
+    if (!syncReading && !syncCategories) {
+      return remote ?? await LibraryBackup.fromRecords(const {});
+    }
+    if (syncReading && !syncCategories) {
+      final full = await createBackup();
+      final next = Map<String, Object>.from(full.records)
+        ..remove('tag_defs')
+        ..remove('tag_map');
+      final remoteRecords = remote?.records;
+      if (remoteRecords != null) {
+        if (remoteRecords['tag_defs'] case final Object defs) {
+          next['tag_defs'] = defs;
+        }
+        if (remoteRecords['tag_map'] case final Object tagMap) {
+          next['tag_map'] = tagMap;
+        }
+      }
+      return LibraryBackup.fromLocalRecords(next);
+    }
+    // !syncReading && syncCategories: preserve remote reading records while
+    // exporting local tag definitions, tag assignments, and tagged book metas.
+    final tagStore = TagStore.maybeShared;
+    if (tagStore == null) {
+      return remote ?? await LibraryBackup.fromRecords(const {});
+    }
+    final next = <String, Object>{...?remote?.records};
+    next.addAll(tagStore.exportTagRecords());
+    final localStore = _localChapters;
+    for (final tag in tagStore.tags) {
+      for (final bookId in tagStore.bookIdsFor(tag.id)) {
+        final novel =
+            _known[bookId] ??
+            (localStore?.bookFor(bookId) != null
+                ? localStore!.toNovel(localStore.bookFor(bookId)!)
+                : null);
+        if (novel != null) {
+          next.putIfAbsent(
+            'novel_meta_$bookId',
+            () => jsonEncode(novel.toSnapshot()),
+          );
+        }
+      }
+    }
+    return LibraryBackup.fromLocalRecords(next);
   }
 
   void _recordOmittedCovers(LibraryBackup backup) {

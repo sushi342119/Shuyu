@@ -120,11 +120,11 @@ class S3SyncConnection {
   }
 }
 
-String _s3Root(CloudSourceConfig config) => config.prefix.isEmpty
-    ? ''
-    : config.prefix.endsWith('/')
-    ? config.prefix
-    : '${config.prefix}/';
+String _s3Root(CloudSourceConfig config) {
+  final clean = config.prefix.trim().replaceFirst(RegExp(r'^/+'), '');
+  if (clean.isEmpty) return '';
+  return clean.endsWith('/') ? clean : '$clean/';
+}
 
 Uri _s3Uri(CloudSourceConfig config, String key, [Map<String, String>? query]) {
   final endpoint = config.endpoint;
@@ -308,7 +308,12 @@ class S3BookClient implements CloudBookClient {
     final encoded = value(node, 'EncodingType') == 'url';
     String keyValue(XmlElement parent, String name) {
       final text = value(parent, name);
-      return encoded ? Uri.decodeComponent(text) : text;
+      if (!encoded) return text;
+      try {
+        return Uri.decodeQueryComponent(text);
+      } on ArgumentError {
+        return text;
+      }
     }
 
     final entries = <String, CloudBookEntry>{};

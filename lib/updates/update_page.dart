@@ -220,17 +220,29 @@ class AppUpdatePage extends StatelessWidget {
                         ),
                         const SizedBox(height: 16),
                         if (service.downloading) ...[
-                          Text(
-                            '已下载 ${(service.bytes / 1024 / 1024).toStringAsFixed(1)} / ${(service.asset!.size / 1024 / 1024).toStringAsFixed(1)} MB',
-                          ),
-                          const SizedBox(height: 8),
-                          LinearProgressIndicator(
-                            value: (service.bytes / service.asset!.size).clamp(
-                              0.0,
-                              1.0,
-                            ),
-                            color: Theme.of(context).colorScheme.primary,
-                            minHeight: 2,
+                          Builder(
+                            builder: (context) {
+                              final totalSize = service.asset?.size ?? 0;
+                              final progress = totalSize > 0
+                                  ? (service.bytes / totalSize).clamp(0.0, 1.0)
+                                  : null;
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Text(
+                                    totalSize > 0
+                                        ? '已下载 ${(service.bytes / 1024 / 1024).toStringAsFixed(1)} / ${(totalSize / 1024 / 1024).toStringAsFixed(1)} MB'
+                                        : '已下载 ${(service.bytes / 1024 / 1024).toStringAsFixed(1)} MB',
+                                  ),
+                                  const SizedBox(height: 8),
+                                  LinearProgressIndicator(
+                                    value: progress,
+                                    color: Theme.of(context).colorScheme.primary,
+                                    minHeight: 2,
+                                  ),
+                                ],
+                              );
+                            },
                           ),
                           GlassTextButton(
                             onPressed: service.cancelDownload,

@@ -24,21 +24,40 @@ class LanBookshelfServer extends ChangeNotifier {
 
   HttpServer? _server;
   String _hostIp = '127.0.0.1';
+  String _boundIp = '';
   int _port = 0;
   String _accessCode = '';
   int _uploadedCount = 0;
+  int _activeUploads = 0;
+  bool _disposed = false;
+  Future<void> _lifecycle = Future<void>.value();
   String? _lastError;
   final List<String> _recentUploads = <String>[];
+  final Map<String, List<DateTime>> _failedAuthByIp = <String, List<DateTime>>{};
+
+  static const int _maxFailedAuthAttempts = 5;
+  static const Duration _failedAuthWindow = Duration(seconds: 60);
+  static const int _maxConcurrentUploads = 2;
 
   bool get isRunning => _server != null;
   String get baseUrl => isRunning ? 'http://$_hostIp:$_port' : '';
   String get url =>
-      isRunning ? 'http://$_hostIp:$_port/?token=$_accessCode' : '';
+      isRunning ? 'http://$_hostIp:$_port/#token=$_accessCode' : '';
   String get accessCode => _accessCode;
   int get port => _port;
   int get uploadedCount => _uploadedCount;
   String? get lastError => _lastError;
   List<String> get recentUploads => List.unmodifiable(_recentUploads);
+
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  Future<void> _enqueueLifecycle(Future<void> Function() action) {
+    final next = _lifecycle.catchError((Object _) {}).then((_) => action());
+    _lifecycle = next;
+    return next;
+  }
 
   static String _generateAccessCode() {
     final random = Random.secure();
@@ -58,6 +77,15 @@ class LanBookshelfServer extends ChangeNotifier {
     return diff == 0;
   }
 
+  static bool isPrivateLanIpv4(InternetAddress addr) {
+    if (addr.type != InternetAddressType.IPv4) return false;
+    final b = addr.rawAddress;
+    if (b.length != 4) return false;
+    return b[0] == 10 ||
+        (b[0] == 172 && b[1] >= 16 && b[1] <= 31) ||
+        (b[0] == 192 && b[1] == 168);
+  }
+
   static Future<String> resolveLanIp() async {
     try {
       final interfaces = await NetworkInterface.list(
@@ -66,11 +94,8 @@ class LanBookshelfServer extends ChangeNotifier {
       );
       for (final iface in interfaces) {
         for (final addr in iface.addresses) {
-          final ip = addr.address;
-          if (ip.startsWith('192.168.') ||
-              ip.startsWith('10.') ||
-              ip.startsWith('172.')) {
-            return ip;
+          if (isPrivateLanIpv4(addr)) {
+            return addr.address;
           }
         }
       }
@@ -88,12 +113,15 @@ class LanBookshelfServer extends ChangeNotifier {
   Future<void> start({
     int preferredPort = 8899,
     InternetAddress? bindAddress,
-  }) async {
-    if (_server != null) return;
+  }) => _enqueueLifecycle(() async {
+    if (_disposed || _server != null) return;
     _lastError = null;
     try {
-      _hostIp = await resolveLanIp();
+      final resolvedIp = await resolveLanIp();
+      if (_disposed) return;
+      _hostIp = resolvedIp;
       _accessCode = _generateAccessCode();
+      _failedAuthByIp.clear();
       final preferredAddress =
           bindAddress ??
           (_hostIp != '127.0.0.1' ? InternetAddress.tryParse(_hostIp) : null) ??
@@ -107,30 +135,40 @@ class LanBookshelfServer extends ChangeNotifier {
           0,
         );
       }
+      if (_disposed) {
+        try {
+          await server.close(force: true);
+        } catch (_) {}
+        _accessCode = '';
+        return;
+      }
       _server = server;
+      _boundIp = server.address.address;
       _port = server.port;
       server.listen(
         _handleRequest,
         onError: (Object error) {
           if (kDebugMode) debugPrint('LanBookshelfServer stream error: $error');
           _lastError = '局域网服务连接异常';
-          notifyListeners();
+          _notify();
         },
       );
-      notifyListeners();
+      _notify();
     } catch (e) {
       if (kDebugMode) debugPrint('LanBookshelfServer.start failed: $e');
       _accessCode = '';
       _lastError = '启动局域网服务失败，请检查无线网络连接';
-      notifyListeners();
+      _notify();
     }
-  }
+  });
 
-  Future<void> stop() async {
+  Future<void> stop() => _enqueueLifecycle(() async {
     final server = _server;
     _server = null;
+    _boundIp = '';
     _port = 0;
     _accessCode = '';
+    _failedAuthByIp.clear();
     if (server != null) {
       try {
         await server.close(force: true);
@@ -138,7 +176,22 @@ class LanBookshelfServer extends ChangeNotifier {
         if (kDebugMode) debugPrint('LanBookshelfServer.stop failed: $e');
       }
     }
-    notifyListeners();
+    _notify();
+  });
+
+  bool _isValidHostHeader(HttpRequest request) {
+    if (_port <= 0) return false;
+    final rawHost = request.headers.value(HttpHeaders.hostHeader)?.trim().toLowerCase();
+    if (rawHost == null || rawHost.isEmpty) return false;
+    final allowed = <String>{
+      '${_hostIp.toLowerCase()}:$_port',
+      '127.0.0.1:$_port',
+      'localhost:$_port',
+      '[::1]:$_port',
+      if (_boundIp.isNotEmpty && _boundIp != '0.0.0.0' && _boundIp != '::')
+        '${_boundIp.toLowerCase()}:$_port',
+    };
+    return allowed.contains(rawHost);
   }
 
   bool _isCrossOrigin(HttpRequest request) {
@@ -157,6 +210,29 @@ class LanBookshelfServer extends ChangeNotifier {
       }
     }
     return false;
+  }
+
+  String _clientIp(HttpRequest request) =>
+      request.connectionInfo?.remoteAddress.address ?? 'unknown';
+
+  bool _isRateLimited(String ip, DateTime now) {
+    final history = _failedAuthByIp[ip];
+    if (history == null) return false;
+    history.removeWhere((ts) => now.difference(ts) >= _failedAuthWindow);
+    if (history.isEmpty) {
+      _failedAuthByIp.remove(ip);
+      return false;
+    }
+    return history.length >= _maxFailedAuthAttempts;
+  }
+
+  void _recordFailedAuthAttempt(String ip, DateTime now) {
+    if (!_failedAuthByIp.containsKey(ip) && _failedAuthByIp.length >= 256) {
+      _failedAuthByIp.remove(_failedAuthByIp.keys.first);
+    }
+    final history = _failedAuthByIp.putIfAbsent(ip, () => <DateTime>[]);
+    history.removeWhere((ts) => now.difference(ts) >= _failedAuthWindow);
+    history.add(now);
   }
 
   bool _isAuthorized(HttpRequest request) {
@@ -188,10 +264,21 @@ class LanBookshelfServer extends ChangeNotifier {
     response.headers.set('X-Content-Type-Options', 'nosniff');
     response.headers.set('X-Frame-Options', 'DENY');
     response.headers.set('Cache-Control', 'no-store');
+    response.headers.set('Referrer-Policy', 'no-referrer');
     response.headers.set('Cross-Origin-Resource-Policy', 'same-origin');
 
     final path = request.uri.path;
     try {
+      if (!_isValidHostHeader(request)) {
+        _writeJson(
+          response,
+          {'ok': false, 'error': '已拒绝非局域网主机头请求'},
+          status: HttpStatus.forbidden,
+        );
+        await response.close();
+        return;
+      }
+
       if (request.method == 'GET' && (path == '/' || path == '/index.html')) {
         response.headers.set(
           'Content-Security-Policy',
@@ -213,7 +300,24 @@ class LanBookshelfServer extends ChangeNotifier {
         return;
       }
 
+      final clientIp = _clientIp(request);
+      final now = DateTime.now();
+      if (_isRateLimited(clientIp, now)) {
+        _writeJson(
+          response,
+          {'ok': false, 'error': '口令尝试过于频繁，请稍后再试'},
+          status: HttpStatus.tooManyRequests,
+        );
+        await response.close();
+        return;
+      }
+
       if (!_isAuthorized(request)) {
+        final suppliedHeader = (request.headers.value('x-shuyu-token') ?? '').trim();
+        final suppliedQuery = (request.uri.queryParameters['token'] ?? '').trim();
+        if (suppliedHeader.isNotEmpty || suppliedQuery.isNotEmpty) {
+          _recordFailedAuthAttempt(clientIp, now);
+        }
         _writeJson(
           response,
           {'ok': false, 'error': '未授权访问，请输入手机端显示的 6 位访问口令'},
@@ -222,6 +326,7 @@ class LanBookshelfServer extends ChangeNotifier {
         await response.close();
         return;
       }
+      _failedAuthByIp.remove(clientIp);
 
       if (request.method == 'GET' && path == '/api/books') {
         final list = [
@@ -294,6 +399,15 @@ class LanBookshelfServer extends ChangeNotifier {
         return;
       }
       if (request.method == 'POST' && path == '/api/upload') {
+        if (_activeUploads >= _maxConcurrentUploads) {
+          _writeJson(
+            response,
+            {'ok': false, 'error': '当前上传任务过多，请稍候重试'},
+            status: HttpStatus.tooManyRequests,
+          );
+          await response.close();
+          return;
+        }
         if (request.contentLength > localTextMaxSourceBytes) {
           _writeJson(
             response,
@@ -303,13 +417,15 @@ class LanBookshelfServer extends ChangeNotifier {
           await response.close();
           return;
         }
+        _activeUploads++;
         final rawName =
             request.uri.queryParameters['name'] ??
             request.headers.value('x-file-name') ??
             'uploaded_book.txt';
         final safeName = _sanitizeUploadFileName(rawName);
-        final tempDir = await Directory.systemTemp.createTemp('shuyu_wifi_');
+        Directory? tempDir;
         try {
+          tempDir = await Directory.systemTemp.createTemp('shuyu_wifi_');
           final tempFile = File('${tempDir.path}/$safeName');
           final sink = tempFile.openWrite();
           var totalBytes = 0;
@@ -335,11 +451,16 @@ class LanBookshelfServer extends ChangeNotifier {
             return;
           }
           if (safeName.toLowerCase().endsWith('.zip')) {
+            final existingBookIds = local.books.map((b) => b.id).toSet();
             final res = await local.importCloudBatch(safeName, tempFile.path);
-            await state.addShelfBooks([
+            final newlyImported = [
               for (final b in local.books)
-                if (!state.contains(b.id)) local.toNovel(b),
-            ]);
+                if (!existingBookIds.contains(b.id) && !state.contains(b.id))
+                  local.toNovel(b),
+            ];
+            if (newlyImported.isNotEmpty) {
+              await state.addShelfBooks(newlyImported);
+            }
             _uploadedCount += res.imported;
             _recentUploads.insert(0, '$safeName (${res.imported} 本)');
           } else {
@@ -351,10 +472,11 @@ class LanBookshelfServer extends ChangeNotifier {
           if (_recentUploads.length > 10) {
             _recentUploads.removeRange(10, _recentUploads.length);
           }
-          notifyListeners();
+          _notify();
           _writeJson(response, {'ok': true, 'name': safeName});
         } finally {
-          if (await tempDir.exists()) {
+          _activeUploads--;
+          if (tempDir != null && await tempDir.exists()) {
             await tempDir.delete(recursive: true);
           }
         }
@@ -397,6 +519,7 @@ class LanBookshelfServer extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     unawaited(stop());
     super.dispose();
   }
@@ -979,7 +1102,11 @@ const _webAppHtml = '''<!DOCTYPE html>
 </main>
 <script>
 let currentBookId = 0, currentChapter = 0, totalChapters = 0;
-const initialToken = new URLSearchParams(location.search).get('token') || '';
+const hashQuery = location.hash.startsWith('#') ? location.hash.slice(1) : '';
+const initialToken =
+  new URLSearchParams(hashQuery).get('token') ||
+  new URLSearchParams(location.search).get('token') ||
+  '';
 if (initialToken) {
   document.getElementById('tokenInput').value = initialToken;
   if (window.history && window.history.replaceState) {

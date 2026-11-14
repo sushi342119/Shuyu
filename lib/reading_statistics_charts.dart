@@ -206,9 +206,13 @@ class _ReadingRhythmChartState extends State<ReadingRhythmChart>
               );
               _lastPainter = painter;
               void selectAt(Offset position) => select(
-                count < 2
+                count < 2 || bounds.width <= 0
                     ? 0
-                    : ((position.dx - bounds.left) / bounds.width * (count - 1))
+                    : (((position.dx - bounds.left) / bounds.width).clamp(
+                                0.0,
+                                1.0,
+                              ) *
+                              (count - 1))
                           .round(),
               );
 
@@ -236,27 +240,34 @@ class _ReadingRhythmChartState extends State<ReadingRhythmChart>
                     left: 0,
                     right: 0,
                     child: ExcludeSemantics(
-                      child: Row(
-                        children: [
-                          Text(
-                            '分钟',
-                            style: labelStyle,
-                            textScaler: TextScaler.noScaling,
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: SizedBox(
+                          width: math.max(size.width, 180),
+                          child: Row(
+                            children: [
+                              Text(
+                                '分钟',
+                                style: labelStyle,
+                                textScaler: TextScaler.noScaling,
+                              ),
+                              const Spacer(),
+                              _TraceLegend(
+                                label: '每日',
+                                color: scheme.onSurface,
+                                style: labelStyle,
+                              ),
+                              const SizedBox(width: 14),
+                              _TraceLegend(
+                                label: '7 日均值',
+                                color: scheme.onSurfaceVariant,
+                                style: labelStyle,
+                                dashed: true,
+                              ),
+                            ],
                           ),
-                          const Spacer(),
-                          _TraceLegend(
-                            label: '每日',
-                            color: scheme.onSurface,
-                            style: labelStyle,
-                          ),
-                          const SizedBox(width: 14),
-                          _TraceLegend(
-                            label: '7 日均值',
-                            color: scheme.onSurfaceVariant,
-                            style: labelStyle,
-                            dashed: true,
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
@@ -312,12 +323,13 @@ class _TraceLegend extends StatelessWidget {
   );
 }
 
-Rect _rhythmBounds(Size size) => Rect.fromLTRB(
-  math.min(38, size.width * .2),
-  32,
-  math.max(1, size.width - 7),
-  size.height - 28,
-);
+Rect _rhythmBounds(Size size) {
+  final left = math.max(0.0, math.min(38.0, size.width * .2));
+  final right = math.max(left + 1.0, size.width - 7);
+  const top = 32.0;
+  final bottom = math.max(top + 1.0, size.height - 28);
+  return Rect.fromLTRB(left, top, right, bottom);
+}
 
 double? _measurement(double? value) =>
     value == null || !value.isFinite ? null : math.max(0, value);
@@ -854,7 +866,10 @@ class _CalendarLayout {
         if (index >= segmentCount) break;
         final firstWeek = index * maximumWeeksPerSegment;
         final weeks = math.min(maximumWeeksPerSegment, rows - firstWeek);
-        final height = headerHeight + weeks * rowPitch - gap + bottomPadding;
+        final height = math.max(
+          0.0,
+          headerHeight + weeks * rowPitch - gap + bottomPadding,
+        );
         final monday = span.monday.add(Duration(days: firstWeek * 7));
         final lastDay = monday.add(Duration(days: weeks * 7 - 1));
         blocks.add(
@@ -1071,7 +1086,7 @@ class _CalendarFrame {
               segment.bounds.top + layout.headerHeight + week * layout.rowPitch,
             ),
             style.copyWith(fontSize: 10, height: 1.2),
-            maxWidth: layout.dateGutter - 4,
+            maxWidth: math.max(0.0, layout.dateGutter - 4),
           );
         }
       }
@@ -1233,7 +1248,7 @@ void _paintText(
     text: TextSpan(text: text, style: style),
     textDirection: TextDirection.ltr,
     maxLines: 1,
-  )..layout(maxWidth: maxWidth);
+  )..layout(maxWidth: math.max(0.0, maxWidth));
   painter.paint(canvas, position.translate(-painter.width * alignment, 0));
   painter.dispose();
 }

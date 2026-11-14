@@ -300,19 +300,18 @@ class ListeningAudioHandler extends BaseAudioHandler {
   @override
   Future<void> stop() => controller.stop();
   @override
-  Future<void> seek(Duration position) => controller.seek(position);
+  Future<void> seek(Duration position) =>
+      controller.seekChapterPosition(position);
   @override
   Future<void> skipToNext() => controller.moveChapter(1);
   @override
   Future<void> skipToPrevious() => controller.moveChapter(-1);
   @override
-  Future<void> fastForward() => controller.seek(
-    controller.progress.value.position + const Duration(seconds: 15),
-  );
+  Future<void> fastForward() =>
+      controller.seekRelative(const Duration(seconds: 15));
   @override
-  Future<void> rewind() => controller.seek(
-    controller.progress.value.position - const Duration(seconds: 15),
-  );
+  Future<void> rewind() =>
+      controller.seekRelative(const Duration(seconds: -15));
   @override
   Future<void> setSpeed(double speed) => controller.setSpeed(speed);
   @override

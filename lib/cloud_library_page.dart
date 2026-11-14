@@ -676,7 +676,7 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
           await work.exists()) {
         await work.delete(recursive: true);
       }
-      if (_cancelled) {
+      if (_cancelled && mounted && widget.client == null) {
         _client = CloudBookClient(
           widget.settings[widget.config.kind] ?? widget.config,
           settings: widget.settings,

@@ -155,11 +155,18 @@ class _ReadingStatisticsBarsState extends State<ReadingStatisticsBars> {
             for (var i = 0; i < count; i++) {
               final value = widget.values[i];
               final x = stride * (i + .5);
-              final width = math.min(
-                widget.allLabels ? 28.0 : 18.0,
-                stride * .64,
+              final width = math.max(
+                0.5,
+                math.min(
+                  widget.allLabels ? 28.0 : 18.0,
+                  math.max(0.5, stride * .64),
+                ),
               );
-              final height = (baseline - 21) * (value ?? 0) / maximum;
+              final maxBarHeight = math.max(0.0, baseline - 21);
+              final height = (maxBarHeight * (value ?? 0) / maximum).clamp(
+                0.0,
+                maxBarHeight,
+              );
               if (value == null) {
                 bc.drawRect(
                   Rect.fromLTWH(x - width / 2, baseline - 3, width, 3),

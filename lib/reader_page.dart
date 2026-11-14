@@ -170,6 +170,7 @@ class _ReaderPageState extends State<ReaderPage>
   late ReadingActivitySession _readingActivity;
   bool _activityAttached = false;
   bool _activityForeground = true;
+  bool _activityRouteCurrent = true;
   bool _activityStartQueued = false;
 
   void _activityOverlay(String overlay, bool open) {
@@ -185,6 +186,7 @@ class _ReaderPageState extends State<ReaderPage>
   bool get _activityEligible =>
       _activityAttached &&
       _activityForeground &&
+      _activityRouteCurrent &&
       _ready &&
       !_restoring &&
       _activityOverlays.isEmpty &&
@@ -469,6 +471,11 @@ class _ReaderPageState extends State<ReaderPage>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final routeCurrent = ModalRoute.isCurrentOf(context) ?? true;
+    if (_activityRouteCurrent != routeCurrent) {
+      _activityRouteCurrent = routeCurrent;
+      _syncReadingActivity();
+    }
     final listening = ListeningScope.maybeOf(context);
     if (listening != _listening) {
       _listening?.snapshot.removeListener(_listeningChanged);
@@ -539,6 +546,9 @@ class _ReaderPageState extends State<ReaderPage>
 
   void _listeningChanged() {
     final state = _listening?.snapshot.value;
+    if (state != null && state.novel?.id == _novel.id && state.playing) {
+      _readingActivity.notifyInteraction();
+    }
     final current = state?.current;
     if (state?.error == null) _listeningError = null;
     if (mounted &&
@@ -736,6 +746,7 @@ class _ReaderPageState extends State<ReaderPage>
   /// 滚动时更新进度条（拖动中不跟随，避免打架）。
   void _updateProgressFromScroll() {
     if (!mounted || !_activityAttached) return;
+    _readingActivity.notifyInteraction();
     if (SchedulerBinding.instance.schedulerPhase ==
         SchedulerPhase.persistentCallbacks) {
       _scheduleDeferredProgressSync();
@@ -1079,6 +1090,7 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   void _pageBy(int direction) {
+    _readingActivity.notifyInteraction();
     _selection.clear();
     if (_paginated) {
       if (_ready &&
@@ -1445,9 +1457,13 @@ class _ReaderPageState extends State<ReaderPage>
     Theme.of(context);
     // Unified reader skeleton: paper theme, solid controls and warm light
     // apply below; sheets opened from this State keep the app theme.
-    return ReaderPaperScope(
-      state: widget.state,
-      child: Builder(builder: (context) => _readerScaffold(context, chapter)),
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) => _readingActivity.notifyInteraction(),
+      child: ReaderPaperScope(
+        state: widget.state,
+        child: Builder(builder: (context) => _readerScaffold(context, chapter)),
+      ),
     );
   }
 

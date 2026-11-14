@@ -138,14 +138,37 @@ abstract interface class CloudConfigStorage {
 
 class AndroidCloudConfigStorage implements CloudConfigStorage {
   static const channel = MethodChannel('org.mewx.wenku8/cloud_sources');
-  static const _fallbackKey = 'cloud_sources_fallback_v1';
+  static const _legacyFallbackKey = 'cloud_sources_fallback_v1';
+  static String? _nonAndroidMemoryVault;
+
+  @visibleForTesting
+  static void resetForTesting() {
+    _nonAndroidMemoryVault = null;
+  }
+
   @override
   Future<String?> read() async {
     try {
-      return await channel.invokeMethod<String>('read');
-    } on MissingPluginException {
+      final stored = await channel.invokeMethod<String>('read');
+      // One-time scrub & migration of any legacy plaintext SharedPreferences entry.
       final prefs = await SharedPreferences.getInstance();
-      return prefs.getString(_fallbackKey);
+      final legacy = prefs.getString(_legacyFallbackKey);
+      if (legacy != null) {
+        if ((stored == null || stored.isEmpty) && legacy.isNotEmpty) {
+          await channel.invokeMethod<void>('write', legacy);
+          await prefs.remove(_legacyFallbackKey);
+          return legacy;
+        }
+        await prefs.remove(_legacyFallbackKey);
+      }
+      return stored;
+    } on MissingPluginException {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        throw const CloudSourceFailure('无法访问系统加密凭据存储，请重启应用后重试');
+      }
+      return _nonAndroidMemoryVault;
+    } on PlatformException {
+      throw const CloudSourceFailure('无法读取系统加密凭据存储，请重试');
     }
   }
 
@@ -153,13 +176,17 @@ class AndroidCloudConfigStorage implements CloudConfigStorage {
   Future<void> write(String? value) async {
     try {
       await channel.invokeMethod<void>('write', value);
-    } on MissingPluginException {
       final prefs = await SharedPreferences.getInstance();
-      if (value == null) {
-        await prefs.remove(_fallbackKey);
-      } else {
-        await prefs.setString(_fallbackKey, value);
+      if (prefs.containsKey(_legacyFallbackKey)) {
+        await prefs.remove(_legacyFallbackKey);
       }
+    } on MissingPluginException {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        throw const CloudSourceFailure('无法写入系统加密凭据存储，未保存明文凭据');
+      }
+      _nonAndroidMemoryVault = value;
+    } on PlatformException {
+      throw const CloudSourceFailure('无法写入系统加密凭据存储，未保存凭据');
     }
   }
 }
@@ -362,6 +389,46 @@ class CloudHttp {
     }
   }
 
+  static bool _isPrivateOrLoopbackHost(String rawHost) {
+    final host = rawHost.trim().toLowerCase();
+    if (host == 'localhost' || host.endsWith('.localhost') || host == '::1') {
+      return true;
+    }
+    final addr = InternetAddress.tryParse(host);
+    if (addr == null) return false;
+    if (addr.isLoopback || addr.isLinkLocal) return true;
+    if (addr.type == InternetAddressType.IPv4) {
+      final b = addr.rawAddress;
+      if (b[0] == 0 || b[0] == 10 || b[0] == 127) return true;
+      if (b[0] == 169 && b[1] == 254) return true;
+      if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) return true;
+      if (b[0] == 192 && b[1] == 168) return true;
+      if (b[0] == 100 && b[1] >= 64 && b[1] <= 127) return true;
+    } else if (addr.type == InternetAddressType.IPv6) {
+      final b = addr.rawAddress;
+      if ((b[0] & 0xfe) == 0xfc) return true;
+    }
+    return false;
+  }
+
+  static Uri resolveRelaxedHref(Uri base, String rawHref) {
+    final trimmed = rawHref.trim();
+    try {
+      return base.resolve(trimmed);
+    } on FormatException {
+      final encoded = Uri.encodeFull(trimmed);
+      final authorityMatch = RegExp(
+        r'^[a-zA-Z][a-zA-Z0-9+.-]*://[^/?#]*',
+      ).firstMatch(encoded);
+      final prefix = authorityMatch?.group(0) ?? '';
+      final rest = encoded
+          .substring(prefix.length)
+          .replaceAll('[', '%5B')
+          .replaceAll(']', '%5D');
+      return base.resolve('$prefix$rest');
+    }
+  }
+
   Future<HttpClientResponse> request(
     String method,
     Uri uri, {
@@ -376,6 +443,7 @@ class CloudHttp {
   }) async {
     if (_closed) throw const CloudTransferCancelled();
     validateUrl(uri, allowHttp: allowHttp);
+    final initialWasPrivate = _isPrivateOrLoopbackHost(uri.host);
     _client ??= _factory()..connectionTimeout = const Duration(seconds: 20);
     final client = _client!;
     try {
@@ -402,15 +470,35 @@ class CloudHttp {
               redirectMessage ?? '网盘地址发生跳转，请填写最终 WebDAV 地址或启用 OpenList 代理',
             );
           }
-          final next = uri.resolve(location);
+          final next = resolveRelaxedHref(uri, location);
           // HTTPS may never be downgraded, even when a LAN HTTP endpoint was allowed.
           validateUrl(next, allowHttp: allowHttp && uri.scheme == 'http');
+          if (!initialWasPrivate && _isPrivateOrLoopbackHost(next.host)) {
+            throw const CloudSourceFailure('已拦截指向内网或本机的不安全跳转地址');
+          }
           uri = next;
           continue;
         }
         if ((res.statusCode < 200 || res.statusCode >= 300) &&
             !allowedStatuses.contains(res.statusCode)) {
-          await res.listen((_) {}).cancel();
+          var errorSnippet = '';
+          if (res.statusCode == 403) {
+            try {
+              final errBytes = await HttpDownload.readBytes(
+                res,
+                maxBytes: 4096,
+                streamTimeout: const Duration(seconds: 5),
+              );
+              errorSnippet = utf8.decode(errBytes, allowMalformed: true);
+            } catch (_) {
+              await res.listen((_) {}).cancel();
+            }
+            if (errorSnippet.contains('RequestTimeTooSkewed')) {
+              throw const CloudSourceFailure('本机时间与云端服务器偏差过大，请校准系统时间后重试');
+            }
+          } else {
+            await res.listen((_) {}).cancel();
+          }
           if (res.statusCode == 401 || res.statusCode == 403) {
             throw CloudSourceFailure(
               authenticationMessage ?? '连接凭据已失效或没有读取权限，请重新配置连接',
@@ -532,8 +620,11 @@ class WebDavBookClient implements CloudBookClient {
     for (final (node, href) in await transport.propfind(uri)) {
       Uri candidate;
       try {
-        candidate = transport.resolveResource(uri.resolve(href).toString());
+        final resolved = CloudHttp.resolveRelaxedHref(uri, href);
+        candidate = transport.resolveResource(resolved.toString());
       } on CloudSourceFailure {
+        continue;
+      } on FormatException {
         continue;
       }
       final parent = uri.pathSegments.where((s) => s.isNotEmpty).toList();

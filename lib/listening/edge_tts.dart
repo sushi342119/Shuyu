@@ -198,7 +198,9 @@ class EdgeSpeechClient {
       ..userAgent = null
       ..connectionTimeout = const Duration(seconds: 10);
     WebSocket? socket;
+    var connectionAbandoned = false;
     final removeCancellation = cancellation.onCancel(() {
+      connectionAbandoned = true;
       unawaited(socket?.close() ?? Future.value());
       client.close(force: true);
     });
@@ -216,11 +218,28 @@ class EdgeSpeechClient {
           'Sec-MS-GEC-Version': EdgeProtocol.version,
         },
       );
-      socket = await WebSocket.connect(
+      final connecting = WebSocket.connect(
         uri.toString(),
         headers: headers,
         customClient: client,
-      ).timeout(const Duration(seconds: 12));
+      );
+      unawaited(
+        connecting.then(
+          (ws) {
+            if (connectionAbandoned || cancellation.cancelled) {
+              unawaited(ws.close().catchError((Object _) {}));
+            }
+          },
+          onError: (Object _) {},
+        ),
+      );
+      socket = await connecting.timeout(
+        const Duration(seconds: 12),
+        onTimeout: () {
+          connectionAbandoned = true;
+          throw TimeoutException('Edge TTS handshake timed out');
+        },
+      );
       cancellation.check();
       socket.add(
         'X-Timestamp:${timestamp(now)}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n'
@@ -308,6 +327,7 @@ class EdgeSpeechClient {
       }
       throw const SpeechFailure('在线音源连接失败，请检查网络后重试，或换一个在线音色');
     } finally {
+      connectionAbandoned = true;
       removeCancellation();
       client.close(force: true);
       try {

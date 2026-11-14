@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show kDebugMode, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:xml/xml.dart';
 
 import 'app_ui.dart';
 import 'cloud_sources.dart';
@@ -28,22 +29,25 @@ class WebDavSecretStorage {
     _memoryFallbackPassword = '';
   }
 
-  static Future<String> readPassword() async {
+  static Future<({String password, bool failed})> readPasswordResult() async {
     try {
       final result = await channel.invokeMethod<String>('readSecret', {
         'key': _webDavPasswordKeystoreKey,
       });
       if (result != null) {
         _memoryFallbackPassword = result;
-        return result;
+        return (password: result, failed: false);
       }
     } on MissingPluginException {
-      return _memoryFallbackPassword;
+      return (password: _memoryFallbackPassword, failed: false);
     } on PlatformException {
-      return _memoryFallbackPassword;
+      return (password: _memoryFallbackPassword, failed: true);
     }
-    return _memoryFallbackPassword;
+    return (password: _memoryFallbackPassword, failed: false);
   }
+
+  static Future<String> readPassword() async =>
+      (await readPasswordResult()).password;
 
   static Future<void> writePassword(String password) async {
     _memoryFallbackPassword = password;
@@ -216,11 +220,16 @@ class WebDavBackupConfig {
     }
   }
 
-  static Future<WebDavBackupConfig> loadAsync(SharedPreferences? prefs) async {
-    final secretPassword = await WebDavSecretStorage.readPassword();
+  static Future<({WebDavBackupConfig config, bool secretReadFailed})>
+  loadWithStatus(SharedPreferences? prefs) async {
+    final secretResult = await WebDavSecretStorage.readPasswordResult();
+    final secretPassword = secretResult.password;
     final raw = prefs?.getString(_webDavConfigStorageKey);
     if (raw == null || raw.isEmpty) {
-      return WebDavBackupConfig(password: secretPassword);
+      return (
+        config: WebDavBackupConfig(password: secretPassword),
+        secretReadFailed: secretResult.failed,
+      );
     }
     try {
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
@@ -232,7 +241,7 @@ class WebDavBackupConfig {
         decoded,
         passwordOverride: effectivePassword,
       );
-      if (decoded.containsKey('password')) {
+      if (decoded.containsKey('password') && !secretResult.failed) {
         if (legacyPlaintextPassword != null &&
             legacyPlaintextPassword.isNotEmpty &&
             secretPassword.isEmpty) {
@@ -243,12 +252,18 @@ class WebDavBackupConfig {
           jsonEncode(config.toJson()),
         );
       }
-      return config;
+      return (config: config, secretReadFailed: secretResult.failed);
     } catch (e) {
       if (kDebugMode) debugPrint('WebDavBackupConfig.loadAsync failed: $e');
-      return WebDavBackupConfig(password: secretPassword);
+      return (
+        config: WebDavBackupConfig(password: secretPassword),
+        secretReadFailed: secretResult.failed,
+      );
     }
   }
+
+  static Future<WebDavBackupConfig> loadAsync(SharedPreferences? prefs) async =>
+      (await loadWithStatus(prefs)).config;
 
   Future<void> save(SharedPreferences? prefs) async {
     await WebDavSecretStorage.writePassword(password);
@@ -286,26 +301,71 @@ class WebDavBackupClient {
     }
   }
 
-  Future<void> _ensureFolder(WebDavTransport transport, Uri folder) =>
-      transport.mkcol(
+  Future<void> _ensureFolder(WebDavTransport transport, Uri folder) async {
+    final raw = config.serverUrl.trim();
+    final normalizedBase = raw.endsWith('/') ? raw : '$raw/';
+    final base = Uri.parse(normalizedBase);
+    final baseSegments = base.pathSegments.where((s) => s.isNotEmpty).toList();
+    final folderSegments = folder.pathSegments
+        .where((s) => s.isNotEmpty)
+        .toList();
+    if (folderSegments.length <= baseSegments.length) {
+      await transport.mkcol(
         folder,
         authenticationMessage: 'WebDAV 账号或应用密码认证失败（401/403）',
       );
+      return;
+    }
+    for (var depth = baseSegments.length + 1;
+        depth <= folderSegments.length;
+        depth++) {
+      final stepUri = base.replace(
+        pathSegments: [...folderSegments.take(depth), ''],
+      );
+      await transport.mkcol(
+        stepUri,
+        authenticationMessage: 'WebDAV 账号或应用密码认证失败（401/403）',
+      );
+    }
+  }
 
   Future<String> uploadBackup(String jsonText) =>
       _withTransport((transport, folder) async {
+        final Object? parsed;
+        try {
+          parsed = jsonDecode(jsonText);
+        } on FormatException {
+          throw const FormatException('备份数据格式无效，已中止上传');
+        }
+        if (parsed is! Map) {
+          throw const FormatException('备份数据格式无效，已中止上传');
+        }
         await _ensureFolder(transport, folder);
         final date = DateTime.now().toIso8601String().substring(0, 10);
         final datedFile = 'shuyu-backup-$date.json';
+        final datedUri = config.fileUri(datedFile);
+        final latestUri = config.fileUri('shuyu-backup-latest.json');
+        if (datedUri == null || latestUri == null) {
+          throw const FormatException('WebDAV 目标路径无效');
+        }
         final payload = utf8.encode(jsonText);
-        for (final name in [datedFile, 'shuyu-backup-latest.json']) {
-          final uri = config.fileUri(name);
-          if (uri == null) throw const FormatException('WebDAV 目标路径无效');
+        await transport.putBytes(
+          datedUri,
+          payload,
+          contentType: 'application/json; charset=utf-8',
+        );
+        try {
           await transport.putBytes(
-            uri,
+            latestUri,
             payload,
             contentType: 'application/json; charset=utf-8',
           );
+        } catch (_) {
+          // Avoid leaving an outdated latest.json shadowing the newly uploaded dated backup.
+          try {
+            await transport.delete(latestUri);
+          } catch (_) {}
+          rethrow;
         }
         return datedFile;
       });
@@ -313,21 +373,36 @@ class WebDavBackupClient {
   Future<List<String>> listBackups() =>
       _withTransport((transport, folder) async {
         await _ensureFolder(transport, folder);
+        final baseSegments = folder.normalizePath().pathSegments
+            .where((s) => s.isNotEmpty)
+            .toList();
         final files = <String>{};
-        for (final (_, href) in await transport.propfind(
+        for (final (node, href) in await transport.propfind(
           folder,
           redirects: true,
           maxBytes: maxResponseBytes,
         )) {
-          String decoded;
+          final isCollection = node.descendants.whereType<XmlElement>().any(
+            (e) => e.name.local == 'collection',
+          );
+          if (isCollection) continue;
+          Uri resolved;
           try {
-            decoded = Uri.decodeFull(href.trim());
-          } on ArgumentError {
+            resolved = CloudHttp.resolveRelaxedHref(folder, href).normalizePath();
+          } on FormatException {
             continue;
           }
-          final parts = decoded.split('/').where((s) => s.isNotEmpty).toList();
-          if (parts.isEmpty) continue;
-          final last = parts.last;
+          if (!CloudHttp.sameOrigin(resolved, folder)) continue;
+          final parts = resolved.pathSegments
+              .where((s) => s.isNotEmpty)
+              .toList();
+          if (parts.length <= baseSegments.length) continue;
+          String last;
+          try {
+            last = Uri.decodeComponent(parts.last);
+          } on ArgumentError {
+            last = parts.last;
+          }
           if (last.toLowerCase().endsWith('.json') &&
               !WebDavBackupConfig._hasInvalidSegments([last])) {
             files.add(last);
@@ -397,6 +472,9 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
   late final _userController = TextEditingController(text: _config.username);
   late final _passController = TextEditingController(text: _config.password);
   late final _folderController = TextEditingController(text: _config.remoteFolder);
+  bool _configLoaded = false;
+  bool _secretReadFailed = false;
+  bool _passwordEdited = false;
   String? _busy;
   String? _status;
   bool _isError = false;
@@ -409,12 +487,20 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
   }
 
   Future<void> _loadSecureConfig() async {
-    final loaded = await WebDavBackupConfig.loadAsync(widget.preferences);
+    final result = await WebDavBackupConfig.loadWithStatus(widget.preferences);
     if (!mounted) return;
     setState(() {
-      _config = loaded;
-      if (_passController.text.isEmpty && loaded.password.isNotEmpty) {
-        _passController.text = loaded.password;
+      _configLoaded = true;
+      _secretReadFailed = result.secretReadFailed;
+      _config = result.config;
+      if (!_passwordEdited &&
+          _passController.text.isEmpty &&
+          result.config.password.isNotEmpty) {
+        _passController.text = result.config.password;
+      }
+      if (result.secretReadFailed && _passController.text.isEmpty) {
+        _status = '安全存储读取异常，请重新输入应用密码后再执行操作';
+        _isError = true;
       }
     });
   }
@@ -449,6 +535,14 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
   );
 
   Future<WebDavBackupConfig> _saveCurrentConfig() async {
+    if (!_configLoaded) {
+      throw const FormatException('正在读取已保存配置，请稍候再试');
+    }
+    if (_secretReadFailed &&
+        !_passwordEdited &&
+        _passController.text.isEmpty) {
+      throw const FormatException('无法读取已保存的安全密码，请重新输入应用密码后再试');
+    }
     final next = _config.copyWith(
       serverUrl: _urlController.text.trim(),
       username: _userController.text.trim(),
@@ -463,7 +557,7 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
   }
 
   Future<void> _runTask(String label, Future<void> Function() task) async {
-    if (_busy != null) return;
+    if (!_configLoaded || _busy != null) return;
     setState(() {
       _busy = label;
       _status = null;
@@ -493,6 +587,7 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final actionsEnabled = _configLoaded && _busy == null;
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
       child: SingleChildScrollView(
@@ -553,6 +648,14 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
                     key: const ValueKey('webdav-pass-input'),
                     controller: _passController,
                     obscureText: true,
+                    onChanged: (_) {
+                      if (_secretReadFailed || !_passwordEdited) {
+                        setState(() {
+                          _passwordEdited = true;
+                          _secretReadFailed = false;
+                        });
+                      }
+                    },
                     decoration: const InputDecoration(
                       labelText: '应用密码 (Password)',
                       isDense: true,
@@ -618,7 +721,7 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
               children: [
                 GlassTextButton(
                   key: const ValueKey('webdav-backup-upload'),
-                  onPressed: _busy == null
+                  onPressed: actionsEnabled
                       ? () => _runTask('正在上传备份到 WebDAV…', () async {
                           final client = WebDavBackupClient(await _saveCurrentConfig());
                           final payloadJson = widget.createScopedBackupJson != null
@@ -640,7 +743,7 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
                 ),
                 GlassTextButton(
                   key: const ValueKey('webdav-backup-restore'),
-                  onPressed: _busy == null
+                  onPressed: actionsEnabled
                       ? () => _runTask('正在从 WebDAV 读取最新备份…', () async {
                           final client = WebDavBackupClient(await _saveCurrentConfig());
                           final files = await client.listBackups();
@@ -660,7 +763,7 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
                 ),
                 GlassTextButton(
                   key: const ValueKey('webdav-list-files'),
-                  onPressed: _busy == null
+                  onPressed: actionsEnabled
                       ? () => _runTask('正在获取云端备份列表…', () async {
                           final files = await WebDavBackupClient(
                             await _saveCurrentConfig(),
@@ -712,7 +815,7 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
               const SizedBox(height: 6),
               for (final file in _remoteFiles.take(8))
                 GlassTextButton(
-                  onPressed: _busy == null
+                  onPressed: actionsEnabled
                       ? () => _runTask('正在下载 $file…', () async {
                           final jsonText = await WebDavBackupClient(
                             await _saveCurrentConfig(),

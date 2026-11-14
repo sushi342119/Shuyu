@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -1247,7 +1248,10 @@ class _Metrics extends StatelessWidget {
     builder: (context, constraints) {
       final scaled = MediaQuery.textScalerOf(context).scale(12) > 17;
       final count = scaled ? 2 : columns;
-      final width = (constraints.maxWidth - 14 * (count - 1)) / count;
+      final width = math.max(
+        0.0,
+        (constraints.maxWidth - 14 * (count - 1)) / count,
+      );
       return Wrap(
         spacing: 14,
         runSpacing: 20,

@@ -45,6 +45,7 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
   late int _page;
   bool _activityAttached = true;
   bool _activityForeground = true;
+  bool _activityRouteCurrent = true;
   bool _addingBookmark = false;
   final Map<int, Future<String>> _pending = {};
 
@@ -58,7 +59,10 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
 
   void _syncReadingActivity() {
     _readingActivity.setActive(
-      _activityAttached && _activityForeground && _pageCount > 0,
+      _activityAttached &&
+          _activityForeground &&
+          _activityRouteCurrent &&
+          _pageCount > 0,
     );
   }
 
@@ -88,6 +92,16 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
       value: 1,
     );
     _syncReadingActivity();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final routeCurrent = ModalRoute.isCurrentOf(context) ?? true;
+    if (_activityRouteCurrent != routeCurrent) {
+      _activityRouteCurrent = routeCurrent;
+      _syncReadingActivity();
+    }
   }
 
   @override
@@ -261,6 +275,7 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
   }
 
   void _onPageChanged(int page) {
+    _readingActivity.notifyInteraction();
     _page = page;
     _pending.removeWhere((key, _) => (key - page).abs() > 4);
     widget.state.setChapter(widget.novel.id, page);
@@ -282,10 +297,11 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
   ]);
 
   Widget _pageView(BuildContext context, int count, bool invert) {
-    final width = (MediaQuery.devicePixelRatioOf(context) *
-            MediaQuery.sizeOf(context).width)
-        .round()
-        .clamp(800, 2400);
+    final width =
+        (MediaQuery.devicePixelRatioOf(context) *
+                MediaQuery.sizeOf(context).width)
+            .round()
+            .clamp(800, 2400);
     final muted = Theme.of(context).colorScheme.onSurfaceVariant;
     return PageView.builder(
       controller: _controller,
@@ -301,7 +317,11 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
               cacheWidth: width,
               errorBuilder: (context, error, stack) {
                 _pending.remove(page);
-                return Icon(Icons.broken_image_outlined, color: muted, size: 48);
+                return Icon(
+                  Icons.broken_image_outlined,
+                  color: muted,
+                  size: 48,
+                );
               },
             );
             if (invert) {
@@ -344,9 +364,13 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
   }
 
   @override
-  Widget build(BuildContext context) => ReaderPaperScope(
-    state: widget.state,
-    child: Builder(builder: _readerScaffold),
+  Widget build(BuildContext context) => Listener(
+    behavior: HitTestBehavior.translucent,
+    onPointerDown: (_) => _readingActivity.notifyInteraction(),
+    child: ReaderPaperScope(
+      state: widget.state,
+      child: Builder(builder: _readerScaffold),
+    ),
   );
 
   Widget _readerScaffold(BuildContext context) {
