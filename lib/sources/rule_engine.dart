@@ -191,7 +191,11 @@ abstract final class SourceRuleEngine {
     for (final ctx in items) {
       final title = _cleanSingleLine(evalString(ctx, rule.name));
       if (title.isEmpty) continue;
-      final rawUrl = evalString(ctx, rule.bookUrl).trim();
+      final rawUrl = rule.bookUrl.isEmpty
+          ? (ctx.element?.attributes['href'] ??
+                ctx.element?.querySelector('a')?.attributes['href'] ??
+                '')
+          : evalString(ctx, rule.bookUrl).trim();
       final resolvedBookUrl = _resolveHttpUrl(
         baseUrl,
         rawUrl.isNotEmpty ? rawUrl : baseUrl,
@@ -289,7 +293,9 @@ abstract final class SourceRuleEngine {
       final isVolumeFlag =
           isVolRaw == 'true' || isVolRaw == '1' || isVolRaw == title.toLowerCase();
       final rawUrl = rule.chapterUrl.isEmpty
-          ? (node.element?.attributes['href'] ?? '')
+          ? (node.element?.attributes['href'] ??
+                node.element?.querySelector('a')?.attributes['href'] ??
+                '')
           : evalString(node, rule.chapterUrl).trim();
       if (isVolumeFlag || rawUrl.isEmpty || rawUrl.startsWith('javascript:')) {
         if (isVolumeFlag) {

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:io';
 
 import '../catalog.dart';
 import '../local_library.dart' show isSourceNovelId;
@@ -9,6 +10,45 @@ import 'chapter_normalizer.dart';
 import 'online_book_origins.dart';
 import 'rule_engine.dart';
 import 'source_http.dart';
+import 'source_image_cache.dart';
+
+/// Formats network, DNS, TLS, HTTP, and rule exceptions into concise,
+/// user-readable Chinese diagnostics without raw Dart class prefixes.
+String describeSourceError(Object error) {
+  return switch (error) {
+    final FormatException e => e.message,
+    final SourceChallengeException e => e.message,
+    final SourceWebViewRequiredException e => e.message,
+    final EncryptedOrInvalidImageException e => e.message,
+    final TimeoutException _ => '请求超时，站点响应过慢或当前网络不可达',
+    final HandshakeException _ ||
+    final TlsException _ => 'HTTPS 证书握手失败，站点可能已变更或受网络拦截',
+    final SocketException e => _describeSocketException(e),
+    final HttpException e => e.message,
+    final StateError e => e.message,
+    _ => '$error',
+  };
+}
+
+String _describeSocketException(SocketException e) {
+  final msg = '${e.message} ${e.osError?.message ?? ''}'.toLowerCase();
+  if (msg.contains('failed host lookup') ||
+      msg.contains('no address associated') ||
+      msg.contains('name or service not known')) {
+    return '域名无法解析（站点可能已失效，或需检查网络/VPN 节点）';
+  }
+  if (msg.contains('connection refused')) {
+    return '目标站点拒绝连接';
+  }
+  if (msg.contains('connection reset') ||
+      msg.contains('software caused connection abort')) {
+    return '连接被重置（站点连接不稳定或受网络阻断，可尝试切换代理或更换书源）';
+  }
+  if (msg.contains('timed out') || msg.contains('network is unreachable')) {
+    return '网络连接超时或不可达';
+  }
+  return '网络连接失败（${e.message}）';
+}
 
 class SourceSearchBatch {
   const SourceSearchBatch({
@@ -973,11 +1013,31 @@ class SourceNovelRepository extends NovelRepository {
           minIntervalMs: 0,
           rateKey: 'debug_${source.id}',
         );
-        final list = await SourceRuleEngine.parseBookList(
+        var list = await SourceRuleEngine.parseBookList(
           body: resp.body,
           baseUrl: resp.finalUri.toString(),
           rule: source.ruleSearch,
         );
+        if (list.isEmpty && source.ruleBookInfo.name.isNotEmpty) {
+          final directDetail = await SourceRuleEngine.parseBookDetail(
+            body: resp.body,
+            pageUrl: resp.finalUri.toString(),
+            rule: source.ruleBookInfo,
+          );
+          if (directDetail.title != null && directDetail.title!.isNotEmpty) {
+            list = [
+              ExtractedBookItem(
+                title: directDetail.title!,
+                bookUrl: resp.finalUri.toString(),
+                author: directDetail.author ?? '',
+                genre: directDetail.genre ?? '',
+                summary: directDetail.summary ?? '',
+                coverUrl: directDetail.coverUrl,
+                latestChapter: directDetail.latestChapter ?? '',
+              ),
+            ];
+          }
+        }
         sw1.stop();
         if (list.isEmpty) {
           steps.add(
@@ -985,7 +1045,7 @@ class SourceNovelRepository extends NovelRepository {
               stage: '1. 搜索测试（「$keyword」）',
               success: false,
               elapsedMs: sw1.elapsedMilliseconds,
-              summary: 'HTTP ${resp.statusCode}，但未匹配到书籍列表',
+              summary: 'HTTP ${resp.statusCode}，但未匹配到书籍列表（可尝试更换测试搜索词）',
               detail: '请求地址：${resp.finalUri}',
             ),
           );
@@ -1056,7 +1116,7 @@ class SourceNovelRepository extends NovelRepository {
           stage: '1. 搜索/分类请求',
           success: false,
           elapsedMs: sw1.elapsedMilliseconds,
-          summary: '请求失败：$error',
+          summary: describeSourceError(error),
         ),
       );
       return steps;
@@ -1107,7 +1167,7 @@ class SourceNovelRepository extends NovelRepository {
           stage: '2. 详情解析',
           success: false,
           elapsedMs: sw2.elapsedMilliseconds,
-          summary: '详情获取失败：$error',
+          summary: '详情获取失败：${describeSourceError(error)}',
         ),
       );
       return steps;
@@ -1172,7 +1232,7 @@ class SourceNovelRepository extends NovelRepository {
           stage: '3. 目录提取',
           success: false,
           elapsedMs: sw3.elapsedMilliseconds,
-          summary: '目录解析失败：$error',
+          summary: '目录解析失败：${describeSourceError(error)}',
         ),
       );
       return steps;
@@ -1221,7 +1281,7 @@ class SourceNovelRepository extends NovelRepository {
           stage: '4. ${source.isManga ? "漫画图片" : "正文"}提取',
           success: false,
           elapsedMs: sw4.elapsedMilliseconds,
-          summary: '提取失败：$error',
+          summary: '提取失败：${describeSourceError(error)}',
         ),
       );
     }

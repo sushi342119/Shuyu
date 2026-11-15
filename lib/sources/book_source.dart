@@ -373,12 +373,21 @@ class BookSource {
       compatibility.canEnable &&
       searchUrl.trim().isNotEmpty &&
       !containsScriptDirective(searchUrl) &&
-      !ruleSearch.isEmpty;
-  bool get canExplore =>
-      compatibility.canEnable &&
-      enabledExplore &&
-      exploreKinds.isNotEmpty &&
-      (!ruleExplore.isEmpty || !ruleSearch.isEmpty);
+      !_urlOptionUsesWebView(searchUrl) &&
+      !ruleSearch.isEmpty &&
+      !containsScriptDirective(ruleSearch.bookList) &&
+      !containsScriptDirective(ruleSearch.name) &&
+      !containsScriptDirective(ruleSearch.bookUrl);
+  bool get canExplore {
+    final exploreRule = effectiveExploreRule;
+    return compatibility.canEnable &&
+        enabledExplore &&
+        exploreKinds.isNotEmpty &&
+        !exploreRule.isEmpty &&
+        !containsScriptDirective(exploreRule.bookList) &&
+        !containsScriptDirective(exploreRule.name) &&
+        !containsScriptDirective(exploreRule.bookUrl);
+  }
 
   SourceListRule get effectiveExploreRule =>
       ruleExplore.isEmpty ? ruleSearch : ruleExplore;
@@ -562,10 +571,18 @@ class BookSource {
     final notes = <String>[];
     var exploreHasJs = false;
     final exploreKinds = <SourceExploreKind>[];
+    void addSafeExploreKind(SourceExploreKind k) {
+      if (containsScriptDirective(k.url) || _urlOptionUsesWebView(k.url)) {
+        exploreHasJs = true;
+        return;
+      }
+      exploreKinds.add(k);
+    }
+
     if (raw['exploreKinds'] is List) {
       for (final item in raw['exploreKinds'] as List) {
         final k = SourceExploreKind.fromJson(item);
-        if (k != null) exploreKinds.add(k);
+        if (k != null) addSafeExploreKind(k);
       }
     } else if (raw['exploreUrl'] != null) {
       final rawExplore = '${raw['exploreUrl']}'.trim();
@@ -574,7 +591,12 @@ class BookSource {
           exploreHasJs = true;
           notes.add('发现分类使用动态脚本生成，已自动隐藏分类榜单');
         } else {
-          exploreKinds.addAll(_parseLegadoExploreUrl(rawExplore));
+          for (final k in _parseLegadoExploreUrl(rawExplore)) {
+            addSafeExploreKind(k);
+          }
+          if (exploreHasJs && exploreKinds.isEmpty) {
+            notes.add('发现分类依赖动态渲染，已自动隐藏分类榜单');
+          }
         }
       }
     }
@@ -667,26 +689,43 @@ class BookSource {
       imageDecode: rawRuleContent.imageDecode,
     );
 
+    final effectiveExplore = ruleExplore.isEmpty ? ruleSearch : ruleExplore;
+    final hasStaticExplore =
+        exploreKinds.isNotEmpty &&
+        !effectiveExplore.isEmpty &&
+        !containsScriptDirective(effectiveExplore.bookList) &&
+        !containsScriptDirective(effectiveExplore.name) &&
+        !containsScriptDirective(effectiveExplore.bookUrl);
+
+    final searchProblems = <String>[];
+    if (searchUrl.isNotEmpty) {
+      if (containsScriptDirective(searchUrl)) {
+        searchProblems.add('搜索地址依赖 @js 动态签名');
+      }
+      if (_urlOptionUsesWebView(searchUrl)) {
+        searchProblems.add('搜索请求依赖 WebView 渲染');
+      }
+      if (ruleSearch.isEmpty ||
+          containsScriptDirective(ruleSearch.bookList) ||
+          containsScriptDirective(ruleSearch.name) ||
+          containsScriptDirective(ruleSearch.bookUrl)) {
+        searchProblems.add('搜索列表核心提取规则依赖脚本或为空');
+      }
+    }
+    final hasStaticSearch = searchUrl.isNotEmpty && searchProblems.isEmpty;
+
     final coreBrokenReasons = <String>[];
     if (!contentType.isSupported) {
       coreBrokenReasons.add('当前仅支持小说(0)与漫画(2)书源');
     } else {
-      if (searchUrl.isEmpty && exploreKinds.isEmpty) {
-        coreBrokenReasons.add('缺少搜索地址与发现分类地址');
-      }
-      if (searchUrl.isNotEmpty) {
-        if (containsScriptDirective(searchUrl)) {
-          coreBrokenReasons.add('搜索地址依赖 @js 动态签名');
+      if (!hasStaticSearch && !hasStaticExplore) {
+        if (searchProblems.isNotEmpty) {
+          coreBrokenReasons.addAll(searchProblems);
+        } else {
+          coreBrokenReasons.add('缺少可用的静态搜索地址或发现分类规则');
         }
-        if (_urlOptionUsesWebView(searchUrl)) {
-          coreBrokenReasons.add('搜索请求依赖 WebView 渲染');
-        }
-        if (ruleSearch.isEmpty ||
-            containsScriptDirective(ruleSearch.bookList) ||
-            containsScriptDirective(ruleSearch.name) ||
-            containsScriptDirective(ruleSearch.bookUrl)) {
-          coreBrokenReasons.add('搜索列表核心提取规则依赖脚本或为空');
-        }
+      } else if (!hasStaticSearch && searchProblems.isNotEmpty) {
+        notes.add('搜索功能依赖脚本或动态渲染，仅支持分类榜单浏览');
       }
       if (containsScriptDirective(ruleBookInfo.tocUrl)) {
         coreBrokenReasons.add('目录入口地址依赖 @js 脚本');
@@ -743,7 +782,7 @@ class BookSource {
       comment: comment,
       contentType: contentType,
       enabled: rawEnabled && compatibility.canEnable,
-      enabledExplore: rawEnabledExplore && !exploreHasJs,
+      enabledExplore: rawEnabledExplore && hasStaticExplore,
       weight: raw['weight'] is num ? (raw['weight'] as num).toInt() : 0,
       minIntervalMs: minIntervalMs,
       headers: Map.unmodifiable(headers),

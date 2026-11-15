@@ -72,9 +72,24 @@ class _BookSourceManagePageState extends State<BookSourceManagePage> {
       sourceRepositoryOf(widget.repository) ??
       SourceNovelRepository(sourceStore: _store);
 
+  static int _displayRank(BookSource src) {
+    final enabled = src.enabled && src.compatibility.canEnable;
+    return switch ((enabled, src.compatibility)) {
+      (true, SourceCompatibility.full) => 0,
+      (true, SourceCompatibility.partial) => 1,
+      (false, SourceCompatibility.full) => 2,
+      (false, SourceCompatibility.partial) => 3,
+      (_, SourceCompatibility.requiresJs) => 4,
+      (_, SourceCompatibility.unsupportedType) => 5,
+    };
+  }
+
   List<BookSource> _filteredSources() {
     final q = _queryController.text.trim().toLowerCase();
-    return _store.sources.where((src) {
+    final indexed = <(int, BookSource)>[];
+    final all = _store.sources;
+    for (var i = 0; i < all.length; i++) {
+      final src = all[i];
       final tabMatch = switch (_filterTab) {
         _SourceFilterTab.all => true,
         _SourceFilterTab.novel => src.contentType == SourceContentType.text,
@@ -82,12 +97,23 @@ class _BookSourceManagePageState extends State<BookSourceManagePage> {
         _SourceFilterTab.compatible => src.compatibility.canEnable,
         _SourceFilterTab.unsupported => !src.compatibility.canEnable,
       };
-      if (!tabMatch) return false;
-      if (q.isEmpty) return true;
-      return src.name.toLowerCase().contains(q) ||
-          src.baseUrl.toLowerCase().contains(q) ||
-          src.group.toLowerCase().contains(q);
-    }).toList(growable: false);
+      if (!tabMatch) continue;
+      if (q.isNotEmpty &&
+          !src.name.toLowerCase().contains(q) &&
+          !src.baseUrl.toLowerCase().contains(q) &&
+          !src.group.toLowerCase().contains(q)) {
+        continue;
+      }
+      indexed.add((i, src));
+    }
+    indexed.sort((a, b) {
+      final rankCmp = _displayRank(a.$2).compareTo(_displayRank(b.$2));
+      if (rankCmp != 0) return rankCmp;
+      final weightCmp = b.$2.weight.compareTo(a.$2.weight);
+      if (weightCmp != 0) return weightCmp;
+      return a.$1.compareTo(b.$1);
+    });
+    return [for (final entry in indexed) entry.$2];
   }
 
   Future<void> _importByUrlDialog() async {
@@ -245,11 +271,7 @@ class _BookSourceManagePageState extends State<BookSourceManagePage> {
       showNovelFeedback(context, summary.describe());
     } catch (error) {
       if (!mounted) return;
-      final message = switch (error) {
-        final FormatException e => e.message,
-        _ => '导入失败：$error',
-      };
-      showNovelFeedback(context, message);
+      showNovelFeedback(context, '导入失败：${describeSourceError(error)}');
     } finally {
       if (mounted) setState(() => _importing = false);
     }
@@ -586,6 +608,49 @@ class _BookSourceManagePageState extends State<BookSourceManagePage> {
     );
   }
 
+  static List<String> _displayGroupTags(BookSource source) {
+    if (source.group.trim().isEmpty) return const [];
+    final typeLabel = source.contentType.label;
+    final seen = <String>{};
+    final result = <String>[];
+    for (final raw in source.group.split(RegExp(r'[,，;；/|\s]+'))) {
+      final tag = raw.trim();
+      if (tag.isEmpty || tag == typeLabel) continue;
+      if (seen.add(tag)) {
+        result.add(tag);
+        if (result.length >= 3) break;
+      }
+    }
+    return result;
+  }
+
+  static String? _summarizeCompatibilityNotes(BookSource source) {
+    if (source.compatibilityNotes.isEmpty) return null;
+    if (source.compatibility == SourceCompatibility.unsupportedType) {
+      return '当前仅支持小说与漫画书源（暂不支持${source.contentType.label}类型）';
+    }
+    const skippedSuffix = '含脚本规则，已跳过该辅助字段';
+    var skippedOptionalCount = 0;
+    final primaryNotes = <String>[];
+    for (final note in source.compatibilityNotes) {
+      if (note.endsWith(skippedSuffix)) {
+        skippedOptionalCount++;
+      } else {
+        primaryNotes.add(note);
+      }
+    }
+    if (!source.compatibility.canEnable) {
+      if (primaryNotes.isEmpty) return '核心规则依赖动态脚本，当前纯静态引擎暂不支持';
+      return primaryNotes.take(2).join('；');
+    }
+    final summaryParts = <String>[
+      ...primaryNotes.take(2),
+      if (skippedOptionalCount > 0)
+        '已自动跳过 $skippedOptionalCount 个脚本辅助字段，核心阅读正常',
+    ];
+    return summaryParts.isEmpty ? null : summaryParts.join('；');
+  }
+
   Widget _buildSourceCard(BuildContext context, BookSource source) {
     final scheme = Theme.of(context).colorScheme;
     final canEnable = source.compatibility.canEnable;
@@ -595,6 +660,8 @@ class _BookSourceManagePageState extends State<BookSourceManagePage> {
       SourceCompatibility.requiresJs ||
       SourceCompatibility.unsupportedType => scheme.error,
     };
+    final groupTags = _displayGroupTags(source);
+    final noteSummary = _summarizeCompatibilityNotes(source);
 
     return ContentPanel(
       key: ValueKey('book-source-card-${source.id}'),
@@ -629,8 +696,8 @@ class _BookSourceManagePageState extends State<BookSourceManagePage> {
                         _tagPill(source.compatibility.label, compatColor),
                         if (source.isHttpCleartext)
                           _tagPill('HTTP 明文', scheme.outline),
-                        if (source.group.isNotEmpty)
-                          _tagPill(source.group, scheme.secondary),
+                        for (final tag in groupTags)
+                          _tagPill(tag, scheme.secondary),
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -655,42 +722,46 @@ class _BookSourceManagePageState extends State<BookSourceManagePage> {
               ),
             ],
           ),
-          if (source.compatibilityNotes.isNotEmpty) ...[
+          if (noteSummary != null) ...[
             const SizedBox(height: 6),
             Text(
-              source.compatibilityNotes.join('；'),
+              noteSummary,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontSize: 11.5,
                 color: canEnable ? scheme.onSurfaceVariant : scheme.error,
               ),
             ),
           ],
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Wrap(
             spacing: 8,
             runSpacing: 4,
             children: [
-              TextButton.icon(
-                key: ValueKey('source-test-btn-${source.id}'),
-                style: TextButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
+              if (canEnable) ...[
+                TextButton.icon(
+                  key: ValueKey('source-test-btn-${source.id}'),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  onPressed: () => _openDebugSheet(source),
+                  icon: const Icon(CupertinoIcons.play_circle, size: 16),
+                  label: const Text('测试诊断'),
                 ),
-                onPressed: () => _openDebugSheet(source),
-                icon: const Icon(CupertinoIcons.play_circle, size: 16),
-                label: const Text('测试诊断'),
-              ),
-              TextButton.icon(
-                style: TextButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  onPressed: () => _editSourceHeaders(source),
+                  icon: const Icon(CupertinoIcons.lock_shield, size: 16),
+                  label: Text(
+                    _store.secretHeadersFor(source.id).isNotEmpty
+                        ? 'Cookie (已配)'
+                        : 'Cookie / 请求头',
+                  ),
                 ),
-                onPressed: () => _editSourceHeaders(source),
-                icon: const Icon(CupertinoIcons.lock_shield, size: 16),
-                label: Text(
-                  _store.secretHeadersFor(source.id).isNotEmpty
-                      ? 'Cookie (已配)'
-                      : 'Cookie / 请求头',
-                ),
-              ),
+              ],
               TextButton.icon(
                 style: TextButton.styleFrom(
                   visualDensity: VisualDensity.compact,
@@ -782,7 +853,7 @@ class _SourceDebugSheetState extends State<_SourceDebugSheet> {
               stage: '执行异常',
               success: false,
               elapsedMs: 0,
-              summary: '$error',
+              summary: describeSourceError(error),
             ),
           ];
           _running = false;
@@ -999,7 +1070,7 @@ class _SwitchSourceSheetState extends State<_SwitchSourceSheet> {
     } catch (error) {
       if (mounted) {
         setState(() => _switching = false);
-        showNovelFeedback(context, '换源失败：$error');
+        showNovelFeedback(context, '换源失败：${describeSourceError(error)}');
       }
     }
   }
@@ -1048,7 +1119,7 @@ class _SwitchSourceSheetState extends State<_SwitchSourceSheet> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 18),
               child: Text(
-                '检索失败：$_error',
+                '检索失败：${describeSourceError(_error!)}',
                 style: TextStyle(color: scheme.error),
               ),
             )

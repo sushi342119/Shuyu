@@ -114,12 +114,66 @@ abstract final class NetworkUrlSafety {
       cleanHost == '::1';
 
   /// Returns `true` when [addr] is loopback, private LAN, link-local, CGNAT,
-  /// cloud metadata, unspecified, multicast, or reserved.
-  static bool isBlockedAddress(InternetAddress addr) {
+  /// cloud metadata, benchmark/Fake-IP, unspecified, multicast, or reserved.
+  ///
+  /// Used for validating literal IP hosts in URLs (`http://198.18.x.x/...`).
+  static bool isBlockedAddress(InternetAddress addr) =>
+      _checkAddressBlocked(addr, allowTunFakeIp: false);
+
+  /// Returns `true` when a DNS-resolved [addr] for a validated public domain
+  /// points to loopback, unspecified, private LAN, link-local/cloud metadata,
+  /// or multicast space.
+  ///
+  /// Permits virtual TUN VPN Fake-IP / CGNAT / IPv6 ULA ranges (`198.18/15`,
+  /// `100.64/10`, `fc00::/7`) used by Android VPN clients (Clash, Mihomo,
+  /// Sing-box, v2rayNG, Surge, Tailscale) when resolving public domain names.
+  static bool isBlockedResolvedAddress(InternetAddress addr) =>
+      _checkAddressBlocked(addr, allowTunFakeIp: true);
+
+  static bool _isLoopbackOrUnspecifiedAddress(InternetAddress addr) {
+    final raw = addr.rawAddress;
+    if (addr.type == InternetAddressType.IPv4 && raw.length == 4) {
+      return raw[0] == 0 || raw[0] == 127;
+    }
+    if (addr.type == InternetAddressType.IPv6 && raw.length == 16) {
+      var prefixZero15 = true;
+      for (var i = 0; i < 15; i++) {
+        if (raw[i] != 0) {
+          prefixZero15 = false;
+          break;
+        }
+      }
+      if (prefixZero15 && (raw[15] == 0 || raw[15] == 1)) return true;
+      var prefixZero10 = true;
+      for (var i = 0; i < 10; i++) {
+        if (raw[i] != 0) {
+          prefixZero10 = false;
+          break;
+        }
+      }
+      if (prefixZero10 &&
+          ((raw[10] == 0xff && raw[11] == 0xff) ||
+              (raw[10] == 0 && raw[11] == 0))) {
+        return raw[12] == 0 || raw[12] == 127;
+      }
+    }
+    return false;
+  }
+
+  static bool _checkAddressBlocked(
+    InternetAddress addr, {
+    required bool allowTunFakeIp,
+  }) {
     final raw = addr.rawAddress;
     if (addr.type == InternetAddressType.IPv4) {
       if (raw.length != 4) return true;
-      return _isBlockedIpv4Bytes(raw[0], raw[1], raw[2], raw[3]);
+      return _isBlockedIpv4Bytes(
+        raw[0],
+        raw[1],
+        raw[2],
+        raw[3],
+        allowTunFakeIp: allowTunFakeIp,
+      );
     }
     if (addr.type == InternetAddressType.IPv6) {
       if (raw.length != 16) return true;
@@ -156,7 +210,13 @@ abstract final class NetworkUrlSafety {
       if (prefixZero10 &&
           ((raw[10] == 0xff && raw[11] == 0xff) ||
               (raw[10] == 0 && raw[11] == 0))) {
-        return _isBlockedIpv4Bytes(raw[12], raw[13], raw[14], raw[15]);
+        return _isBlockedIpv4Bytes(
+          raw[12],
+          raw[13],
+          raw[14],
+          raw[15],
+          allowTunFakeIp: allowTunFakeIp,
+        );
       }
 
       // NAT64 well-known prefix `64:ff9b::/96`
@@ -164,11 +224,17 @@ abstract final class NetworkUrlSafety {
           raw[1] == 0x64 &&
           raw[2] == 0xff &&
           raw[3] == 0x9b) {
-        return _isBlockedIpv4Bytes(raw[12], raw[13], raw[14], raw[15]);
+        return _isBlockedIpv4Bytes(
+          raw[12],
+          raw[13],
+          raw[14],
+          raw[15],
+          allowTunFakeIp: allowTunFakeIp,
+        );
       }
 
-      // Unique local `fc00::/7`
-      if ((raw[0] & 0xfe) == 0xfc) return true;
+      // Unique local `fc00::/7` (used as IPv6 Fake-IP pool `fc00::/18` by TUN VPNs)
+      if ((raw[0] & 0xfe) == 0xfc) return !allowTunFakeIp;
       // Link-local `fe80::/10`
       if (raw[0] == 0xfe && (raw[1] & 0xc0) == 0x80) return true;
       // Multicast `ff00::/8`
@@ -178,15 +244,21 @@ abstract final class NetworkUrlSafety {
     return true;
   }
 
-  static bool _isBlockedIpv4Bytes(int b0, int b1, int b2, int b3) {
+  static bool _isBlockedIpv4Bytes(
+    int b0,
+    int b1,
+    int b2,
+    int b3, {
+    required bool allowTunFakeIp,
+  }) {
     // 0.0.0.0/8 (this-network)
     if (b0 == 0) return true;
     // Loopback 127.0.0.0/8
     if (b0 == 127) return !allowLoopbackForTesting;
     // RFC1918 class A (first octet 10)
     if (b0 == 10) return true;
-    // CGNAT 100.64.0.0/10
-    if (b0 == 100 && (b1 & 0xc0) == 64) return true;
+    // CGNAT / TUN shared space 100.64.0.0/10
+    if (b0 == 100 && (b1 & 0xc0) == 64) return !allowTunFakeIp;
     // Link-local / cloud metadata 169.254.0.0/16
     if (b0 == 169 && b1 == 254) return true;
     // RFC1918 class B 172.16.0.0/12
@@ -195,8 +267,8 @@ abstract final class NetworkUrlSafety {
     if (b0 == 192 && b1 == 0 && (b2 == 0 || b2 == 2)) return true;
     // RFC1918 class C (192.168/16)
     if (b0 == 192 && b1 == 168) return true;
-    // Benchmark 198.18.0.0/15 & documentation 198.51.100.0/24 / 203.0.113.0/24
-    if (b0 == 198 && (b1 == 18 || b1 == 19)) return true;
+    // Benchmark / TUN Fake-IP 198.18.0.0/15
+    if (b0 == 198 && (b1 == 18 || b1 == 19)) return !allowTunFakeIp;
     // Multicast & reserved 224.0.0.0/3 (includes 255.255.255.255)
     if (b0 >= 224) return true;
     return false;
@@ -333,9 +405,7 @@ abstract final class NetworkUrlSafety {
     final customLookup = debugDnsLookup;
     if (customLookup != null) {
       final addresses = await customLookup(cleanHost).timeout(dnsTimeout);
-      if (addresses.isEmpty || addresses.any(isBlockedAddress)) {
-        throw const FormatException('目标域名解析到了受限制的内网或本地地址');
-      }
+      _validateResolvedAddresses(addresses);
       return checked;
     }
 
@@ -343,9 +413,7 @@ abstract final class NetworkUrlSafety {
       final addresses = await InternetAddress.lookup(
         cleanHost,
       ).timeout(dnsTimeout);
-      if (addresses.isEmpty || addresses.any(isBlockedAddress)) {
-        throw const FormatException('目标域名解析到了受限制的内网或本地地址');
-      }
+      _validateResolvedAddresses(addresses);
     } on SocketException {
       // When outbound traffic is mediated by an explicit HTTP(S) proxy without
       // direct DNS resolution, host-literal checks still apply and the proxy
@@ -354,5 +422,20 @@ abstract final class NetworkUrlSafety {
       if (!_hasConfiguredSystemProxy) rethrow;
     }
     return checked;
+  }
+
+  static void _validateResolvedAddresses(List<InternetAddress> addresses) {
+    if (addresses.isEmpty) {
+      throw const FormatException('目标域名未能解析出有效地址');
+    }
+    if (addresses.any(isBlockedResolvedAddress)) {
+      if (!allowLoopbackForTesting &&
+          addresses.every(_isLoopbackOrUnspecifiedAddress)) {
+        throw const FormatException(
+          '域名解析返回了空地址或本机回环（可能被当前网络 DNS 污染拦截，请检查 VPN 分流规则或切换其他书源）',
+        );
+      }
+      throw const FormatException('目标域名解析到了受限制的局域网或本机地址');
+    }
   }
 }

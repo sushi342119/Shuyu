@@ -35,6 +35,7 @@ class OnlineDiscoverView extends StatefulWidget {
     required this.repository,
     required this.onOpenBook,
     this.headerSwitcher,
+    this.focusSearchSignal,
   });
 
   final LibraryState state;
@@ -42,6 +43,7 @@ class OnlineDiscoverView extends StatefulWidget {
   final void Function(BuildContext context, Novel novel, Object? coverHeroTag)
   onOpenBook;
   final Widget? headerSwitcher;
+  final ValueNotifier<int>? focusSearchSignal;
 
   @override
   State<OnlineDiscoverView> createState() => _OnlineDiscoverViewState();
@@ -50,6 +52,7 @@ class OnlineDiscoverView extends StatefulWidget {
 class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
   final TextEditingController _searchCtrl = TextEditingController();
   final FocusNode _searchFocus = FocusNode(debugLabel: 'online-discover-search');
+  final ScrollController _scrollCtrl = ScrollController();
 
   OnlineTypeFilter _typeFilter = OnlineTypeFilter.all;
   String? _selectedSourceId;
@@ -81,18 +84,44 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
   void initState() {
     super.initState();
     _store.addListener(_onStoreChanged);
+    widget.focusSearchSignal?.addListener(_onFocusSearchRequested);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _syncExploreSelection(loadIfNeeded: true);
     });
   }
 
   @override
+  void didUpdateWidget(covariant OnlineDiscoverView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.focusSearchSignal != widget.focusSearchSignal) {
+      oldWidget.focusSearchSignal?.removeListener(_onFocusSearchRequested);
+      widget.focusSearchSignal?.addListener(_onFocusSearchRequested);
+    }
+  }
+
+  @override
   void dispose() {
+    widget.focusSearchSignal?.removeListener(_onFocusSearchRequested);
     _store.removeListener(_onStoreChanged);
     _searchSub?.cancel();
+    _scrollCtrl.dispose();
     _searchCtrl.dispose();
     _searchFocus.dispose();
     super.dispose();
+  }
+
+  void _onFocusSearchRequested() {
+    if (!mounted) return;
+    if (_scrollCtrl.hasClients && _scrollCtrl.offset > 0) {
+      unawaited(
+        _scrollCtrl.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        ),
+      );
+    }
+    _searchFocus.requestFocus();
   }
 
   void _onStoreChanged() {
@@ -101,11 +130,47 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
     setState(() {});
   }
 
+  static final RegExp _nicheGroupPattern = RegExp(
+    r'(?:18\+|r18|\bh\b|海棠|po18|废文)',
+    caseSensitive: false,
+  );
+
+  static bool _isNicheGroup(BookSource s) =>
+      _nicheGroupPattern.hasMatch(s.group) ||
+      _nicheGroupPattern.hasMatch(s.name);
+
   List<BookSource> _eligibleExploreSources() {
     final contentType = _typeFilter.sourceContentType;
-    return _store.activeExploreSources
+    final raw = _store.activeExploreSources
         .where((s) => contentType == null || s.contentType == contentType)
         .toList(growable: false);
+    final indexed = <(int, BookSource)>[
+      for (var i = 0; i < raw.length; i++) (i, raw[i]),
+    ];
+    indexed.sort((a, b) {
+      final wCmp = b.$2.weight.compareTo(a.$2.weight);
+      if (wCmp != 0) return wCmp;
+      final nicheCmp = (_isNicheGroup(a.$2) ? 1 : 0).compareTo(
+        _isNicheGroup(b.$2) ? 1 : 0,
+      );
+      if (nicheCmp != 0) return nicheCmp;
+      final compatA = a.$2.compatibility == SourceCompatibility.full ? 0 : 1;
+      final compatB = b.$2.compatibility == SourceCompatibility.full ? 0 : 1;
+      if (compatA != compatB) return compatA.compareTo(compatB);
+      return a.$1.compareTo(b.$1);
+    });
+    return [for (final item in indexed) item.$2];
+  }
+
+  void _switchToNextExploreSource(List<BookSource> sources) {
+    if (sources.length < 2) return;
+    final currentIdx = sources.indexWhere((s) => s.id == _selectedSourceId);
+    final nextIdx = (currentIdx + 1) % sources.length;
+    setState(() {
+      _selectedSourceId = sources[nextIdx].id;
+      _selectedKindIndex = 0;
+    });
+    unawaited(_loadExplore(reset: true));
   }
 
   BookSource? _currentExploreSource(List<BookSource> sources) {
@@ -285,6 +350,7 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
       },
       child: CustomScrollView(
         key: const PageStorageKey('discover-online-sources'),
+        controller: _scrollCtrl,
         physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
           SliverPadding(
@@ -323,7 +389,7 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
           if (_activeQuery.isNotEmpty)
             _buildSearchResultsSliver(context)
           else
-            _buildExploreBodySliver(context, activeSource),
+            _buildExploreBodySliver(context, exploreSources, activeSource),
           SliverPadding(
             padding: EdgeInsets.only(
               bottom: MediaQuery.paddingOf(context).bottom + 120,
@@ -337,6 +403,15 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
 
   Widget _buildSearchBar(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final contentType = _typeFilter.sourceContentType;
+    final searchCount = contentType == null
+        ? _store.activeSearchSources.length
+        : _store.activeSearchSources
+              .where((s) => s.contentType == contentType)
+              .length;
+    final typeLabel = _typeFilter == OnlineTypeFilter.all
+        ? '在线'
+        : _typeFilter.label;
     return LiquidGlass(
       radius: 18,
       elevated: false,
@@ -364,8 +439,7 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
                     border: InputBorder.none,
                     isDense: true,
                     contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                    hintText:
-                        '聚合搜索 ${_store.activeSearchSources.length} 个在线书源（小说 / 漫画）',
+                    hintText: '搜索 $searchCount 个$typeLabel书源…',
                     suffixIcon: val.text.isEmpty
                         ? null
                         : IconButton(
@@ -549,7 +623,7 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
             icon: CupertinoIcons.search,
             title: '未找到匹配书籍',
             message: _lastSearchError != null
-                ? '部分书源请求异常（$_lastSearchError），可尝试更换关键词或在书源管理中检查测试。'
+                ? '部分书源请求异常（${describeSourceError(_lastSearchError!)}），可尝试更换关键词或在书源管理中检查测试。'
                 : '换个关键词试试，或在「书源」中导入更多可用书源。',
             onRetry: () => _startSearch(_activeQuery),
           ),
@@ -569,6 +643,7 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
 
   Widget _buildExploreBodySliver(
     BuildContext context,
+    List<BookSource> exploreSources,
     BookSource? activeSource,
   ) {
     final scheme = Theme.of(context).colorScheme;
@@ -643,11 +718,28 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
       return SliverToBoxAdapter(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-          child: ContentNotice(
-            icon: CupertinoIcons.wifi_exclamationmark,
-            title: '分类列表加载失败',
-            message: '$_exploreError',
-            onRetry: () => _loadExplore(reset: true),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ContentNotice(
+                icon: CupertinoIcons.wifi_exclamationmark,
+                title: '分类列表加载失败',
+                message:
+                    '「${activeSource.name}」：${describeSourceError(_exploreError!)}',
+                onRetry: () => _loadExplore(reset: true),
+              ),
+              if (exploreSources.length > 1) ...[
+                const SizedBox(height: 6),
+                TextButton.icon(
+                  onPressed: () => _switchToNextExploreSource(exploreSources),
+                  icon: const Icon(
+                    CupertinoIcons.arrow_right_arrow_left,
+                    size: 15,
+                  ),
+                  label: const Text('切换下一个书源'),
+                ),
+              ],
+            ],
           ),
         ),
       );

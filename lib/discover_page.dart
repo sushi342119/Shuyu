@@ -10,6 +10,9 @@ class _TagMenuChoice {
   final bool untagged;
 }
 
+final ValueNotifier<bool> _discoverInOnlineMode = ValueNotifier<bool>(false);
+final ValueNotifier<int> _discoverOnlineSearchPulse = ValueNotifier<int>(0);
+
 class DiscoverPage extends StatefulWidget {
   const DiscoverPage({
     super.key,
@@ -38,7 +41,14 @@ class DiscoverPage extends StatefulWidget {
       GlassIconButton(
         icon: CupertinoIcons.search,
         label: '搜索',
-        onPressed: onSearch,
+        onPressed: () {
+          if (_discoverInOnlineMode.value &&
+              BookSourceStore.shared.hasActiveSources) {
+            _discoverOnlineSearchPulse.value++;
+          } else {
+            onSearch();
+          }
+        },
       ),
     ],
   );
@@ -66,6 +76,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
   @override
   void initState() {
     super.initState();
+    _discoverInOnlineMode.value = false;
     _tagStore.addListener(_onTagsChanged);
     LibraryFilter.shared.addListener(_onFilterChanged);
     _sourceStore.addListener(_onSourcesChanged);
@@ -73,6 +84,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
 
   @override
   void dispose() {
+    _discoverInOnlineMode.value = false;
     _tagStore.removeListener(_onTagsChanged);
     LibraryFilter.shared.removeListener(_onFilterChanged);
     _sourceStore.removeListener(_onSourcesChanged);
@@ -84,6 +96,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
     if (!_sourceStore.hasActiveSources && _onlineMode) {
       _onlineMode = false;
     }
+    _discoverInOnlineMode.value = _onlineMode && _sourceStore.hasActiveSources;
     setState(() {});
   }
 
@@ -123,7 +136,11 @@ class _DiscoverPageState extends State<DiscoverPage> {
       selected: {_onlineMode},
       onSelectionChanged: (next) {
         if (next.first != _onlineMode) {
-          setState(() => _onlineMode = next.first);
+          setState(() {
+            _onlineMode = next.first;
+            _discoverInOnlineMode.value =
+                _onlineMode && _sourceStore.hasActiveSources;
+          });
         }
       },
     ),
@@ -139,6 +156,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
           state: widget.state,
           repository: widget.repository,
           headerSwitcher: _buildSourceModeSwitcher(context),
+          focusSearchSignal: _discoverOnlineSearchPulse,
           onOpenBook: (ctx, book, heroTag) => openDetail(
             ctx,
             book,

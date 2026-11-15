@@ -131,6 +131,68 @@ void main() {
       );
       expect(verified.host, 'rebind-check.example.org');
     });
+
+    test('放行 Android TUN VPN Fake-IP (198.18/15、100.64/10、fc00::/7) 域名解析，同时继续拦截裸填字面量与本地回环污染', () async {
+      final clashFakeIpv4 = InternetAddress.fromRawAddress(
+        Uint8List.fromList([198, 18, 0, 42]),
+      );
+      final cgnatTunIpv4 = InternetAddress.fromRawAddress(
+        Uint8List.fromList([100, 64, 2, 9]),
+      );
+      final singboxFakeIpv6 = InternetAddress.fromRawAddress(
+        Uint8List.fromList([
+          0xfc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+          0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x34,
+        ]),
+      );
+
+      // 1) Raw IP literals in URLs are still rejected as direct destinations.
+      expect(
+        () => NetworkUrlSafety.parsePublicHttpUrl(
+          'http://${clashFakeIpv4.address}/admin',
+        ),
+        throwsFormatException,
+      );
+      expect(
+        () => NetworkUrlSafety.parsePublicHttpUrl(
+          'http://${cgnatTunIpv4.address}/admin',
+        ),
+        throwsFormatException,
+      );
+      expect(
+        () => NetworkUrlSafety.parsePublicHttpUrl(
+          'http://[${singboxFakeIpv6.address}]/admin',
+        ),
+        throwsFormatException,
+      );
+
+      // 2) Public domain names resolving to TUN VPN Fake-IPs succeed cleanly!
+      for (final fakeAddr in [clashFakeIpv4, cgnatTunIpv4, singboxFakeIpv6]) {
+        NetworkUrlSafety.debugDnsLookup = (_) async => [fakeAddr];
+        final ok = await NetworkUrlSafety.ensureSafeDestination(
+          Uri.parse('https://novel-tun-test.example.org/list'),
+        );
+        expect(ok.host, 'novel-tun-test.example.org');
+      }
+
+      // 3) DNS-poisoned empty/loopback responses still fail with clear message.
+      final poisonedZero = InternetAddress.fromRawAddress(
+        Uint8List.fromList([0, 0, 0, 0]),
+      );
+      NetworkUrlSafety.debugDnsLookup = (_) async => [poisonedZero];
+      await expectLater(
+        NetworkUrlSafety.ensureSafeDestination(
+          Uri.parse('https://poisoned-dns.example.org/list'),
+        ),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('DNS'),
+          ),
+        ),
+      );
+    });
   });
 
   group('书籍 ID 分段、档案编号与信任边界', () {
@@ -225,6 +287,28 @@ void main() {
       expect(parsed.sources[2].compatibility.canEnable, isFalse);
       expect(parsed.sources[2].enabled, isFalse);
       expect(parsed.sources[2].isManga, isTrue);
+
+      final exploreOnly = BookSource.fromAnyMap({
+        'bookSourceUrl': 'https://explore-only.example.org',
+        'bookSourceName': '仅分类静态源',
+        'bookSourceType': 0,
+        'searchUrl': '@js:signSearch(key)',
+        'exploreUrl': '热门::/rank/hot-{{page}}.html',
+        'ruleExplore': {'bookList': '.cards li', 'name': 'a@text'},
+        'ruleToc': {'chapterList': '.toc li', 'chapterName': 'a@text'},
+        'ruleContent': {'content': '#nr@html'},
+      })!;
+      expect(exploreOnly.compatibility, SourceCompatibility.partial);
+      expect(exploreOnly.enabled, isTrue);
+      expect(exploreOnly.canSearch, isFalse);
+      expect(exploreOnly.canExplore, isTrue);
+
+      final fallbackItems = SourceRuleEngine.parseBookListDirect(
+        body: '<ul class="cards"><li><a href="/b/77">无显式链接字段</a></li></ul>',
+        baseUrl: 'https://explore-only.example.org',
+        rule: exploreOnly.effectiveExploreRule,
+      );
+      expect(fallbackItems.single.bookUrl, 'https://explore-only.example.org/b/77');
     });
 
     test('支持 POST 请求、GBK 搜索参数编码、<first,rest> 分页与页码算术表达式', () {
