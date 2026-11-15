@@ -7,7 +7,6 @@ import 'dart:ui' as ui;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'app_interactions.dart';
 import 'app_ui.dart';
@@ -298,7 +297,6 @@ class LocalMangaReaderPage extends StatefulWidget {
 class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   static const _maxCachedPages = 20;
-  static const _darkCanvasColor = Color(0xFF101114);
   static const _invertFilter = ColorFilter.matrix(<double>[
     -1, 0, 0, 0, 255, //
     0, -1, 0, 0, 255, //
@@ -1330,17 +1328,21 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   }
 
   @override
-  Widget build(BuildContext context) => Listener(
-    behavior: HitTestBehavior.translucent,
-    onPointerDown: (_) => _readingActivity.notifyInteraction(),
-    child: ReaderPaperScope(
-      state: widget.state,
-      child: Builder(builder: _buildScaffold),
-    ),
-  );
+  Widget build(BuildContext context) {
+    final baseTheme = Theme.of(context);
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) => _readingActivity.notifyInteraction(),
+      child: ReaderPaperScope(
+        state: widget.state,
+        child: Builder(
+          builder: (context) => _buildScaffold(context, baseTheme),
+        ),
+      ),
+    );
+  }
 
-  Widget _buildScaffold(BuildContext context) {
-    final theme = Theme.of(context);
+  Widget _buildScaffold(BuildContext context, ThemeData baseTheme) {
     return AnimatedBuilder(
       animation: Listenable.merge([
         widget.state.readerSettingsChanges,
@@ -1348,33 +1350,40 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
       ]),
       builder: (context, _) {
         final prefs = widget.state.readerPreferences;
-        final canvasColor = prefs.mangaDarkCanvas
-            ? _darkCanvasColor
-            : theme.colorScheme.surface;
-        final brightness = prefs.mangaDarkCanvas
-            ? Brightness.dark
-            : theme.brightness;
+        final mangaTheme = mangaCanvasTheme(baseTheme, prefs);
+        final canvasColor = mangaTheme.colorScheme.surface;
+        final dim = prefs.mangaNightDim.clamp(0.0, 0.75);
+        final statusBg = dim > 0
+            ? Color.alphaBlend(Colors.black.withValues(alpha: dim), canvasColor)
+            : canvasColor;
         return ReaderVolumePaging(
           enabled: prefs.volumePaging && _pageCount > 0,
           onPage: _stepPageOrSpread,
-          child: AnnotatedRegion<SystemUiOverlayStyle>(
-            value: novelSystemUiStyle(brightness),
-            child: ReaderScaffold(
-              chrome: _chrome,
-              novelId: widget.novel.id,
-              title: widget.novel.title,
-              bookmarkListenable: widget.state.bookmarkChanges,
-              isBookmarked: () => _pageBookmarks().isNotEmpty,
-              onAddBookmark: _pageCount == 0 ? null : _toggleBookmark,
-              actions: _actions(),
-              progress: _pageCount > 1 ? _buildProgressBar(context, prefs) : null,
-              useAtmosphere: false,
-              blurBottom: false,
-              maskTopSafeArea: () => false,
-              bottomMaxWidth: 520,
-              backgroundColor: canvasColor,
-              statusText: _statusText(prefs),
-              body: _buildBody(context, prefs, canvasColor),
+          child: Theme(
+            data: mangaTheme,
+            child: Builder(
+              builder: (themedContext) => ReaderScaffold(
+                chrome: _chrome,
+                novelId: widget.novel.id,
+                title: widget.novel.title,
+                bookmarkListenable: widget.state.bookmarkChanges,
+                isBookmarked: () => _pageBookmarks().isNotEmpty,
+                onAddBookmark: _pageCount == 0 ? null : _toggleBookmark,
+                actions: _actions(),
+                progress: _pageCount > 1
+                    ? _buildProgressBar(themedContext, prefs)
+                    : null,
+                useAtmosphere: false,
+                blurBottom: false,
+                maskTopSafeArea: () => false,
+                bottomMaxWidth: 520,
+                backgroundColor: canvasColor,
+                showStatusLine: prefs.showStatusInfo,
+                featherStatusLine: false,
+                statusBackgroundColor: statusBg,
+                statusText: _statusText(prefs),
+                body: _buildBody(themedContext, prefs, canvasColor),
+              ),
             ),
           ),
         );
@@ -1387,9 +1396,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     ReaderPreferences prefs,
     Color canvasColor,
   ) {
-    final muted = prefs.mangaDarkCanvas
-        ? Colors.white70
-        : Theme.of(context).colorScheme.onSurfaceVariant;
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
     if (_loadingDescriptor) {
       return Center(child: CircularProgressIndicator(color: muted));
     }
@@ -1468,13 +1475,27 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
 
         // 漫画模式下绝不因 PDF 常规夜间反色设置而将彩漫/黑白漫反相成负片；仅响应漫画专属反色开关。
         final invert = prefs.mangaInvert;
+        final media = MediaQuery.paddingOf(context);
+        final topSafe = math.max(
+          media.top,
+          MediaQuery.viewPaddingOf(context).top,
+        );
+        final bottomSafe = prefs.showStatusInfo
+            ? ReaderStatusLine.bandHeightFor(context) + media.bottom + 0.5
+            : media.bottom;
 
         final Widget viewport = prefs.mangaMode == MangaReadingMode.webtoon
-            ? _buildWebtoonView(context, prefs, invert, muted)
-            : _buildPagedView(context, prefs, invert, muted);
+            ? _buildWebtoonView(context, prefs, invert, muted, bottomSafe)
+            : _buildPagedView(
+                context,
+                prefs,
+                invert,
+                muted,
+                topSafe: topSafe,
+                bottomSafe: bottomSafe,
+              );
 
         final dim = prefs.mangaNightDim.clamp(0.0, 0.75);
-        final statusLabel = _statusText(prefs);
         return ColoredBox(
           key: const ValueKey('manga-canvas'),
           color: canvasColor,
@@ -1482,45 +1503,6 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
             fit: StackFit.expand,
             children: [
               viewport,
-              if (prefs.showStatusInfo &&
-                  !prefs.showReaderStatus &&
-                  statusLabel.isNotEmpty)
-                Positioned(
-                  right: 12,
-                  bottom: MediaQuery.paddingOf(context).bottom + 8,
-                  child: IgnorePointer(
-                    child: AnimatedBuilder(
-                      animation: _chrome,
-                      builder: (context, child) {
-                        final alpha = (1.0 - _chrome.value).clamp(0.0, 1.0);
-                        if (alpha <= 0.01) return const SizedBox.shrink();
-                        return Opacity(opacity: alpha, child: child);
-                      },
-                      child: DecoratedBox(
-                        key: const ValueKey('manga-page-hud'),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.52),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          child: Text(
-                            statusLabel,
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 11,
-                              height: 1.2,
-                              fontFeatures: [FontFeature.tabularFigures()],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
               if (dim > 0)
                 IgnorePointer(
                   child: ColoredBox(
@@ -1539,8 +1521,10 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     BuildContext context,
     ReaderPreferences prefs,
     bool invert,
-    Color muted,
-  ) {
+    Color muted, {
+    required double topSafe,
+    required double bottomSafe,
+  }) {
     final isRtl = prefs.mangaMode == MangaReadingMode.rtl;
     final spreads = _currentSpreads;
     final controller =
@@ -1556,31 +1540,38 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
       onPageChanged: _onSpreadChanged,
       itemBuilder: (context, spreadIndex) {
         final spread = spreads[spreadIndex];
+        Widget content = spread.isDouble
+            ? _buildDoubleSpread(
+                context,
+                spread: spread,
+                isRtl: isRtl,
+                cropMargins: prefs.mangaCropMargins,
+                invert: invert,
+                muted: muted,
+              )
+            : Center(
+                child: _buildSinglePageImage(
+                  context,
+                  page: spread.firstPage,
+                  fit: BoxFit.contain,
+                  alignment: Alignment.center,
+                  cropMargins: prefs.mangaCropMargins,
+                  invert: invert,
+                  muted: muted,
+                ),
+              );
+        if (topSafe > 0 || bottomSafe > 0) {
+          content = Padding(
+            padding: EdgeInsets.only(top: topSafe, bottom: bottomSafe),
+            child: content,
+          );
+        }
         return _ZoomableMangaSurface(
           key: ValueKey('manga-spread-${spread.pages.join("_")}'),
           onViewportTap: _handleViewportTap,
           onCenterToggle: _toggleChrome,
           reduceMotion: widget.state.effectiveReduceMotion,
-          child: spread.isDouble
-              ? _buildDoubleSpread(
-                  context,
-                  spread: spread,
-                  isRtl: isRtl,
-                  cropMargins: prefs.mangaCropMargins,
-                  invert: invert,
-                  muted: muted,
-                )
-              : Center(
-                  child: _buildSinglePageImage(
-                    context,
-                    page: spread.firstPage,
-                    fit: BoxFit.contain,
-                    alignment: Alignment.center,
-                    cropMargins: prefs.mangaCropMargins,
-                    invert: invert,
-                    muted: muted,
-                  ),
-                ),
+          child: content,
         );
       },
     );
@@ -1630,6 +1621,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     ReaderPreferences prefs,
     bool invert,
     Color muted,
+    double bottomSafe,
   ) {
     final cacheExtent = (_viewportHeight > 0 ? _viewportHeight : 800.0) * 2.0;
     return _ZoomableMangaSurface(
@@ -1640,7 +1632,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
       child: ListView.builder(
         key: const ValueKey('manga-webtoon-list'),
         controller: _webtoonController,
-        padding: EdgeInsets.zero,
+        padding: EdgeInsets.only(bottom: bottomSafe),
         cacheExtent: cacheExtent,
         itemCount: _pageCount,
         itemBuilder: (context, page) {
@@ -2458,11 +2450,69 @@ class _MangaVisualSheet extends StatelessWidget {
     }
   }
 
+  Widget _canvasSwatch(
+    BuildContext context,
+    ReaderPreferences prefs,
+    MangaCanvas canvas,
+    bool appDark,
+  ) {
+    final sample = prefs.copyWith(
+      mangaCanvas: canvas,
+      mangaDarkCanvas: canvas.isAlwaysDark,
+    );
+    final selected = prefs.effectiveMangaCanvas == canvas;
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: '画布 ${canvas.label}',
+      child: GestureDetector(
+        key: ValueKey('manga-canvas-${canvas.name}'),
+        onTap: () => _update(
+          context,
+          prefs.copyWith(
+            mangaCanvas: canvas,
+            mangaDarkCanvas: canvas.isAlwaysDark,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: sample.mangaCanvasBackground(appDark),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: selected ? scheme.primary : scheme.outlineVariant,
+                  width: selected ? 2.5 : 1,
+                ),
+              ),
+              child: Text(
+                '漫',
+                style: TextStyle(
+                  color: sample.mangaCanvasForeground(appDark),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(canvas.label, style: const TextStyle(fontSize: 11)),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: state.readerSettingsChanges,
     builder: (context, _) {
       final prefs = state.readerPreferences;
+      final appDark = Theme.of(context).brightness == Brightness.dark;
       final scheme = Theme.of(context).colorScheme;
       final dimPct = (prefs.mangaNightDim * 100).round();
       return SingleChildScrollView(
@@ -2473,16 +2523,26 @@ class _MangaVisualSheet extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const ArchiveSection(title: '画面增强与护眼', code: 'MANGA / VISUAL'),
-            const SizedBox(height: 8),
-            SwitchListTile.adaptive(
-              key: const ValueKey('manga-dark-canvas-switch'),
-              contentPadding: EdgeInsets.zero,
-              title: const Text('深色背景沉浸画布'),
-              subtitle: const Text('使用深灰黑画布衬托画面，避免四周亮色刺眼'),
-              value: prefs.mangaDarkCanvas,
-              onChanged: (val) =>
-                  _update(context, prefs.copyWith(mangaDarkCanvas: val)),
+            const SizedBox(height: 12),
+            const Text(
+              '画布底色',
+              style: TextStyle(fontWeight: FontWeight.w600),
             ),
+            const SizedBox(height: 4),
+            Text(
+              '默认跟随外观；护眼亮色与沉稳暗灰均可一键切换，底栏与状态栏自动同步。',
+              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                for (final canvas in MangaCanvas.choices)
+                  _canvasSwatch(context, prefs, canvas, appDark),
+              ],
+            ),
+            const Divider(height: 24),
             SwitchListTile.adaptive(
               key: const ValueKey('manga-invert-switch'),
               contentPadding: EdgeInsets.zero,
@@ -2521,8 +2581,9 @@ class _MangaVisualSheet extends StatelessWidget {
             OutlinedButton.icon(
               key: const ValueKey('manga-open-paper-sheet'),
               onPressed: () {
+                final hostContext = Navigator.of(context).context;
                 Navigator.pop(context);
-                showReaderAppearanceSheet(context, state: state, pdf: true);
+                showReaderAppearanceSheet(hostContext, state: state, pdf: true);
               },
               icon: const Icon(CupertinoIcons.sun_max, size: 18),
               label: const Text('纸张底色与暖光调节'),

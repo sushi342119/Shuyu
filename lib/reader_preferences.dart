@@ -158,6 +158,23 @@ enum MangaSpreadMode {
   final String label;
 }
 
+enum MangaCanvas {
+  auto('跟随外观'),
+  mist('雾灰'),
+  sand('暖沙'),
+  green('浅绿'),
+  white('纯白'),
+  charcoal('炭灰'),
+  night('夜读黑');
+
+  const MangaCanvas(this.label);
+  final String label;
+
+  static const choices = [auto, mist, sand, green, white, charcoal, night];
+
+  bool get isAlwaysDark => this == charcoal || this == night;
+}
+
 /// Reader-only settings: changing paper never changes the rest of the app.
 class ReaderPreferences {
   const ReaderPreferences({
@@ -204,7 +221,8 @@ class ReaderPreferences {
     this.mangaSpread = MangaSpreadMode.autoLandscape,
     this.mangaCoverOffset = true,
     this.mangaCropMargins = false,
-    this.mangaDarkCanvas = true,
+    this.mangaCanvas = MangaCanvas.auto,
+    this.mangaDarkCanvas = false,
     this.mangaNightDim = 0,
     this.mangaInvert = false,
     this.mangaTapPaging = true,
@@ -261,10 +279,16 @@ class ReaderPreferences {
   final MangaSpreadMode mangaSpread;
   final bool mangaCoverOffset;
   final bool mangaCropMargins;
+  final MangaCanvas mangaCanvas;
   final bool mangaDarkCanvas;
   final double mangaNightDim;
   final bool mangaInvert;
   final bool mangaTapPaging;
+
+  MangaCanvas get effectiveMangaCanvas =>
+      mangaCanvas == MangaCanvas.auto && mangaDarkCanvas
+      ? MangaCanvas.night
+      : mangaCanvas;
   String get layoutKey {
     final geometry =
         leftMargin == 26 &&
@@ -342,6 +366,56 @@ class ReaderPreferences {
           nightTextBrightness,
         )!
       : controlForeground(dark);
+
+  bool darkMangaCanvas(bool appDark) => switch (effectiveMangaCanvas) {
+    MangaCanvas.auto =>
+      paper == ReaderPaper.system ? appDark : darkPaper(appDark),
+    MangaCanvas.charcoal || MangaCanvas.night => true,
+    MangaCanvas.mist ||
+    MangaCanvas.sand ||
+    MangaCanvas.green ||
+    MangaCanvas.white => false,
+  };
+
+  Color mangaCanvasBackground(bool appDark) => switch (effectiveMangaCanvas) {
+    MangaCanvas.auto =>
+      paper == ReaderPaper.system
+          ? (appDark ? const Color(0xFF141821) : const Color(0xFFF2F3F5))
+          : background(appDark),
+    MangaCanvas.mist => const Color(0xFFF2F3F5),
+    MangaCanvas.sand => const Color(0xFFF3ECDD),
+    MangaCanvas.green => const Color(0xFFE7F0E6),
+    MangaCanvas.white => const Color(0xFFFFFFFF),
+    MangaCanvas.charcoal => const Color(0xFF20232A),
+    MangaCanvas.night => const Color(0xFF101114),
+  };
+
+  Color mangaCanvasPanel(bool appDark) => switch (effectiveMangaCanvas) {
+    MangaCanvas.auto =>
+      paper == ReaderPaper.system
+          ? (appDark ? const Color(0xFF1D2330) : const Color(0xFFE6E8EB))
+          : panel(appDark),
+    MangaCanvas.mist => const Color(0xFFE6E8EB),
+    MangaCanvas.sand => const Color(0xFFE8DFCC),
+    MangaCanvas.green => const Color(0xFFDAE6D9),
+    MangaCanvas.white => const Color(0xFFF3F4F6),
+    MangaCanvas.charcoal => const Color(0xFF2A2E37),
+    MangaCanvas.night => const Color(0xFF191C22),
+  };
+
+  Color mangaCanvasForeground(bool appDark) => switch (effectiveMangaCanvas) {
+    MangaCanvas.auto =>
+      paper == ReaderPaper.system
+          ? (appDark ? const Color(0xFFE2E8F4) : const Color(0xFF23262B))
+          : controlForeground(appDark),
+    MangaCanvas.mist => const Color(0xFF23262B),
+    MangaCanvas.sand => const Color(0xFF2B261C),
+    MangaCanvas.green => const Color(0xFF1F2A20),
+    MangaCanvas.white => const Color(0xFF1F2125),
+    MangaCanvas.charcoal => const Color(0xFFE3E7EF),
+    MangaCanvas.night => const Color(0xFFD0D5DF),
+  };
+
   Map<String, Object?> toJson() => {
     'paper': paper.name,
     'margin': margin,
@@ -391,7 +465,8 @@ class ReaderPreferences {
       'mangaSpread': mangaSpread.name,
     if (!mangaCoverOffset) 'mangaCoverOffset': false,
     if (mangaCropMargins) 'mangaCropMargins': true,
-    if (!mangaDarkCanvas) 'mangaDarkCanvas': false,
+    if (mangaCanvas != MangaCanvas.auto) 'mangaCanvas': mangaCanvas.name,
+    if (mangaDarkCanvas) 'mangaDarkCanvas': true,
     if (mangaNightDim > 0) 'mangaNightDim': mangaNightDim,
     if (mangaInvert) 'mangaInvert': true,
     if (!mangaTapPaging) 'mangaTapPaging': false,
@@ -525,8 +600,9 @@ class ReaderPreferences {
       ),
       mangaCoverOffset: json['mangaCoverOffset'] != false,
       mangaCropMargins: json['mangaCropMargins'] == true,
-      mangaDarkCanvas: json['mangaDarkCanvas'] != false,
-      mangaNightDim: number('mangaNightDim', 0, .65, 0),
+      mangaCanvas: MangaCanvas.values.byName(json['mangaCanvas'] ?? 'auto'),
+      mangaDarkCanvas: json['mangaDarkCanvas'] == true,
+      mangaNightDim: number('mangaNightDim', 0, .75, 0),
       mangaInvert: json['mangaInvert'] == true,
       mangaTapPaging: json['mangaTapPaging'] != false,
     );
@@ -585,6 +661,7 @@ class ReaderPreferences {
     MangaSpreadMode? mangaSpread,
     bool? mangaCoverOffset,
     bool? mangaCropMargins,
+    MangaCanvas? mangaCanvas,
     bool? mangaDarkCanvas,
     double? mangaNightDim,
     bool? mangaInvert,
@@ -636,6 +713,7 @@ class ReaderPreferences {
     mangaSpread: mangaSpread ?? this.mangaSpread,
     mangaCoverOffset: mangaCoverOffset ?? this.mangaCoverOffset,
     mangaCropMargins: mangaCropMargins ?? this.mangaCropMargins,
+    mangaCanvas: mangaCanvas ?? this.mangaCanvas,
     mangaDarkCanvas: mangaDarkCanvas ?? this.mangaDarkCanvas,
     mangaNightDim: mangaNightDim ?? this.mangaNightDim,
     mangaInvert: mangaInvert ?? this.mangaInvert,

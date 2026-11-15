@@ -431,6 +431,8 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
             maskTopSafeArea: () => false,
             bottomMaxWidth: 520,
             backgroundColor: theme.colorScheme.surface,
+            showStatusLine: widget.state.readerPreferences.showStatusInfo,
+            featherStatusLine: false,
             statusText: count == 0 ? '' : '第 ${_page + 1} / $count 页',
             body: count == 0
                 ? Center(

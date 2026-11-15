@@ -257,15 +257,22 @@ void main() {
   });
 
   group('偏好序列化、单书模式覆盖与书架漫画筛选', () {
-    test('默认 ReaderPreferences.toJson 不写入多余键，自定义漫画偏好完整往返', () {
-      expect(const ReaderPreferences().toJson().containsKey('mangaMode'), isFalse);
+    test('默认 ReaderPreferences.toJson 不写入多余键，自定义漫画偏好与旧版暗色画布完整往返', () {
+      const defaults = ReaderPreferences();
+      expect(defaults.mangaCanvas, MangaCanvas.auto);
+      expect(defaults.mangaDarkCanvas, isFalse);
+      expect(defaults.toJson().containsKey('mangaMode'), isFalse);
+      expect(defaults.toJson().containsKey('mangaCanvas'), isFalse);
+      expect(defaults.toJson().containsKey('mangaDarkCanvas'), isFalse);
+
       const custom = ReaderPreferences(
         mangaMode: MangaReadingMode.webtoon,
         mangaSpread: MangaSpreadMode.autoLandscape,
         mangaCoverOffset: false,
         mangaCropMargins: true,
+        mangaCanvas: MangaCanvas.sand,
         mangaDarkCanvas: false,
-        mangaNightDim: 0.35,
+        mangaNightDim: 0.75,
         mangaInvert: true,
       );
       final decoded = ReaderPreferences.fromJson(custom.toJson());
@@ -273,10 +280,22 @@ void main() {
       expect(decoded.mangaSpread, MangaSpreadMode.autoLandscape);
       expect(decoded.mangaCoverOffset, isFalse);
       expect(decoded.mangaCropMargins, isTrue);
+      expect(decoded.mangaCanvas, MangaCanvas.sand);
+      expect(decoded.effectiveMangaCanvas, MangaCanvas.sand);
       expect(decoded.mangaDarkCanvas, isFalse);
-      expect(decoded.mangaNightDim, closeTo(0.35, 1e-6));
+      expect(decoded.mangaNightDim, closeTo(0.75, 1e-6));
       expect(decoded.mangaInvert, isTrue);
       expect(decoded.toJson(), custom.toJson());
+
+      // 旧版备份中仅含 mangaDarkCanvas: true 时自动映射为夜读黑画布
+      final legacyDark = ReaderPreferences.fromJson({
+        ...defaults.toJson(),
+        'mangaDarkCanvas': true,
+      });
+      expect(legacyDark.mangaCanvas, MangaCanvas.auto);
+      expect(legacyDark.mangaDarkCanvas, isTrue);
+      expect(legacyDark.effectiveMangaCanvas, MangaCanvas.night);
+      expect(legacyDark.darkMangaCanvas(false), isTrue);
     });
 
     test('单书漫画模式覆盖支持备份恢复与清理，且参与书架「漫画」筛选', () async {
@@ -465,6 +484,13 @@ void main() {
       );
       await pumpManga(tester);
 
+      // 默认浅色外观下不再强制纯黑，画布采用柔和雾灰（#F2F3F5），系统状态栏图标为深色
+      expect(
+        tester.widget<ColoredBox>(find.byKey(const ValueKey('manga-canvas'))).color,
+        const Color(0xFFF2F3F5),
+      );
+      expect(SystemChrome.latestStyle!.statusBarIconBrightness, Brightness.dark);
+
       expect(find.textContaining('第 1 / 3 页'), findsOneWidget);
       expect(state.chapterForNovel(novel), 0);
       expect(state.finishedReading(novel), isFalse);
@@ -482,12 +508,68 @@ void main() {
       expect(state.bookmarksFor(novel.id), hasLength(1));
       expect(state.bookmarksFor(novel.id).single.position.chapter, 1);
 
-      // 点击中央区域收起菜单栏 -> 沉浸右下角页码胶囊显示；再次点击中央呼出菜单栏
+      // 点击中央区域收起菜单栏 -> 底部状态条硬切无羽化发虚、无重复悬浮胶囊
       await tester.tapAt(const Offset(210, 420));
       await pumpManga(tester);
-      expect(find.byKey(const ValueKey('manga-page-hud')), findsOneWidget);
+      final statusBand = find.byKey(const ValueKey('reader-status-band'));
+      expect(statusBand, findsOneWidget);
+      expect(find.byKey(const ValueKey('manga-page-hud')), findsNothing);
+      expect(
+        find.descendant(of: statusBand, matching: find.byType(DecoratedBox)),
+        findsNothing,
+      );
+      final statusBoxes = tester
+          .widgetList<ColoredBox>(
+            find.descendant(of: statusBand, matching: find.byType(ColoredBox)),
+          )
+          .toList();
+      expect(statusBoxes.last.color, const Color(0xFFF2F3F5));
+
+      // 关闭 showStatusInfo 时隐藏底部状态条
+      await state.setReaderPreferences(
+        state.readerPreferences.copyWith(showStatusInfo: false),
+      );
+      await tester.pump();
+      expect(statusBand, findsNothing);
+      await state.setReaderPreferences(
+        state.readerPreferences.copyWith(showStatusInfo: true),
+      );
+      await tester.pump();
+      expect(statusBand, findsOneWidget);
+
       await tester.tapAt(const Offset(210, 420));
       await pumpManga(tester);
+
+      // 打开画面设置面板切换色卡（暖沙 -> 炭灰），验证画布、底栏与系统状态栏亮暗同步
+      await tester.tap(find.byKey(const ValueKey('reader-appearance-entry')));
+      await pumpManga(tester);
+      expect(find.byKey(const ValueKey('manga-visual-sheet')), findsOneWidget);
+      for (final preset in MangaCanvas.choices) {
+        expect(
+          find.byKey(ValueKey('manga-canvas-${preset.name}')),
+          findsOneWidget,
+        );
+      }
+      await tester.tap(find.byKey(const ValueKey('manga-canvas-sand')));
+      await pumpManga(tester);
+      expect(state.readerPreferences.mangaCanvas, MangaCanvas.sand);
+      expect(
+        tester.widget<ColoredBox>(find.byKey(const ValueKey('manga-canvas'))).color,
+        const Color(0xFFF3ECDD),
+      );
+      expect(SystemChrome.latestStyle!.statusBarIconBrightness, Brightness.dark);
+
+      await tester.tap(find.byKey(const ValueKey('manga-canvas-charcoal')));
+      await pumpManga(tester);
+      expect(state.readerPreferences.mangaCanvas, MangaCanvas.charcoal);
+      expect(
+        tester.widget<ColoredBox>(find.byKey(const ValueKey('manga-canvas'))).color,
+        const Color(0xFF20232A),
+      );
+      Navigator.of(tester.element(find.byType(LocalMangaReaderPage))).pop();
+      await pumpManga(tester);
+      // 浅色系统外观下选用深色画布时，顶部状态栏图标自动切换为浅色（不黑底黑字）
+      expect(SystemChrome.latestStyle!.statusBarIconBrightness, Brightness.light);
 
       // 继续点击左侧翻到第 3 页（末页） -> 判定为已读完
       await tester.tapAt(const Offset(40, 420));
@@ -507,14 +589,27 @@ void main() {
       await pumpManga(tester);
       expect(find.byKey(const ValueKey('manga-webtoon-list')), findsOneWidget);
 
-      // 开启夜间降亮护眼遮罩
+      // 开启夜间降亮护眼遮罩并收起菜单栏，验证底栏背景与压暗后画布严丝合缝
       await state.setReaderPreferences(
         state.readerPreferences.copyWith(mangaNightDim: 0.4),
       );
-      await tester.pump();
+      await tester.tapAt(const Offset(210, 420));
+      await pumpManga(tester);
       expect(
         find.byKey(const ValueKey('manga-night-dim-overlay')),
         findsOneWidget,
+      );
+      final dimmedBoxes = tester
+          .widgetList<ColoredBox>(
+            find.descendant(of: statusBand, matching: find.byType(ColoredBox)),
+          )
+          .toList();
+      expect(
+        dimmedBoxes.last.color,
+        Color.alphaBlend(
+          Colors.black.withValues(alpha: 0.4),
+          const Color(0xFF20232A),
+        ),
       );
     });
 

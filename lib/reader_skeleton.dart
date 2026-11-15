@@ -93,6 +93,56 @@ ThemeData readerPaperTheme(
   );
 }
 
+ThemeData mangaCanvasTheme(ThemeData base, ReaderPreferences prefs) {
+  final appDark = base.brightness == Brightness.dark;
+  final dark = prefs.darkMangaCanvas(appDark);
+  final background = prefs.mangaCanvasBackground(appDark);
+  final control = prefs.mangaCanvasForeground(appDark);
+  final ink = dark
+      ? Color.lerp(background, control, prefs.nightTextBrightness)!
+      : control;
+  final panel = prefs.mangaCanvasPanel(appDark);
+  final muted = Color.lerp(background, control, dark ? .62 : .66)!;
+  final scheme = base.colorScheme.copyWith(
+    brightness: dark ? Brightness.dark : Brightness.light,
+    surface: background,
+    onSurface: ink,
+    onSurfaceVariant: muted,
+    surfaceContainerLowest: background,
+    surfaceContainerLow: panel,
+    surfaceContainer: panel,
+    surfaceContainerHigh: Color.lerp(panel, control, .05),
+    surfaceContainerHighest: Color.lerp(panel, control, .09),
+    outlineVariant: Color.lerp(panel, control, .14),
+    primary: dark != appDark ? base.colorScheme.inversePrimary : null,
+  );
+  final tonal = base.extension<AppTonalColors>();
+  return base.copyWith(
+    brightness: scheme.brightness,
+    colorScheme: scheme,
+    scaffoldBackgroundColor: background,
+    dividerColor: scheme.outlineVariant,
+    textTheme: base.textTheme.apply(bodyColor: ink, displayColor: ink),
+    iconTheme: base.iconTheme.copyWith(color: control),
+    extensions: [
+      for (final extension in base.extensions.values)
+        if (extension is! GlassPalette &&
+            extension is! AppTonalColors &&
+            extension is! PageWash)
+          extension,
+      GlassPalette(tint: panel, thumb: dark ? control : Colors.white),
+      if (tonal != null)
+        tonal.copyWith(
+          milk: panel,
+          darkMilk: dark ? control : panel,
+          glassSurface: panel,
+          thumb: dark ? control : Colors.white,
+          action: control,
+        ),
+    ],
+  );
+}
+
 /// Glass refraction and backdrop blur are off for the reader chrome so
 /// controls paint in one pass with their foreground under [ReaderChromeLayer]'s
 /// opacity transition; translucency is preserved by `NativeBackdrop`.
@@ -291,9 +341,13 @@ class ReaderStatusLine extends StatefulWidget {
     super.key,
     required this.chrome,
     required this.text,
+    this.feather = true,
+    this.backgroundColor,
   });
   final Animation<double> chrome;
   final String text;
+  final bool feather;
+  final Color? backgroundColor;
 
   static const double featherHeight = 14.0;
 
@@ -358,7 +412,7 @@ class _ReaderStatusLineState extends State<ReaderStatusLine> {
           if (hidden == 0) return const SizedBox.shrink();
           final media = MediaQuery.paddingOf(context);
           final scheme = Theme.of(context).colorScheme;
-          final paper = scheme.surface;
+          final paper = widget.backgroundColor ?? scheme.surface;
           final textStyle = TextStyle(
             fontSize: 11,
             height: 1.3,
@@ -373,18 +427,19 @@ class _ReaderStatusLineState extends State<ReaderStatusLine> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                SizedBox(
-                  height: ReaderStatusLine.featherHeight,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [paper.withValues(alpha: 0), paper],
+                if (widget.feather)
+                  SizedBox(
+                    height: ReaderStatusLine.featherHeight,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [paper.withValues(alpha: 0), paper],
+                        ),
                       ),
                     ),
                   ),
-                ),
                 ColoredBox(
                   color: paper,
                   child: Padding(
@@ -461,6 +516,9 @@ class ReaderScaffold extends StatelessWidget {
     this.statusListenable,
     this.statusExtraListenable,
     this.statusTextBuilder,
+    this.showStatusLine = true,
+    this.featherStatusLine = true,
+    this.statusBackgroundColor,
     this.maskTopSafeArea,
     this.progress,
     this.navigation,
@@ -483,6 +541,9 @@ class ReaderScaffold extends StatelessWidget {
   final ValueListenable<double>? statusListenable;
   final Listenable? statusExtraListenable;
   final String Function(double progress)? statusTextBuilder;
+  final bool showStatusLine;
+  final bool featherStatusLine;
+  final Color? statusBackgroundColor;
   final bool Function()? maskTopSafeArea;
   final Widget? progress;
   final Widget? navigation;
@@ -520,9 +581,16 @@ class ReaderScaffold extends StatelessWidget {
             builder: (context, value, _) => ReaderStatusLine(
               chrome: chrome,
               text: statusTextBuilder!(value),
+              feather: featherStatusLine,
+              backgroundColor: statusBackgroundColor,
             ),
           )
-        : ReaderStatusLine(chrome: chrome, text: statusText);
+        : ReaderStatusLine(
+            chrome: chrome,
+            text: statusText,
+            feather: featherStatusLine,
+            backgroundColor: statusBackgroundColor,
+          );
     if (statusExtraListenable != null &&
         statusListenable != null &&
         statusTextBuilder != null) {
@@ -533,6 +601,8 @@ class ReaderScaffold extends StatelessWidget {
           builder: (context, value, _) => ReaderStatusLine(
             chrome: chrome,
             text: statusTextBuilder!(value),
+            feather: featherStatusLine,
+            backgroundColor: statusBackgroundColor,
           ),
         ),
       );
@@ -691,12 +761,13 @@ class ReaderScaffold extends StatelessWidget {
             ),
           ),
         ),
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: statusWidget,
-        ),
+        if (showStatusLine)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: statusWidget,
+          ),
       ],
     );
     return AnnotatedRegion<SystemUiOverlayStyle>(
