@@ -32,6 +32,8 @@ import 'font_catalog.dart';
 import 'app_palette.dart';
 import 'reader_preferences.dart';
 import 'reader_purification.dart';
+import 'sources/book_source_store.dart';
+import 'sources/online_book_origins.dart';
 import 'ui_preferences.dart';
 
 part 'library_backup_merge.dart';
@@ -3326,6 +3328,10 @@ class LibraryState extends ChangeNotifier {
     final override = _readerStore.mangaBookModes[bookId];
     if (override == 'manga') return true;
     if (override == 'normal') return false;
+    if (isSourceNovelId(bookId)) {
+      return (OnlineBookOriginStore.shared.byBookId(bookId)?.isManga ?? false) ||
+          (cachedNovel(bookId)?.isManga ?? false);
+    }
     return resolved?.isIntrinsicManga ?? false;
   }
 

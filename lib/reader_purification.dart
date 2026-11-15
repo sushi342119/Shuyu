@@ -387,11 +387,48 @@ class ReaderPurificationRule {
   final String? sourceUrl;
   final String? unsupportedReason;
 
-  bool appliesToBook(int? bookId, {String? bookTitle}) {
+  bool appliesToBook(
+    int? bookId, {
+    String? bookTitle,
+    String? bookSourceUrl,
+  }) {
     if (scopeBookId != null && scopeBookId != bookId) return false;
-    bool matchesScope(String scope) => scope
-        .split(';')
-        .any((entry) => bookTitle != null && entry.trim() == bookTitle.trim());
+    final cleanTitle = bookTitle?.trim();
+    final cleanSource = bookSourceUrl?.trim().toLowerCase();
+    final sourceHost = cleanSource == null || cleanSource.isEmpty
+        ? null
+        : Uri.tryParse(cleanSource)?.host.toLowerCase();
+
+    bool matchesEntry(String rawEntry) {
+      final entry = rawEntry.trim();
+      if (entry.isEmpty) return false;
+      if (cleanTitle != null && cleanTitle.isNotEmpty && entry == cleanTitle) {
+        return true;
+      }
+      if (cleanSource != null && cleanSource.isNotEmpty) {
+        final lowerEntry = entry.toLowerCase();
+        if (cleanSource == lowerEntry ||
+            cleanSource.contains(lowerEntry) ||
+            lowerEntry.contains(cleanSource)) {
+          return true;
+        }
+        final entryHost = Uri.tryParse(lowerEntry)?.host.toLowerCase();
+        if (sourceHost != null &&
+            sourceHost.isNotEmpty &&
+            entryHost != null &&
+            entryHost.isNotEmpty &&
+            (sourceHost == entryHost ||
+                sourceHost.endsWith('.$entryHost') ||
+                entryHost.endsWith('.$sourceHost'))) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    bool matchesScope(String scope) =>
+        scope.split(RegExp(r'[;,]')).any(matchesEntry);
+
     // Local books have no web source URL. Source-only scopes stay inactive.
     if (importScope.trim().isNotEmpty && !matchesScope(importScope)) {
       return false;
@@ -715,6 +752,10 @@ class ReaderPurificationStore extends ChangeNotifier {
   static const String preferenceKey = 'reader_purification_rules_v1';
   static const String editsPreferenceKey = 'reader_paragraph_edits_v1';
   static const String enabledPreferenceKey = 'reader_purification_enabled_v1';
+
+  /// Optional resolver supplied by the online book-source layer to resolve a
+  /// book's `sourceUrl` from its `bookId` for domain-scoped purification rules.
+  String? Function(int bookId)? bookSourceUrlResolver;
 
   static const List<ReaderPurificationRule> builtInPresets = [
     ReaderPurificationRule(
@@ -1397,14 +1438,19 @@ class ReaderPurificationStore extends ChangeNotifier {
     Iterable<String> paragraphs, {
     int? bookId,
     String? bookTitle,
+    String? bookSourceUrl,
     String? chapterTitle,
   }) {
     if (!_enabled) return const [];
     final enabledRules = _enabledRules;
     if (enabledRules.isEmpty) return const [];
+    final resolvedSourceUrl =
+        bookSourceUrl ??
+        (bookId != null ? bookSourceUrlResolver?.call(bookId) : null);
     final paragraphList = paragraphs.toList(growable: false);
     final cacheKey =
-        '${bookId ?? ''}\x00${bookTitle ?? ''}\x00${chapterTitle ?? ''}\x00'
+        '${bookId ?? ''}\x00${bookTitle ?? ''}\x00${resolvedSourceUrl ?? ''}\x00'
+        '${chapterTitle ?? ''}\x00'
         '${paragraphList.length}\x00'
         '${paragraphList.isEmpty ? 0 : Object.hashAll(paragraphList)}';
     final cached = _chapterEffectiveCache[cacheKey];
@@ -1412,7 +1458,11 @@ class ReaderPurificationStore extends ChangeNotifier {
 
     final active = <ReaderPurificationRule>[];
     for (final rule in enabledRules) {
-      if (!rule.appliesToBook(bookId, bookTitle: bookTitle)) {
+      if (!rule.appliesToBook(
+        bookId,
+        bookTitle: bookTitle,
+        bookSourceUrl: resolvedSourceUrl,
+      )) {
         continue;
       }
       if (rule.id == 'builtin_dedup_chapter_title') {
@@ -1455,12 +1505,22 @@ class ReaderPurificationStore extends ChangeNotifier {
     String title, {
     int? bookId,
     String? bookTitle,
+    String? bookSourceUrl,
   }) {
     if (!hasEnabledRules || title.isEmpty) return title;
+    final resolvedSourceUrl =
+        bookSourceUrl ??
+        (bookId != null ? bookSourceUrlResolver?.call(bookId) : null);
     var current = title;
     for (final rule in _enabledRules) {
       if (!rule.applyToTitle) continue;
-      if (!rule.appliesToBook(bookId, bookTitle: bookTitle)) continue;
+      if (!rule.appliesToBook(
+        bookId,
+        bookTitle: bookTitle,
+        bookSourceUrl: resolvedSourceUrl,
+      )) {
+        continue;
+      }
       if (rule.id == 'builtin_dedup_chapter_title') continue;
       current = rule.apply(current);
     }
@@ -1471,6 +1531,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     String text, {
     int? bookId,
     String? bookTitle,
+    String? bookSourceUrl,
     int? chapterIndex,
     int? paragraphIndex,
     String? chapterTitle,
@@ -1492,12 +1553,16 @@ class ReaderPurificationStore extends ChangeNotifier {
     final trimmed = text.trim();
     if (trimmed == '[插图]' ||
         trimmed.startsWith('<!--image-->') ||
+        trimmed.startsWith('<!--source-image-->') ||
         trimmed.startsWith('http://') ||
         trimmed.startsWith('https://')) {
       return PurifiedParagraph(text);
     }
+    final resolvedSourceUrl =
+        bookSourceUrl ??
+        (bookId != null ? bookSourceUrlResolver?.call(bookId) : null);
     final cacheKey =
-        '${bookId ?? ''}\x00${bookTitle ?? ''}\x00'
+        '${bookId ?? ''}\x00${bookTitle ?? ''}\x00${resolvedSourceUrl ?? ''}\x00'
         '${isFirstParagraph ? (chapterTitle ?? '') : ''}\x00'
         '${text.length}\x00$text';
     final cached = _paragraphCache[cacheKey];
@@ -1506,7 +1571,11 @@ class ReaderPurificationStore extends ChangeNotifier {
     var current = text;
     List<int>? map;
     for (final rule in _enabledRules) {
-      if (!rule.appliesToBook(bookId, bookTitle: bookTitle)) {
+      if (!rule.appliesToBook(
+        bookId,
+        bookTitle: bookTitle,
+        bookSourceUrl: resolvedSourceUrl,
+      )) {
         continue;
       }
       if (rule.id == 'builtin_dedup_chapter_title') {
@@ -1541,6 +1610,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     String text, {
     int? bookId,
     String? bookTitle,
+    String? bookSourceUrl,
     int? chapterIndex,
     int? paragraphIndex,
     String? chapterTitle,
@@ -1549,6 +1619,7 @@ class ReaderPurificationStore extends ChangeNotifier {
     text,
     bookId: bookId,
     bookTitle: bookTitle,
+    bookSourceUrl: bookSourceUrl,
     chapterIndex: chapterIndex,
     paragraphIndex: paragraphIndex,
     chapterTitle: chapterTitle,

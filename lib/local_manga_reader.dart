@@ -16,10 +16,15 @@ import 'local_epub_reader.dart';
 import 'local_library.dart';
 import 'local_pdf_reader.dart';
 import 'local_platform.dart';
+import 'reader_content.dart' show readerIllustrationUrl;
 import 'reader_paging.dart';
 import 'reader_preferences.dart';
 import 'reader_skeleton.dart';
 import 'reading_activity.dart';
+import 'sources/source_http.dart';
+import 'sources/source_image_cache.dart';
+import 'sources/source_manage_page.dart';
+import 'sources/source_repository.dart';
 
 /// 漫画单屏展示单元：单页 `[page]` 或双页跨页 `[firstPage, secondPage]`。
 @immutable
@@ -269,22 +274,24 @@ class _MangaPageData {
   Rect? cropRect;
 }
 
-/// 本地漫画阅读器：支持 CBZ/ZIP 漫画归档、图片文件夹漫画、漫画 EPUB 与漫画模式 PDF。
+/// 漫画阅读器：支持本地 CBZ/ZIP 漫画归档、图片文件夹漫画、漫画 EPUB、漫画模式 PDF 以及在线书源漫画。
 class LocalMangaReaderPage extends StatefulWidget {
   const LocalMangaReaderPage({
     super.key,
     required this.novel,
     required this.state,
-    required this.local,
+    this.local,
+    this.repository,
     this.initialPage,
     this.initialChapter,
-  });
+  }) : assert(local != null || repository != null);
 
   final Novel novel;
   final LibraryState state;
-  final LocalLibraryStore local;
+  final LocalLibraryStore? local;
+  final NovelRepository? repository;
 
-  /// 指定从 0 基页码打开（如从页码书签或 PDF 切换进入）。
+  /// 指定从 0 基页码打开（如从页码书签、在线漫画话内书签或 PDF 切换进入）。
   final int? initialPage;
 
   /// 指定从 `novel.chapters` 对应的 0 基章节打开（如从详情页点击章节）。
@@ -319,6 +326,17 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   List<MangaChapterEntry> _chapters = const [];
   Set<int> _chapterStartPages = const {};
 
+  /// 在线漫画（`isSourceNovelId`）分话状态。
+  late Novel _effectiveNovel = widget.novel;
+  List<NovelChapter> _onlineEpisodes = const [];
+  int _onlineEpisodeIndex = 0;
+  List<String> _onlineImageSpecs = const [];
+  int _onlineLoadToken = 0;
+  Timer? _onlinePrefetchTimer;
+
+  bool get _isOnline =>
+      isSourceNovelId(widget.novel.id) && widget.repository != null;
+
   /// 仅用于图片文件夹漫画：页面 URI 清单。
   ComicFolderManifest? _folderManifest;
 
@@ -345,7 +363,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   bool _lastSpreadEnabled = false;
   bool _lastCoverOffset = true;
 
-  LocalBook? get _book => widget.local.bookFor(widget.novel.id);
+  LocalBook? get _book => widget.local?.bookFor(widget.novel.id);
 
   void _syncReadingActivity() {
     _readingActivity.setActive(
@@ -389,13 +407,37 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     }
   }
 
+  static List<String> _parseOnlineMangaSpecs(String rawText) {
+    final specs = <String>[];
+    for (final line in rawText.split(RegExp(r'\r?\n+'))) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty) continue;
+      final markerUrl = readerIllustrationUrl(trimmed);
+      if (markerUrl != null && markerUrl.isNotEmpty) {
+        specs.add(markerUrl);
+      } else if (trimmed.startsWith('http://') ||
+          trimmed.startsWith('https://')) {
+        specs.add(trimmed);
+      }
+    }
+    return specs;
+  }
+
   Future<void> _initBookSource() async {
+    if (_isOnline) {
+      await _initOnlineMangaSource();
+      return;
+    }
     setState(() {
       _loadingDescriptor = true;
       _descriptorError = null;
     });
     try {
-      await widget.local.ensureReady(widget.novel.id);
+      final local = widget.local;
+      if (local == null) {
+        throw StateError('缺少本地书库实例');
+      }
+      await local.ensureReady(widget.novel.id);
       final book = _book;
       if (book == null) {
         throw StateError('本地漫画不存在或已被移除');
@@ -409,14 +451,10 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
       switch (book.kind) {
         case LocalBookKind.comic:
           if (book.isComicFolder) {
-            folderManifest = await widget.local.loadComicFolderManifest(
-              book.id,
-            );
+            folderManifest = await local.loadComicFolderManifest(book.id);
             resolvedCount = folderManifest?.pages.length ?? book.pageCount;
           } else if (book.isComicSeries) {
-            final seriesManifest = await widget.local.loadComicSeriesManifest(
-              book.id,
-            );
+            final seriesManifest = await local.loadComicSeriesManifest(book.id);
             resolvedCount = seriesManifest?.pageCount ?? book.pageCount;
           } else {
             resolvedCount = book.pageCount;
@@ -432,9 +470,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
             ]);
           }
         case LocalBookKind.epub:
-          final descriptor = await widget.local.loadEpubMangaDescriptor(
-            book.id,
-          );
+          final descriptor = await local.loadEpubMangaDescriptor(book.id);
           epubPages = descriptor.pages;
           epubSpineMap = descriptor.pageToSpineChapter;
           resolvedCount = epubPages.length;
@@ -497,6 +533,146 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     }
   }
 
+  Future<void> _initOnlineMangaSource() async {
+    setState(() {
+      _loadingDescriptor = true;
+      _descriptorError = null;
+    });
+    try {
+      var episodes = _effectiveNovel.chapters;
+      if (episodes.isEmpty) {
+        episodes = await widget.repository!.chapters(widget.novel.id);
+        _effectiveNovel = _effectiveNovel.withChapters(episodes);
+      }
+      if (!mounted) return;
+      if (episodes.isEmpty) {
+        throw const FormatException('未解析到在线漫画话目录，请检查书源目录规则或尝试换源');
+      }
+      _onlineEpisodes = List<NovelChapter>.unmodifiable(episodes);
+      final saved = widget.state.positionFor(widget.novel.id);
+      final startEpisode =
+          (widget.initialChapter ??
+                  widget.state.chapterForNovel(_effectiveNovel))
+              .clamp(0, episodes.length - 1);
+      var startIntraPage = 0;
+      if (widget.initialPage != null) {
+        startIntraPage = math.max(0, widget.initialPage!);
+      } else if (saved != null &&
+          widget.state.chapterForPosition(_effectiveNovel, saved) ==
+              startEpisode &&
+          saved.paragraphIndex != null) {
+        startIntraPage = math.max(0, saved.paragraphIndex!);
+      }
+      await _loadOnlineEpisode(startEpisode, targetPage: startIntraPage);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadingDescriptor = false;
+        _descriptorError = error;
+      });
+      _syncReadingActivity();
+    }
+  }
+
+  Future<void> _loadOnlineEpisode(
+    int episodeIndex, {
+    int targetPage = 0,
+    bool jumpToLastPage = false,
+  }) async {
+    if (_onlineEpisodes.isEmpty || widget.repository == null) return;
+    final clampedEpisode = episodeIndex.clamp(0, _onlineEpisodes.length - 1);
+    final token = ++_onlineLoadToken;
+    _onlinePrefetchTimer?.cancel();
+    if (_dirtyPosition && _pageCount > 0) {
+      await _saveCurrentPosition(_page, notify: false);
+    }
+    if (!mounted || token != _onlineLoadToken) return;
+    setState(() {
+      _loadingDescriptor = true;
+      _descriptorError = null;
+      _onlineEpisodeIndex = clampedEpisode;
+    });
+
+    try {
+      final episode = _onlineEpisodes[clampedEpisode];
+      final rawText = await widget.repository!.chapterContent(
+        widget.novel.id,
+        episode,
+      );
+      if (!mounted || token != _onlineLoadToken) return;
+      final specs = _parseOnlineMangaSpecs(rawText);
+      _pageCache.clear();
+      _pendingPages.clear();
+      _knownSizes.clear();
+      _webtoonItemKeys.clear();
+      _currentSpreads = const [];
+      _pageController?.dispose();
+      _pageController = null;
+      if (_webtoonController.hasClients) {
+        _webtoonController.jumpTo(0);
+      }
+
+      final startPage = specs.isEmpty
+          ? 0
+          : (jumpToLastPage
+                ? specs.length - 1
+                : targetPage.clamp(0, specs.length - 1));
+      _onlineImageSpecs = List<String>.unmodifiable(specs);
+      _pageCount = specs.length;
+      _chapters = const [];
+      _chapterStartPages = const {};
+      _page = startPage;
+      _loadingDescriptor = false;
+      _syncReadingActivity();
+      setState(() {});
+
+      if (specs.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || token != _onlineLoadToken) return;
+          _preloadNeighbors(_page);
+          if (widget.state.readerPreferences.mangaMode ==
+                  MangaReadingMode.webtoon &&
+              _page > 0) {
+            _scrollToWebtoonPage(_page, animate: false);
+          }
+          unawaited(_saveCurrentPosition(_page));
+        });
+        _scheduleNextEpisodePrefetch(clampedEpisode, token);
+      }
+    } catch (error) {
+      if (!mounted || token != _onlineLoadToken) return;
+      setState(() {
+        _loadingDescriptor = false;
+        _descriptorError = error;
+      });
+      _syncReadingActivity();
+    }
+  }
+
+  void _scheduleNextEpisodePrefetch(int currentEpisode, int token) {
+    final nextEpisode = currentEpisode + 1;
+    if (nextEpisode >= _onlineEpisodes.length || widget.repository == null) {
+      return;
+    }
+    _onlinePrefetchTimer?.cancel();
+    _onlinePrefetchTimer = Timer(const Duration(milliseconds: 700), () async {
+      if (!mounted || token != _onlineLoadToken) return;
+      try {
+        final raw = await widget.repository!.chapterContent(
+          widget.novel.id,
+          _onlineEpisodes[nextEpisode],
+        );
+        if (!mounted || token != _onlineLoadToken) return;
+        final specs = _parseOnlineMangaSpecs(raw);
+        for (final spec in specs.take(2)) {
+          SourceImageCache.shared
+              .fetchImage(spec, bookId: widget.novel.id)
+              .ignore();
+        }
+      } catch (_) {}
+    });
+  }
+
   int _resolveInitialPage({
     required LocalBook book,
     required int pageCount,
@@ -551,6 +727,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _readingActivity.dispose();
+    _onlinePrefetchTimer?.cancel();
     _scrollSaveTimer?.cancel();
     if (_dirtyPosition && _pageCount > 0) {
       unawaited(_saveCurrentPosition(_page, notify: false));
@@ -585,34 +762,44 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   }
 
   Future<Uint8List> _readRawPageBytes(int page) async {
+    if (_isOnline) {
+      if (page < 0 || page >= _onlineImageSpecs.length) {
+        throw RangeError.index(page, _onlineImageSpecs, 'page');
+      }
+      return SourceImageCache.shared.fetchImage(
+        _onlineImageSpecs[page],
+        bookId: widget.novel.id,
+      );
+    }
+    final local = widget.local;
     final book = _book;
-    if (book == null) throw StateError('书籍已移除');
+    if (local == null || book == null) throw StateError('书籍已移除');
     switch (book.kind) {
       case LocalBookKind.comic:
         if (book.isComicFolder) {
           final manifest =
               _folderManifest ??
-              await widget.local.loadComicFolderManifest(book.id);
+              await local.loadComicFolderManifest(book.id);
           if (manifest == null || page < 0 || page >= manifest.pages.length) {
             throw StateError('漫画文件夹清单缺失或页码越界');
           }
           _folderManifest = manifest;
-          return widget.local.readComicFolderPage(manifest.pages[page]);
+          return local.readComicFolderPage(manifest.pages[page]);
         }
         if (book.isComicSeries) {
           final width = _targetDecodeWidth().clamp(900, 2400);
-          return widget.local.readComicSeriesPage(
+          return local.readComicSeriesPage(
             book.id,
             page,
             pdfDecodeWidth: width,
           );
         }
-        return widget.local.readComicArchivePage(book.id, page);
+        return local.readComicArchivePage(book.id, page);
       case LocalBookKind.epub:
         if (page < 0 || page >= _epubPages.length) {
           throw RangeError.index(page, _epubPages, 'page');
         }
-        return widget.local.readEpubMangaEntry(book.id, _epubPages[page]);
+        return local.readEpubMangaEntry(book.id, _epubPages[page]);
       case LocalBookKind.pdf:
         final width = _targetDecodeWidth().clamp(900, 2400);
         final path = await LocalPlatform.renderPdfPage(
@@ -769,6 +956,26 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
 
   Future<void> _saveCurrentPosition(int page, {bool notify = true}) async {
     if (_pageCount <= 0) return;
+    if (_isOnline) {
+      if (_onlineEpisodes.isEmpty) return;
+      _dirtyPosition = false;
+      final clamped = page.clamp(0, _pageCount - 1);
+      final isFinalPage =
+          clamped >= _pageCount - 1 || _spreadCoversLastPage(clamped);
+      final offsetInEpisode = isFinalPage ? _pageCount : clamped + 1;
+      await widget.state
+          .savePosition(
+            novel: _effectiveNovel,
+            chapter: _onlineEpisodeIndex.clamp(0, _onlineEpisodes.length - 1),
+            offset: offsetInEpisode.toDouble(),
+            maximum: math.max(1, _pageCount).toDouble(),
+            paragraphIndex: clamped,
+            width: _viewportWidth,
+            notify: notify,
+          )
+          .catchError((_) {});
+      return;
+    }
     final book = _book;
     if (book == null) return;
     _dirtyPosition = false;
@@ -990,10 +1197,27 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     final mode = widget.state.readerPreferences.mangaMode;
     if (mode == MangaReadingMode.webtoon) {
       if (!_webtoonController.hasClients) return;
+      final maxExtent = _webtoonController.position.maxScrollExtent;
+      if (_isOnline &&
+          delta < 0 &&
+          _webtoonController.offset <= 2.0 &&
+          _onlineEpisodeIndex > 0) {
+        unawaited(
+          _loadOnlineEpisode(_onlineEpisodeIndex - 1, jumpToLastPage: true),
+        );
+        return;
+      }
+      if (_isOnline &&
+          delta > 0 &&
+          _webtoonController.offset >= maxExtent - 2.0 &&
+          _onlineEpisodeIndex + 1 < _onlineEpisodes.length) {
+        unawaited(_loadOnlineEpisode(_onlineEpisodeIndex + 1, targetPage: 0));
+        return;
+      }
       final step = (_viewportHeight > 0 ? _viewportHeight : 600.0) * 0.82;
       final nextOffset = (_webtoonController.offset + step * delta).clamp(
         0.0,
-        _webtoonController.position.maxScrollExtent,
+        maxExtent,
       );
       if (widget.state.effectiveReduceMotion) {
         _webtoonController.jumpTo(nextOffset);
@@ -1012,6 +1236,20 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     final currentIdx = _spreadIndexForPage(_currentSpreads, _page);
     final nextIdx = (currentIdx + delta).clamp(0, _currentSpreads.length - 1);
     if (nextIdx == currentIdx) {
+      if (_isOnline) {
+        if (delta > 0 && _onlineEpisodeIndex + 1 < _onlineEpisodes.length) {
+          unawaited(_loadOnlineEpisode(_onlineEpisodeIndex + 1, targetPage: 0));
+          return;
+        }
+        if (delta < 0 && _onlineEpisodeIndex > 0) {
+          unawaited(
+            _loadOnlineEpisode(_onlineEpisodeIndex - 1, jumpToLastPage: true),
+          );
+          return;
+        }
+        showNovelFeedback(context, delta > 0 ? '已是最后一话最后一页' : '已是第一话第一页');
+        return;
+      }
       showNovelFeedback(context, delta > 0 ? '已是最后一页' : '已是第一页');
       return;
     }
@@ -1063,6 +1301,17 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   List<ReaderBookmark> _pageBookmarks([int? targetPage]) {
     if (_pageCount <= 0) return const [];
     final page = targetPage ?? _page;
+    if (_isOnline && _onlineEpisodes.isNotEmpty) {
+      return [
+        for (final mark in widget.state.bookmarksFor(widget.novel.id))
+          if (!mark.isUnderline &&
+              mark.quote.isEmpty &&
+              widget.state.chapterForPosition(_effectiveNovel, mark.position) ==
+                  _onlineEpisodeIndex &&
+              (mark.position.paragraphIndex ?? 0) == page)
+            mark,
+      ];
+    }
     return [
       for (final mark in widget.state.bookmarksFor(widget.novel.id))
         if (!mark.isUnderline &&
@@ -1092,6 +1341,37 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
       return;
     }
     try {
+      if (_isOnline && _onlineEpisodes.isNotEmpty) {
+        final ep = _onlineEpisodes[
+          _onlineEpisodeIndex.clamp(0, _onlineEpisodes.length - 1)
+        ];
+        final fraction = _pageCount <= 1
+            ? 1.0
+            : (page / (_pageCount - 1)).clamp(0.0, 1.0);
+        final mark = await widget.state.addBookmark(
+          novel: _effectiveNovel,
+          position: ReadingPosition(
+            chapter: _onlineEpisodeIndex,
+            chapterId: ep.id,
+            offset: page.toDouble(),
+            fraction: fraction,
+            fontSize: widget.state.fontSize,
+            width: 0,
+            updatedAt: DateTime.now().millisecondsSinceEpoch,
+            lineHeight: widget.state.lineHeight,
+            paragraphIndex: page,
+          ),
+        );
+        if (mounted) {
+          showNovelFeedback(
+            context,
+            mark == null
+                ? '书签保存失败，请重试'
+                : '已添加${ep.title} · 第 ${page + 1} 页书签',
+          );
+        }
+        return;
+      }
       final ch = _chapterForPage(page);
       final title = ch != null
           ? '${ch.title} · 第 ${page + 1} 页'
@@ -1121,8 +1401,9 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   }
 
   Future<void> _switchToNormalReader() async {
+    final local = widget.local;
     final book = _book;
-    if (book == null) return;
+    if (local == null || book == null) return;
     if (book.kind != LocalBookKind.epub && book.kind != LocalBookKind.pdf) {
       return;
     }
@@ -1134,7 +1415,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
       destination = LocalPdfReaderPage(
         novel: widget.novel,
         state: widget.state,
-        local: widget.local,
+        local: local,
         initialPage: _page,
       );
     } else {
@@ -1145,7 +1426,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
       destination = LocalEpubReaderPage(
         novel: widget.novel,
         state: widget.state,
-        local: widget.local,
+        local: local,
         initialChapter: spineChapter,
       );
     }
@@ -1158,21 +1439,65 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   }
 
   Future<void> _openNavigationSheet() async {
-    final picked = await showJellySheet<int>(
-      context: context,
-      reduceMotion: widget.state.effectiveReduceMotion,
-      builder: (sheetContext) => _MangaNavigationSheet(
-        state: widget.state,
-        novelId: widget.novel.id,
-        pageCount: _pageCount,
-        currentPage: _page,
-        chapters: _chapters,
-        currentChapterIndex: _chapterIndexForPage(_page),
-        isSeries: _book?.isComicSeries ?? false,
-      ),
-    );
+    final picked =
+        await showJellySheet<({int? episodeIndex, int page})>(
+          context: context,
+          reduceMotion: widget.state.effectiveReduceMotion,
+          builder: (sheetContext) => _MangaNavigationSheet(
+            state: widget.state,
+            novel: _effectiveNovel,
+            novelId: widget.novel.id,
+            pageCount: _pageCount,
+            currentPage: _page,
+            chapters: _chapters,
+            currentChapterIndex: _isOnline
+                ? _onlineEpisodeIndex
+                : _chapterIndexForPage(_page),
+            onlineEpisodes: _isOnline ? _onlineEpisodes : null,
+            isSeries: _book?.isComicSeries ?? false,
+          ),
+        );
     if (picked != null && mounted) {
-      _jumpToPage(picked);
+      if (_isOnline && picked.episodeIndex != null) {
+        if (picked.episodeIndex == _onlineEpisodeIndex && _pageCount > 0) {
+          _jumpToPage(picked.page);
+        } else {
+          unawaited(
+            _loadOnlineEpisode(picked.episodeIndex!, targetPage: picked.page),
+          );
+        }
+      } else {
+        _jumpToPage(picked.page);
+      }
+    }
+  }
+
+  Future<void> _switchOnlineMangaSource() async {
+    final repo = widget.repository;
+    if (!_isOnline || repo == null) return;
+    final currentTitle =
+        _onlineEpisodeIndex >= 0 && _onlineEpisodeIndex < _onlineEpisodes.length
+        ? _onlineEpisodes[_onlineEpisodeIndex].title
+        : null;
+    final switched = await showSwitchBookSourceSheet(
+      context: context,
+      bookId: widget.novel.id,
+      state: widget.state,
+      repository: repo,
+      currentChapterTitle: currentTitle,
+      currentChapterIndex: _onlineEpisodeIndex,
+    );
+    if (switched == null || !mounted) return;
+    _effectiveNovel = switched.novel.withChapters(switched.chapters);
+    _onlineEpisodes = List<NovelChapter>.unmodifiable(switched.chapters);
+    unawaited(
+      widget.state.rememberNovel(_effectiveNovel).catchError((Object _) {}),
+    );
+    if (_onlineEpisodes.isNotEmpty) {
+      await _loadOnlineEpisode(
+        switched.alignedIndex.clamp(0, _onlineEpisodes.length - 1),
+        targetPage: 0,
+      );
     }
   }
 
@@ -1202,43 +1527,80 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     );
   }
 
-  List<ReaderAction> _actions() => [
-    ReaderAction(
-      key: const ValueKey('reader-catalogue-entry'),
-      icon: CupertinoIcons.list_bullet,
-      caption: '目录',
-      label: '目录与书签',
-      onPressed: _pageCount == 0 ? null : _openNavigationSheet,
-      unavailable: _pageCount == 0 ? '暂无页面可导航' : null,
-    ),
-    ReaderAction(
-      key: const ValueKey('manga-mode-entry'),
-      icon: CupertinoIcons.square_split_2x1,
-      caption: '模式',
-      label: '阅读模式与跨页',
-      onPressed: _openModeSheet,
-    ),
-    ReaderAction(
-      key: const ValueKey('reader-appearance-entry'),
-      icon: CupertinoIcons.sun_max,
-      caption: '画面',
-      label: '画面增强与纸色',
-      onPressed: _openVisualSheet,
-    ),
-    ReaderAction(
-      key: const ValueKey('manga-quick-bookmark-entry'),
-      icon: _pageBookmarks().isNotEmpty
-          ? CupertinoIcons.bookmark_fill
-          : CupertinoIcons.bookmark,
-      caption: '书签',
-      label: '添加或取消书签',
-      onPressed: _pageCount == 0 ? null : _toggleBookmark,
-      unavailable: _pageCount == 0 ? '暂无页面可添加书签' : null,
-    ),
-  ];
+  List<ReaderAction> _actions() {
+    final canOpenNav =
+        _pageCount > 0 || (_isOnline && _onlineEpisodes.isNotEmpty);
+    return [
+      ReaderAction(
+        key: const ValueKey('reader-catalogue-entry'),
+        icon: CupertinoIcons.list_bullet,
+        caption: '目录',
+        label: '目录与书签',
+        onPressed: canOpenNav ? _openNavigationSheet : null,
+        unavailable: canOpenNav ? null : '暂无页面可导航',
+      ),
+      ReaderAction(
+        key: const ValueKey('manga-mode-entry'),
+        icon: CupertinoIcons.square_split_2x1,
+        caption: '模式',
+        label: '阅读模式与跨页',
+        onPressed: _openModeSheet,
+      ),
+      ReaderAction(
+        key: const ValueKey('reader-appearance-entry'),
+        icon: CupertinoIcons.sun_max,
+        caption: '画面',
+        label: '画面增强与纸色',
+        onPressed: _openVisualSheet,
+      ),
+      if (_isOnline &&
+          widget.repository != null &&
+          sourceRepositoryOf(widget.repository!) != null)
+        ReaderAction(
+          key: const ValueKey('manga-switch-source-entry'),
+          icon: CupertinoIcons.arrow_right_arrow_left,
+          caption: '换源',
+          label: '切换在线漫画书源',
+          onPressed: _switchOnlineMangaSource,
+        )
+      else
+        ReaderAction(
+          key: const ValueKey('manga-quick-bookmark-entry'),
+          icon: _pageBookmarks().isNotEmpty
+              ? CupertinoIcons.bookmark_fill
+              : CupertinoIcons.bookmark,
+          caption: '书签',
+          label: '添加或取消书签',
+          onPressed: _pageCount == 0 ? null : _toggleBookmark,
+          unavailable: _pageCount == 0 ? '暂无页面可添加书签' : null,
+        ),
+    ];
+  }
 
   String _statusText(ReaderPreferences prefs) {
     if (_loadingDescriptor || _pageCount <= 0) return '';
+    if (_isOnline && _onlineEpisodes.isNotEmpty) {
+      final ep = _onlineEpisodes[
+        _onlineEpisodeIndex.clamp(0, _onlineEpisodes.length - 1)
+      ];
+      String pageLabel = '第 ${_page + 1} / $_pageCount 页';
+      if (prefs.mangaMode != MangaReadingMode.webtoon &&
+          _currentSpreads.isNotEmpty) {
+        final spread =
+            _currentSpreads[_spreadIndexForPage(_currentSpreads, _page)];
+        if (spread.isDouble) {
+          pageLabel =
+              '第 ${spread.firstPage + 1}-${spread.lastPage + 1} / $_pageCount 页';
+        }
+      }
+      final bookPct =
+          (((_onlineEpisodeIndex + (_page + 1) / _pageCount) /
+                      _onlineEpisodes.length) *
+                  100)
+              .round()
+              .clamp(0, 100);
+      return '${ep.title} · $pageLabel · 全书 $bookPct%';
+    }
     final ch = _chapterForPage(_page);
     final pct = (((_page + 1) / _pageCount) * 100).round().clamp(0, 100);
     if (_chapters.length > 1 && ch != null && ch.pageCount > 0) {
@@ -1356,6 +1718,8 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
         final statusBg = dim > 0
             ? Color.alphaBlend(Colors.black.withValues(alpha: dim), canvasColor)
             : canvasColor;
+        final showProgress =
+            _pageCount > 1 || (_isOnline && _onlineEpisodes.length > 1);
         return ReaderVolumePaging(
           enabled: prefs.volumePaging && _pageCount > 0,
           onPage: _stepPageOrSpread,
@@ -1365,12 +1729,12 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
               builder: (themedContext) => ReaderScaffold(
                 chrome: _chrome,
                 novelId: widget.novel.id,
-                title: widget.novel.title,
+                title: _effectiveNovel.title,
                 bookmarkListenable: widget.state.bookmarkChanges,
                 isBookmarked: () => _pageBookmarks().isNotEmpty,
                 onAddBookmark: _pageCount == 0 ? null : _toggleBookmark,
                 actions: _actions(),
-                progress: _pageCount > 1
+                progress: showProgress
                     ? _buildProgressBar(themedContext, prefs)
                     : null,
                 useAtmosphere: false,
@@ -1400,11 +1764,21 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     if (_loadingDescriptor) {
       return Center(child: CircularProgressIndicator(color: muted));
     }
+    final canSwitchOnlineSource =
+        _isOnline &&
+        widget.repository != null &&
+        sourceRepositoryOf(widget.repository!) != null;
     if (_descriptorError != null) {
       final book = _book;
       final canFallback =
           book != null &&
           (book.kind == LocalBookKind.epub || book.kind == LocalBookKind.pdf);
+      final errorMessage = switch (_descriptorError) {
+        final SourceChallengeException e => e.message,
+        final EncryptedOrInvalidImageException e => e.message,
+        final FormatException e => e.message,
+        _ => _isOnline ? '在线漫画章节加载失败，可重试或切换书源' : '漫画加载失败，请检查文件是否完整',
+      };
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(28),
@@ -1414,9 +1788,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
               Icon(Icons.broken_image_outlined, color: muted, size: 48),
               const SizedBox(height: 12),
               Text(
-                _descriptorError is FormatException
-                    ? (_descriptorError as FormatException).message
-                    : '漫画加载失败，请检查文件是否完整',
+                errorMessage,
                 textAlign: TextAlign.center,
                 style: TextStyle(color: muted),
               ),
@@ -1425,9 +1797,21 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
                 spacing: 12,
                 children: [
                   TextButton(
-                    onPressed: _initBookSource,
+                    onPressed: () {
+                      if (_isOnline && _onlineEpisodes.isNotEmpty) {
+                        unawaited(_loadOnlineEpisode(_onlineEpisodeIndex));
+                      } else {
+                        unawaited(_initBookSource());
+                      }
+                    },
                     child: const Text('重试'),
                   ),
+                  if (canSwitchOnlineSource)
+                    TextButton(
+                      key: const ValueKey('manga-error-switch-source'),
+                      onPressed: _switchOnlineMangaSource,
+                      child: const Text('换源'),
+                    ),
                   if (canFallback)
                     TextButton(
                       onPressed: _switchToNormalReader,
@@ -1450,15 +1834,30 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                isEpub ? '该 EPUB 未提取到可展示的漫画图片' : '未找到可阅读的漫画页面',
+                isEpub
+                    ? '该 EPUB 未提取到可展示的漫画图片'
+                    : _isOnline
+                    ? '本话暂未提取到可展示的漫画图片（可能需脚本动态渲染）'
+                    : '未找到可阅读的漫画页面',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: muted),
               ),
-              if (isEpub) ...[
+              if (isEpub || canSwitchOnlineSource) ...[
                 const SizedBox(height: 12),
-                TextButton(
-                  onPressed: _switchToNormalReader,
-                  child: const Text('切换为常规阅读器'),
+                Wrap(
+                  spacing: 12,
+                  children: [
+                    if (isEpub)
+                      TextButton(
+                        onPressed: _switchToNormalReader,
+                        child: const Text('切换为常规阅读器'),
+                      ),
+                    if (canSwitchOnlineSource)
+                      TextButton(
+                        onPressed: _switchOnlineMangaSource,
+                        child: const Text('换源'),
+                      ),
+                  ],
                 ),
               ],
             ],
@@ -1624,6 +2023,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     double bottomSafe,
   ) {
     final cacheExtent = (_viewportHeight > 0 ? _viewportHeight : 800.0) * 2.0;
+    final hasEpisodeFooter = _isOnline && _onlineEpisodes.length > 1;
     return _ZoomableMangaSurface(
       key: const ValueKey('manga-webtoon-zoom'),
       onViewportTap: _handleViewportTap,
@@ -1634,8 +2034,52 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
         controller: _webtoonController,
         padding: EdgeInsets.only(bottom: bottomSafe),
         cacheExtent: cacheExtent,
-        itemCount: _pageCount,
+        itemCount: _pageCount + (hasEpisodeFooter ? 1 : 0),
         itemBuilder: (context, page) {
+          if (hasEpisodeFooter && page == _pageCount) {
+            final canPrev = _onlineEpisodeIndex > 0;
+            final canNext = _onlineEpisodeIndex + 1 < _onlineEpisodes.length;
+            final nextTitle = canNext
+                ? _onlineEpisodes[_onlineEpisodeIndex + 1].title
+                : '';
+            return Padding(
+              key: const ValueKey('manga-webtoon-episode-footer'),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+              child: Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 12,
+                runSpacing: 8,
+                children: [
+                  if (canPrev)
+                    OutlinedButton.icon(
+                      key: const ValueKey('manga-webtoon-prev-episode'),
+                      onPressed: () => unawaited(
+                        _loadOnlineEpisode(
+                          _onlineEpisodeIndex - 1,
+                          jumpToLastPage: true,
+                        ),
+                      ),
+                      icon: const Icon(CupertinoIcons.chevron_left, size: 15),
+                      label: const Text('上一话'),
+                    ),
+                  if (canNext)
+                    FilledButton.icon(
+                      key: const ValueKey('manga-webtoon-next-episode'),
+                      onPressed: () => unawaited(
+                        _loadOnlineEpisode(
+                          _onlineEpisodeIndex + 1,
+                          targetPage: 0,
+                        ),
+                      ),
+                      icon: const Icon(CupertinoIcons.chevron_right, size: 15),
+                      label: Text('下一话：$nextTitle'),
+                    )
+                  else
+                    Text('已读到最新一话', style: TextStyle(color: muted)),
+                ],
+              ),
+            );
+          }
           final itemKey = _webtoonItemKeys.putIfAbsent(
             page,
             () => GlobalKey(debugLabel: 'webtoon-page-$page'),
@@ -1797,29 +2241,45 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     final isRtl = prefs.mangaMode == MangaReadingMode.rtl;
     final isSeries = _book?.isComicSeries ?? false;
     final chapterIdx = _chapterIndexForPage(_page);
-    final hasMultiChapters = _chapters.length > 1;
-    final activeChapter =
-        hasMultiChapters && chapterIdx >= 0 && chapterIdx < _chapters.length
-            ? _chapters[chapterIdx]
-            : null;
+    final hasOnlineEpisodes = _isOnline && _onlineEpisodes.length > 1;
+    final hasMultiChapters = hasOnlineEpisodes || _chapters.length > 1;
+    final activeChapter = !hasOnlineEpisodes &&
+            _chapters.length > 1 &&
+            chapterIdx >= 0 &&
+            chapterIdx < _chapters.length
+        ? _chapters[chapterIdx]
+        : null;
     final sliderCount = activeChapter != null
         ? math.max(1, activeChapter.pageCount)
         : math.max(1, count);
     final sliderPage = activeChapter != null
         ? (_page - activeChapter.startPage).clamp(0, sliderCount - 1)
         : _page.clamp(0, sliderCount - 1);
-    final canPrevChapter = hasMultiChapters && chapterIdx > 0;
-    final canNextChapter =
-        hasMultiChapters && chapterIdx >= 0 && chapterIdx + 1 < _chapters.length;
+    final canPrevChapter = hasOnlineEpisodes
+        ? _onlineEpisodeIndex > 0
+        : (hasMultiChapters && chapterIdx > 0);
+    final canNextChapter = hasOnlineEpisodes
+        ? (_onlineEpisodeIndex + 1 < _onlineEpisodes.length)
+        : (hasMultiChapters &&
+              chapterIdx >= 0 &&
+              chapterIdx + 1 < _chapters.length);
     final unitNoun = isSeries ? '卷' : '话';
 
     void goPrevChapter() {
       if (!canPrevChapter) return;
+      if (hasOnlineEpisodes) {
+        unawaited(_loadOnlineEpisode(_onlineEpisodeIndex - 1, targetPage: 0));
+        return;
+      }
       _jumpToPage(_chapters[chapterIdx - 1].startPage);
     }
 
     void goNextChapter() {
       if (!canNextChapter) return;
+      if (hasOnlineEpisodes) {
+        unawaited(_loadOnlineEpisode(_onlineEpisodeIndex + 1, targetPage: 0));
+        return;
+      }
       _jumpToPage(_chapters[chapterIdx + 1].startPage);
     }
 
@@ -2136,20 +2596,24 @@ class _ZoomableMangaSurfaceState extends State<_ZoomableMangaSurface>
 class _MangaNavigationSheet extends StatefulWidget {
   const _MangaNavigationSheet({
     required this.state,
+    required this.novel,
     required this.novelId,
     required this.pageCount,
     required this.currentPage,
     required this.chapters,
     required this.currentChapterIndex,
+    this.onlineEpisodes,
     this.isSeries = false,
   });
 
   final LibraryState state;
+  final Novel novel;
   final int novelId;
   final int pageCount;
   final int currentPage;
   final List<MangaChapterEntry> chapters;
   final int currentChapterIndex;
+  final List<NovelChapter>? onlineEpisodes;
   final bool isSeries;
 
   @override
@@ -2157,20 +2621,31 @@ class _MangaNavigationSheet extends StatefulWidget {
 }
 
 class _MangaNavigationSheetState extends State<_MangaNavigationSheet> {
-  late bool _showBookmarks = widget.chapters.isEmpty;
+  bool get _hasOnlineEpisodes =>
+      widget.onlineEpisodes != null && widget.onlineEpisodes!.isNotEmpty;
+  bool get _hasChapters => _hasOnlineEpisodes || widget.chapters.isNotEmpty;
+  late bool _showBookmarks = !_hasChapters;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.state.bookmarkChanges,
     builder: (context, _) {
       final scheme = Theme.of(context).colorScheme;
-      final marks = [
-        for (final mark in widget.state.bookmarksFor(widget.novelId))
-          if (!mark.isUnderline &&
-              mark.position.chapter >= 0 &&
-              mark.position.chapter < widget.pageCount)
-            mark,
-      ];
+      final marks = _hasOnlineEpisodes
+          ? [
+              for (final mark in widget.state.bookmarksFor(widget.novelId))
+                if (!mark.isUnderline) mark,
+            ]
+          : [
+              for (final mark in widget.state.bookmarksFor(widget.novelId))
+                if (!mark.isUnderline &&
+                    mark.position.chapter >= 0 &&
+                    mark.position.chapter < widget.pageCount)
+                  mark,
+            ];
+      final chapterTotal = _hasOnlineEpisodes
+          ? widget.onlineEpisodes!.length
+          : widget.chapters.length;
       return Padding(
         key: const ValueKey('manga-navigation-sheet'),
         padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
@@ -2179,14 +2654,14 @@ class _MangaNavigationSheetState extends State<_MangaNavigationSheet> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const ArchiveSection(title: '目录与书签', code: 'MANGA / NAVIGATION'),
-            if (widget.chapters.isNotEmpty) ...[
+            if (_hasChapters) ...[
               const SizedBox(height: 10),
               SegmentedButton<bool>(
                 segments: [
                   ButtonSegment<bool>(
                     value: false,
                     label: Text(
-                      '${widget.isSeries ? '分卷' : '章节'} (${widget.chapters.length})',
+                      '${widget.isSeries ? '分卷' : '章节'} ($chapterTotal)',
                     ),
                   ),
                   ButtonSegment<bool>(
@@ -2200,7 +2675,47 @@ class _MangaNavigationSheetState extends State<_MangaNavigationSheet> {
               ),
             ],
             const SizedBox(height: 12),
-            if (!_showBookmarks && widget.chapters.isNotEmpty)
+            if (!_showBookmarks && _hasOnlineEpisodes)
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: widget.onlineEpisodes!.length,
+                  itemBuilder: (context, index) {
+                    final ep = widget.onlineEpisodes![index];
+                    final active = index == widget.currentChapterIndex;
+                    return ListTile(
+                      key: ValueKey('manga-online-episode-$index'),
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        ep.title,
+                        style: TextStyle(
+                          fontWeight: active
+                              ? FontWeight.w600
+                              : FontWeight.w400,
+                          color: active ? scheme.primary : scheme.onSurface,
+                        ),
+                      ),
+                      subtitle: ep.volume.isNotEmpty
+                          ? Text(
+                              ep.volume,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            )
+                          : null,
+                      trailing: active
+                          ? Icon(Icons.circle, size: 8, color: scheme.primary)
+                          : null,
+                      onTap: () => Navigator.pop(
+                        context,
+                        (episodeIndex: index, page: 0),
+                      ),
+                    );
+                  },
+                ),
+              )
+            else if (!_showBookmarks && widget.chapters.isNotEmpty)
               Flexible(
                 child: ListView.builder(
                   shrinkWrap: true,
@@ -2229,7 +2744,10 @@ class _MangaNavigationSheetState extends State<_MangaNavigationSheet> {
                       trailing: active
                           ? Icon(Icons.circle, size: 8, color: scheme.primary)
                           : null,
-                      onTap: () => Navigator.pop(context, ch.startPage),
+                      onTap: () => Navigator.pop(
+                        context,
+                        (episodeIndex: null, page: ch.startPage),
+                      ),
                     );
                   },
                 ),
@@ -2249,12 +2767,27 @@ class _MangaNavigationSheetState extends State<_MangaNavigationSheet> {
                   itemCount: marks.length,
                   itemBuilder: (context, index) {
                     final mark = marks[index];
-                    final active = mark.position.chapter == widget.currentPage;
+                    final epIndex = _hasOnlineEpisodes
+                        ? widget.state.chapterForPosition(
+                            widget.novel,
+                            mark.position,
+                          )
+                        : null;
+                    final intraPage = _hasOnlineEpisodes
+                        ? (mark.position.paragraphIndex ?? 0)
+                        : mark.position.chapter;
+                    final active = _hasOnlineEpisodes
+                        ? (epIndex == widget.currentChapterIndex &&
+                              intraPage == widget.currentPage)
+                        : (mark.position.chapter == widget.currentPage);
+                    final subtitle = _hasOnlineEpisodes
+                        ? '第 ${intraPage + 1} 页'
+                        : '第 ${mark.position.chapter + 1} / ${widget.pageCount} 页';
                     return ListTile(
                       contentPadding: EdgeInsets.zero,
                       title: Text(mark.chapterTitle),
                       subtitle: Text(
-                        '第 ${mark.position.chapter + 1} / ${widget.pageCount} 页',
+                        subtitle,
                         style: TextStyle(
                           fontSize: 12,
                           color: scheme.onSurfaceVariant,
@@ -2286,8 +2819,10 @@ class _MangaNavigationSheetState extends State<_MangaNavigationSheet> {
                           ),
                         ],
                       ),
-                      onTap: () =>
-                          Navigator.pop(context, mark.position.chapter),
+                      onTap: () => Navigator.pop(
+                        context,
+                        (episodeIndex: epIndex, page: intraPage),
+                      ),
                     );
                   },
                 ),

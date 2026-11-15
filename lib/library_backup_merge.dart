@@ -55,6 +55,12 @@ extension LibraryBackupMerge on LibraryState {
         'reader_bookmarks_${entry.key}': jsonEncode(
           entry.value.map((mark) => mark.toJson()).toList(),
         ),
+      if (BookSourceStore.shared.sources.isNotEmpty)
+        'book_sources_v1': BookSourceStore.shared.exportSanitizedJson(),
+      if (OnlineBookOriginStore.shared.origins.isNotEmpty)
+        'online_book_origins_v1': jsonEncode(
+          OnlineBookOriginStore.shared.exportForBackup(),
+        ),
       ...tagStore.exportTagRecords(),
     };
   }
@@ -348,6 +354,17 @@ extension LibraryBackupMerge on LibraryState {
           }
         }
         await _commitLibraryRecords(changed);
+        if (records['book_sources_v1'] case final String rawSources
+            when rawSources.trim().isNotEmpty) {
+          await BookSourceStore.shared.importFromJsonText(rawSources);
+        }
+        if (records['online_book_origins_v1'] case final String rawOrigins
+            when rawOrigins.trim().isNotEmpty) {
+          final decoded = jsonDecode(rawOrigins);
+          if (decoded is List) {
+            await OnlineBookOriginStore.shared.restoreFromBackup(decoded);
+          }
+        }
         if (importTags) {
           // 标签是独立存储，合并语义与书架一致（只增不减）。
           final tagRecords = _remapTagRecords(

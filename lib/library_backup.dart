@@ -7,12 +7,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app_palette.dart';
 import 'catalog.dart';
 import 'haptic_preferences.dart';
+import 'local_library.dart' show isSourceNovelId;
 import 'performance_preferences.dart';
 import 'reader_preferences.dart';
 import 'reader_underline.dart';
 import 'reading_activity.dart';
 import 'reading_moments.dart';
 import 'recovery_archive.dart';
+import 'sources/book_source.dart' show parseBookSourcesJson;
+import 'sources/online_book_origins.dart' show OnlineBookOrigin;
+import 'sources/source_image_cache.dart' show tryParseSourceImageSpec;
 import 'ui_preferences.dart';
 import 'user_fonts.dart';
 
@@ -43,6 +47,11 @@ const backupPurificationKeys = {
 const backupReadingStatsKeys = {
   ReadingActivityStore.preferenceKey,
   ReadingMomentsStore.preferenceKey,
+};
+
+const backupOnlineSourceKeys = {
+  'online_book_origins_v1',
+  'book_sources_v1',
 };
 
 /// 用户在生成备份或上传 WebDAV 时可勾选的附加数据范围。
@@ -109,6 +118,7 @@ bool isLibraryRecordKey(String key) =>
     backupPreferenceKeys.contains(key) ||
     backupPurificationKeys.contains(key) ||
     backupReadingStatsKeys.contains(key) ||
+    backupOnlineSourceKeys.contains(key) ||
     _listKeys.contains(key) ||
     _tagRecordKeys.contains(key) ||
     (_recordKey.hasMatch(key) &&
@@ -211,11 +221,14 @@ LibraryBackup _createLocalBackup(Map<String, Object> records) {
   final omitted = <String>[];
   for (final entry in records.entries) {
     if (!entry.key.startsWith('novel_meta_') || entry.value is! String) continue;
+    final id = int.tryParse(entry.key.substring('novel_meta_'.length));
     final record = jsonDecode(entry.value as String);
     if (record is! Map<String, dynamic> || record['coverUrl'] == null) continue;
     final cover = record['coverUrl'];
-    final uri = cover is String ? Uri.tryParse(cover) : null;
-    if (cover is! String || cover.length > 2048 || uri == null || !_isAllowedCoverUrl(uri)) {
+    if (cover is! String ||
+        cover.length > 2048 ||
+        id == null ||
+        !_isAllowedCoverForBook(id, cover)) {
       record.remove('coverUrl');
       sanitized[entry.key] = jsonEncode(record);
       omitted.add(entry.key);
@@ -337,6 +350,8 @@ Map<String, Object> _validateRecordValues(Map<String, dynamic> input) {
       output[key] = _validatePurificationRecord(key, value);
     } else if (backupReadingStatsKeys.contains(key)) {
       output[key] = _validateReadingStatsRecord(key, value);
+    } else if (backupOnlineSourceKeys.contains(key)) {
+      output[key] = _validateOnlineSourceRecord(key, value);
     } else if (key.startsWith('chapter_') || key.startsWith('shelf_added_')) {
       if (value is! int ||
           value < 0 ||
@@ -416,11 +431,8 @@ Map<String, Object> _validateRecordValues(Map<String, dynamic> input) {
         if (novel.id != int.parse(key.substring('novel_meta_'.length))) {
           throw const FormatException('书籍标识不一致');
         }
-        final url = novel.coverUrl == null
-            ? null
-            : Uri.tryParse(novel.coverUrl!);
         if (novel.coverUrl != null &&
-            (url == null || !_isAllowedCoverUrl(url))) {
+            !_isAllowedCoverForBook(novel.id, novel.coverUrl!)) {
           throw const FormatException('封面地址格式有误');
         }
         final colors = record['colors'];
@@ -537,6 +549,48 @@ String _validateReadingStatsRecord(String key, Object? value) {
       : ReadingMomentsStore.validateRecord(value);
 }
 
+String _validateOnlineSourceRecord(String key, Object? value) {
+  if (value is! String || utf8.encode(value).length > 8 * 1024 * 1024) {
+    throw const FormatException('在线书源记录过大或格式有误');
+  }
+  if (key == 'book_sources_v1') {
+    final decoded = jsonDecode(value);
+    final rawList = switch (decoded) {
+      final List l => l,
+      final Map m when m['sources'] is List => m['sources'] as List,
+      _ => throw const FormatException('在线书源列表格式有误'),
+    };
+    if (rawList.length > 5000) {
+      throw const FormatException('在线书源数量超过备份上限');
+    }
+    final parsed = parseBookSourcesJson(value);
+    if (parsed.invalidCount > 0 && parsed.sources.isEmpty) {
+      throw const FormatException('在线书源记录包含无效项');
+    }
+    return jsonEncode([
+      for (final s in parsed.sources) s.toJson(stripSensitiveHeaders: true),
+    ]);
+  }
+  final decoded = jsonDecode(value);
+  final rawList = switch (decoded) {
+    final List l => l,
+    final Map m when m['origins'] is List => m['origins'] as List,
+    _ => throw const FormatException('在线书籍来源记录格式有误'),
+  };
+  if (rawList.length > 20000) {
+    throw const FormatException('在线书籍来源记录过多');
+  }
+  final validated = <Map<String, Object?>>[];
+  for (final item in rawList) {
+    final origin = OnlineBookOrigin.fromJson(item);
+    if (origin == null) {
+      throw const FormatException('在线书籍来源条目格式有误');
+    }
+    validated.add(origin.toJson());
+  }
+  return jsonEncode(validated);
+}
+
 void _validateBookmark(Object? mark, Set<String> seen) {
   if (mark is! Map) throw const FormatException('书签格式有误');
   final id = mark['id'];
@@ -584,6 +638,15 @@ void _validateBookmark(Object? mark, Set<String> seen) {
     ReaderAnnotationData.fromJson(mark['annotation']);
   }
   decodeReaderUnderlineRanges(mark['underlineRanges'], position: position);
+}
+
+bool _isAllowedCoverForBook(int bookId, String rawCover) {
+  if (rawCover.isEmpty || rawCover.length > 2048) return false;
+  if (isSourceNovelId(bookId)) {
+    return tryParseSourceImageSpec(rawCover) != null;
+  }
+  final uri = Uri.tryParse(rawCover);
+  return uri != null && _isAllowedCoverUrl(uri);
 }
 
 bool _isAllowedCoverUrl(Uri url) {

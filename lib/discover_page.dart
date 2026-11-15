@@ -49,7 +49,9 @@ class DiscoverPage extends StatefulWidget {
 
 class _DiscoverPageState extends State<DiscoverPage> {
   final TagStore _tagStore = TagStore.shared;
+  final BookSourceStore _sourceStore = BookSourceStore.shared;
   bool _loadMoreQueued = false;
+  bool _onlineMode = false;
 
   /// Tag selection now lives in [LibraryFilter.shared], shared with the shelf
   /// (design §5.1/§5.5). This getter is the single selected tag, or null when
@@ -66,13 +68,23 @@ class _DiscoverPageState extends State<DiscoverPage> {
     super.initState();
     _tagStore.addListener(_onTagsChanged);
     LibraryFilter.shared.addListener(_onFilterChanged);
+    _sourceStore.addListener(_onSourcesChanged);
   }
 
   @override
   void dispose() {
     _tagStore.removeListener(_onTagsChanged);
     LibraryFilter.shared.removeListener(_onFilterChanged);
+    _sourceStore.removeListener(_onSourcesChanged);
     super.dispose();
+  }
+
+  void _onSourcesChanged() {
+    if (!mounted) return;
+    if (!_sourceStore.hasActiveSources && _onlineMode) {
+      _onlineMode = false;
+    }
+    setState(() {});
   }
 
   void _onFilterChanged() {
@@ -91,8 +103,52 @@ class _DiscoverPageState extends State<DiscoverPage> {
     LibraryFilter.shared.setSingleTag(null);
   }
 
+  Widget _buildSourceModeSwitcher(BuildContext context) => SizedBox(
+    width: double.infinity,
+    child: SegmentedButton<bool>(
+      key: const ValueKey('discover-source-mode-switcher'),
+      showSelectedIcon: false,
+      segments: const [
+        ButtonSegment<bool>(
+          value: false,
+          icon: Icon(CupertinoIcons.book, size: 15),
+          label: Text('本地馆藏'),
+        ),
+        ButtonSegment<bool>(
+          value: true,
+          icon: Icon(CupertinoIcons.globe, size: 15),
+          label: Text('在线书源'),
+        ),
+      ],
+      selected: {_onlineMode},
+      onSelectionChanged: (next) {
+        if (next.first != _onlineMode) {
+          setState(() => _onlineMode = next.first);
+        }
+      },
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
+    if (_onlineMode && _sourceStore.hasActiveSources) {
+      return GlassHeaderLayout(
+        showHeader: widget.showHeader,
+        header: widget.buildHeader(context),
+        body: OnlineDiscoverView(
+          state: widget.state,
+          repository: widget.repository,
+          headerSwitcher: _buildSourceModeSwitcher(context),
+          onOpenBook: (ctx, book, heroTag) => openDetail(
+            ctx,
+            book,
+            widget.state,
+            widget.repository,
+            coverHeroTag: heroTag,
+          ),
+        ),
+      );
+    }
     final feed = widget.feed;
     return feed == null
         ? _buildContent(context, widget.books)
@@ -266,6 +322,10 @@ class _DiscoverPageState extends State<DiscoverPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if (_sourceStore.hasActiveSources) ...[
+                        _buildSourceModeSwitcher(context),
+                        const SizedBox(height: 12),
+                      ],
                       LoadedContentItem(
                         index: 0,
                         child: _categoryHeader(context),
@@ -1494,6 +1554,7 @@ class _FastScrollerState extends State<_FastScroller> {
 String? mangaBadgeLabelForBook(
   LocalBook? book, {
   required bool isMangaMode,
+  int? onlineEpisodeCount,
 }) {
   if (!isMangaMode && !(book?.isIntrinsicManga ?? false)) return null;
   if (book != null && book.isComicSeries && book.chapters.length > 1) {
@@ -1503,6 +1564,9 @@ String? mangaBadgeLabelForBook(
       book.kind == LocalBookKind.comic &&
       book.chapters.length > 1) {
     return '漫画 · ${book.chapters.length} 话';
+  }
+  if (onlineEpisodeCount != null && onlineEpisodeCount > 1) {
+    return '漫画 · $onlineEpisodeCount 话';
   }
   return '漫画';
 }

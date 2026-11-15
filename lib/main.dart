@@ -29,6 +29,9 @@ import 'reading_widget_cards.dart';
 import 'reading_widget_controller.dart';
 import 'local_platform.dart';
 import 'ui_preferences.dart';
+import 'sources/book_source_store.dart';
+import 'sources/online_book_origins.dart';
+import 'sources/source_repository.dart';
 import 'updates/app_updates.dart';
 import 'updates/update_page.dart';
 import 'wenku_errors.dart';
@@ -123,7 +126,15 @@ Future<void> main() async {
       'setSystemUIOverlayStyle',
       () => SystemChrome.setSystemUIOverlayStyle(novelSystemUiStyle(brightness)),
     );
-    final remote = LegacyWenkuRepository();
+    await _safeStartup('BookSourceStore.load', BookSourceStore.shared.load);
+    await _safeStartup(
+      'OnlineBookOriginStore.load',
+      OnlineBookOriginStore.shared.load,
+    );
+    final remote = RemoteRouterRepository(
+      legacy: LegacyWenkuRepository(),
+      sources: SourceNovelRepository(),
+    );
     final NovelRepository repository;
     if (defaultTargetPlatform == TargetPlatform.android) {
       final local = await _requiredStartup('本地书库', LocalLibraryStore.load);

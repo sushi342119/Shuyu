@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'legacy_transport.dart';
 import 'local_library.dart';
+import 'sources/source_image_cache.dart';
 
 /// Reuses the original Android cover API, with bounded encoded memory and
 /// stable cached futures. Eviction leaves the native disk cache untouched.
@@ -13,6 +14,7 @@ abstract final class LegacyCover {
   );
   static bool Function(int aid)? _canLoadLocal;
   static Future<Uint8List?> Function(int aid)? _loadLocal;
+  static Future<Uint8List?> Function(int aid, {String? coverUrl})? _loadSource;
 
   static void registerLocalLoader({
     required bool Function(int aid) canLoad,
@@ -22,14 +24,23 @@ abstract final class LegacyCover {
     _loadLocal = load;
   }
 
+  static void registerSourceLoader({
+    Future<Uint8List?> Function(int aid, {String? coverUrl})? load,
+  }) {
+    _loadSource = load;
+  }
+
   static void evict(int aid) => _cache.evict(aid);
 
   static bool hasLocalCover(int aid) =>
       isLocalNovelId(aid) &&
       (_cache.peek(aid) != null || (_canLoadLocal?.call(aid) ?? false));
 
+  static bool hasSourceCover(int aid) =>
+      isSourceNovelId(aid) && _cache.peek(aid) != null;
+
   static Uint8List? peek(int aid) => _cache.peek(aid);
-  static Future<Uint8List> bytes(int aid) {
+  static Future<Uint8List> bytes(int aid, {String? coverUrl}) {
     if (isLocalNovelId(aid)) {
       final cached = _cache.peek(aid);
       if (cached != null) return Future.value(cached);
@@ -38,6 +49,17 @@ abstract final class LegacyCover {
         return _cache.loadWith(aid, loader);
       }
       return Future.error(const FormatException('本地书籍没有远程封面'));
+    }
+    if (isSourceNovelId(aid)) {
+      final cached = _cache.peek(aid);
+      if (cached != null) return Future.value(cached);
+      final sourceLoader = _loadSource;
+      return _cache.loadWith(
+        aid,
+        (id) => sourceLoader != null
+            ? sourceLoader(id, coverUrl: coverUrl)
+            : SourceImageCache.shared.fetchCover(id, coverUrl: coverUrl),
+      );
     }
     return _cache.load(aid);
   }

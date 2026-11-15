@@ -8,6 +8,7 @@ import 'app_ui.dart';
 import 'cover_arrival.dart';
 import 'legacy_transport.dart';
 import 'reader_content.dart' show normalizeReaderIllustrationUrl;
+import 'sources/source_image_cache.dart' show tryParseSourceImageSpec;
 
 typedef IllustrationRequest = Future<Uint8List> Function(String url);
 
@@ -85,11 +86,13 @@ class ReaderIllustration extends StatefulWidget {
     this.onOpen,
     this.cache,
     this.fullScreen = false,
+    this.allowExternalSource = false,
   });
   final String url;
   final VoidCallback? onOpen;
   final ReaderIllustrationCache? cache;
   final bool fullScreen;
+  final bool allowExternalSource;
   @override
   State<ReaderIllustration> createState() => _ReaderIllustrationState();
 }
@@ -98,7 +101,10 @@ class _ReaderIllustrationState extends State<ReaderIllustration> {
   late Future<({Uint8List? bytes, Object? error})> _future = _load();
   Future<({Uint8List? bytes, Object? error})> _load() async {
     try {
-      final normalized = normalizeReaderIllustrationUrl(widget.url);
+      final normalized =
+          widget.allowExternalSource && widget.cache != null
+          ? tryParseSourceImageSpec(widget.url)?.toRawSpec()
+          : normalizeReaderIllustrationUrl(widget.url);
       if (normalized == null) throw const FormatException('插图地址格式无效');
       return (
         bytes: await (widget.cache ?? ReaderIllustrationCache.shared).load(
@@ -114,7 +120,11 @@ class _ReaderIllustrationState extends State<ReaderIllustration> {
   @override
   void didUpdateWidget(ReaderIllustration old) {
     super.didUpdateWidget(old);
-    if (old.url != widget.url || old.cache != widget.cache) _future = _load();
+    if (old.url != widget.url ||
+        old.cache != widget.cache ||
+        old.allowExternalSource != widget.allowExternalSource) {
+      _future = _load();
+    }
   }
 
   @override
@@ -202,10 +212,12 @@ class ReaderIllustrationGallery extends StatefulWidget {
     required this.urls,
     required this.initialUrl,
     this.cache,
+    this.allowExternalSource = false,
   }) : assert(urls.length > 0);
   final List<String> urls;
   final String initialUrl;
   final ReaderIllustrationCache? cache;
+  final bool allowExternalSource;
   @override
   State<ReaderIllustrationGallery> createState() =>
       _ReaderIllustrationGalleryState();
@@ -259,6 +271,7 @@ class _ReaderIllustrationGalleryState extends State<ReaderIllustrationGallery> {
                 child: ReaderIllustration(
                   url: widget.urls[index],
                   cache: widget.cache,
+                  allowExternalSource: widget.allowExternalSource,
                   fullScreen: true,
                 ),
               ),

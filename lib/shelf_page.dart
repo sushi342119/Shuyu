@@ -61,12 +61,14 @@ class _ShelfPageState extends State<ShelfPage> {
     orElse: () => _ShelfSort.recentRead,
   );
   LibraryState get state => widget.state;
+  bool _checkingOnlineUpdates = false;
   late final _changes = Listenable.merge([
     state,
     state.historyChanges,
     state.shelfViewChanges,
     TagStore.shared,
     LibraryFilter.shared,
+    OnlineBookOriginStore.shared,
     localLibraryOf(widget.repository),
   ]);
 
@@ -76,6 +78,29 @@ class _ShelfPageState extends State<ShelfPage> {
     _scroll.dispose();
     _query.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkOnlineShelfUpdates(BuildContext context) async {
+    if (_checkingOnlineUpdates) return;
+    final sourceRepo = sourceRepositoryOf(widget.repository);
+    if (sourceRepo == null) return;
+    setState(() => _checkingOnlineUpdates = true);
+    try {
+      final summary = await sourceRepo.checkShelfUpdates(state.shelf);
+      if (!context.mounted) return;
+      showNovelFeedback(
+        context,
+        summary.updatedBooks > 0
+            ? '追更检查完成：${summary.updatedBooks} 本在线书籍新增 ${summary.newChapters} 章'
+            : '追更检查完成：书架在线书籍均已是最新',
+      );
+    } catch (error) {
+      if (context.mounted) {
+        showNovelFeedback(context, '追更检查失败：$error');
+      }
+    } finally {
+      if (mounted) setState(() => _checkingOnlineUpdates = false);
+    }
   }
 
   bool _matches(int id) {
@@ -106,6 +131,10 @@ class _ShelfPageState extends State<ShelfPage> {
     if (source != null) return local!.toNovel(source);
     final cached = state.cachedNovel(id);
     if (cached != null) return cached;
+    if (isSourceNovelId(id)) {
+      final origin = OnlineBookOriginStore.shared.byBookId(id);
+      if (origin != null) return origin.toNovel();
+    }
     if (feedById != null) return feedById[id];
     for (final book in widget.books) {
       if (book.id == id) return book;
@@ -232,6 +261,18 @@ class _ShelfPageState extends State<ShelfPage> {
                             ),
                           ),
                         ),
+                        if (state.shelf.any(isSourceNovelId) &&
+                            sourceRepositoryOf(widget.repository) != null)
+                          GlassIconButton(
+                            key: const ValueKey('shelf-check-online-updates'),
+                            icon: CupertinoIcons.arrow_2_circlepath,
+                            label: _checkingOnlineUpdates
+                                ? '正在检查追更'
+                                : '检查在线追更',
+                            onPressed: _checkingOnlineUpdates
+                                ? null
+                                : () => _checkOnlineShelfUpdates(context),
+                          ),
                         GlassMenuAnchor(
                           child: Builder(
                             builder: (buttonContext) => GlassTextButton(
@@ -805,15 +846,31 @@ class _ShelfPageState extends State<ShelfPage> {
   String? _mangaBadgeText(int id) {
     final local = localLibraryOf(widget.repository);
     final localBook = local?.bookFor(id);
+    int? onlineEpisodes;
+    if (isSourceNovelId(id)) {
+      final known = _known(id);
+      onlineEpisodes = known != null && known.chapters.isNotEmpty
+          ? known.chapters.length
+          : (known?.chapterCount ??
+                OnlineBookOriginStore.shared.byBookId(id)?.knownChapterCount);
+    }
     return mangaBadgeLabelForBook(
       localBook,
       isMangaMode: state.isMangaModeForBook(id, book: localBook),
+      onlineEpisodeCount: onlineEpisodes,
     );
   }
 
   String _shelfProgressCaption(Novel book) {
-    if (!state.hasRead(book.id)) return '未读';
-    if (state.finishedReading(book)) return '已读完';
+    final unreadUpdates = isSourceNovelId(book.id)
+        ? (OnlineBookOriginStore.shared.byBookId(book.id)?.unreadUpdateCount ??
+              0)
+        : 0;
+    final updatePrefix = unreadUpdates > 0 ? '+$unreadUpdates · ' : '';
+    if (!state.hasRead(book.id)) {
+      return unreadUpdates > 0 ? '新 +$unreadUpdates' : '未读';
+    }
+    if (state.finishedReading(book) && unreadUpdates == 0) return '已读完';
     final localBook = localLibraryOf(widget.repository)?.bookFor(book.id);
     if (localBook != null &&
         localBook.kind == LocalBookKind.comic &&
@@ -831,9 +888,12 @@ class _ShelfPageState extends State<ShelfPage> {
       return '${activeIdx + 1}/${localBook.chapters.length} $unit';
     }
     if (book.chapters.isNotEmpty || book.chapterCount > 0) {
-      return '${state.chapterForNovel(book) + 1}/${book.chapters.isNotEmpty ? book.chapters.length : book.chapterCount}';
+      final total = book.chapters.isNotEmpty
+          ? book.chapters.length
+          : book.chapterCount;
+      return '$updatePrefix${state.chapterForNovel(book) + 1}/$total';
     }
-    return '第 ${state.chapterFor(book.id) + 1} 章';
+    return '$updatePrefix第 ${state.chapterFor(book.id) + 1} 章';
   }
 
   Widget _gridCell(BuildContext context, int id) {

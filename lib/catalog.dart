@@ -11,6 +11,7 @@ class Novel {
     required this.colors,
     this.chapters = const [],
     this.isComplete = false,
+    this.isManga = false,
     this.coverUrl,
     this.lastUpdate,
     this.chapterCount = 0,
@@ -24,6 +25,7 @@ class Novel {
   final List<Color> colors;
   final List<NovelChapter> chapters;
   final bool isComplete;
+  final bool isManga;
   final String? coverUrl;
   final String? lastUpdate;
   final int chapterCount;
@@ -37,6 +39,7 @@ class Novel {
     colors: colors,
     chapters: items,
     isComplete: isComplete,
+    isManga: isManga,
     coverUrl: coverUrl,
     lastUpdate: lastUpdate,
     chapterCount: items.length,
@@ -50,6 +53,7 @@ class Novel {
     'summary': summary,
     'colors': colors.map((color) => color.toARGB32()).toList(),
     'isComplete': isComplete,
+    if (isManga) 'isManga': true,
     'coverUrl': coverUrl,
     'lastUpdate': lastUpdate,
     'chapterCount': chapters.isNotEmpty ? chapters.length : chapterCount,
@@ -73,6 +77,7 @@ class Novel {
           ? colors.map((v) => Color(v as int)).toList()
           : const [Color(0xFF202020), Color(0xFF333333)],
       isComplete: value['isComplete'] == true,
+      isManga: value['isManga'] == true,
       coverUrl: value['coverUrl'] is String ? value['coverUrl'] : null,
       lastUpdate: value['lastUpdate'] is String ? value['lastUpdate'] : null,
       chapterCount: value['chapterCount'] is int

@@ -266,11 +266,13 @@ class ReaderPagedView extends StatefulWidget {
     this.onChapterTurned,
     this.bookTitle,
     this.chrome,
+    this.illustrationCache,
   });
   final ReaderContent content;
   final ReaderPreferences preferences;
   final TextStyle style;
   final ReaderPagedController controller;
+  final ReaderIllustrationCache? illustrationCache;
   final String title;
   final String? bookTitle;
   final Animation<double>? chrome;
@@ -932,14 +934,15 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
       unawaited(() async {
         bool current() => mounted && _adjacentRequests[direction] == key;
         try {
-          final images = await ReaderIllustrationCache.shared
-              .measureLocalImages(
-                chapter.content.illustrations,
-                current: current,
-                prioritize: direction < 0
-                    ? chapter.content.illustrations.reversed.take(4)
-                    : const [],
-              );
+          final images =
+              await (widget.illustrationCache ?? ReaderIllustrationCache.shared)
+                  .measureLocalImages(
+                    chapter.content.illustrations,
+                    current: current,
+                    prioritize: direction < 0
+                        ? chapter.content.illustrations.reversed.take(4)
+                        : const [],
+                  );
           if (!current()) return;
           final pages = await paginateReader(
             content: chapter.content,
@@ -1043,17 +1046,20 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
         await Future<void>.value();
         result = retained?.pagination ?? landed!.pagination;
       } else {
-        final imageSizes = await ReaderIllustrationCache.shared
-            .measureLocalImages(
-              content.illustrations,
-              current: () => mounted && ticket == _generation,
-              prioritize: _localImagePriority(
-                content,
-                (_anchorFor(_pendingPosition) ?? _readingAnchor ?? oldAnchor)
-                    ?.paragraph,
-              ),
-              retainPriority: true,
-            );
+        final imageSizes =
+            await (widget.illustrationCache ?? ReaderIllustrationCache.shared)
+                .measureLocalImages(
+                  content.illustrations,
+                  current: () => mounted && ticket == _generation,
+                  prioritize: _localImagePriority(
+                    content,
+                    (_anchorFor(_pendingPosition) ??
+                            _readingAnchor ??
+                            oldAnchor)
+                        ?.paragraph,
+                  ),
+                  retainPriority: true,
+                );
         if (!mounted || ticket != _generation) return;
         result = await paginateReader(
           content: content,

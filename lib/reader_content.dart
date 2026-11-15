@@ -3,6 +3,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 import 'reader_rich_content.dart';
 import 'reader_coordinate_map.dart';
+import 'sources/source_image_cache.dart' show tryParseSourceImageSpec;
 
 ReaderRichBody _splitParagraphs(String source) => ReaderRichBody.decode(source);
 
@@ -89,8 +90,18 @@ String? normalizeReaderIllustrationUrl(String raw) {
 }
 
 String? readerIllustrationUrl(String paragraph) {
-  const marker = '<!--image-->';
+  const sourceMarker = '<!--source-image-->';
   final text = paragraph.trim();
+  if (text.startsWith(sourceMarker) &&
+      text.endsWith(sourceMarker) &&
+      text.length > sourceMarker.length * 2) {
+    final raw = text.substring(
+      sourceMarker.length,
+      text.length - sourceMarker.length,
+    );
+    return tryParseSourceImageSpec(raw)?.toRawSpec();
+  }
+  const marker = '<!--image-->';
   if (!text.startsWith(marker) ||
       !text.endsWith(marker) ||
       text.length <= marker.length * 2) {

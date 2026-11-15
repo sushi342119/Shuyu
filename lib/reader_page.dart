@@ -267,18 +267,42 @@ class _ReaderPageState extends State<ReaderPage>
     return future;
   }
 
+  ReaderIllustrationCache? _cachedSourceIllustrationCache;
+  int? _cachedSourceIllustrationBookId;
+
+  ReaderIllustrationCache? get _sourceIllustrationCache {
+    if (!isSourceNovelId(_novel.id)) return null;
+    if (_cachedSourceIllustrationCache == null ||
+        _cachedSourceIllustrationBookId != _novel.id) {
+      _cachedSourceIllustrationBookId = _novel.id;
+      _cachedSourceIllustrationCache = ReaderIllustrationCache(
+        request: SourceImageCache.shared.illustrationLoaderFor(
+          bookId: _novel.id,
+        ),
+      );
+    }
+    return _cachedSourceIllustrationCache;
+  }
+
   void _prefetchNeighbours(int index, int generation) {
-    // Only local files are free to read ahead; remote sources stay on demand.
-    if (!isLocalNovelId(_novel.id)) return;
+    final isLocal = isLocalNovelId(_novel.id);
+    final isSource = isSourceNovelId(_novel.id);
+    // Local files warm both neighbours; online book sources gently warm +1 next
+    // chapter so chapter-end turns are instant without spamming upstream sites.
+    if (!isLocal && !isSource) return;
     _prefetchTimer?.cancel();
-    _prefetchTimer = Timer(const Duration(milliseconds: 280), () {
-      if (!mounted || generation != _contentGeneration) return;
-      for (final next in [index + 1, index - 1]) {
-        if (next < 0 || next >= _novel.chapters.length) continue;
-        if (_parsedChapters.containsKey(_parsedKey(next))) continue;
-        unawaited(_parsedChapter(next).then((_) {}, onError: (_) {}));
-      }
-    });
+    _prefetchTimer = Timer(
+      Duration(milliseconds: isLocal ? 280 : 650),
+      () {
+        if (!mounted || generation != _contentGeneration) return;
+        final candidates = isLocal ? [index + 1, index - 1] : [index + 1];
+        for (final next in candidates) {
+          if (next < 0 || next >= _novel.chapters.length) continue;
+          if (_parsedChapters.containsKey(_parsedKey(next))) continue;
+          unawaited(_parsedChapter(next).then((_) {}, onError: (_) {}));
+        }
+      },
+    );
   }
 
   late final AnimationController _chapterReveal;
@@ -1284,14 +1308,23 @@ class _ReaderPageState extends State<ReaderPage>
     final url = readerIllustrationUrl(fragment.text);
     if (url != null) {
       final illustrations = _currentContent?.illustrations ?? [url];
+      final sourceCache = _sourceIllustrationCache;
+      final allowExternal = isSourceNovelId(_novel.id);
       return ClipRRect(
         borderRadius: BorderRadius.circular(ArchiveDesign.panelRadius),
         child: ReaderIllustration(
           url: url,
+          cache: sourceCache,
+          allowExternalSource: allowExternal,
           fullScreen: true,
           onOpen: () => pushNovelPage<void>(
             context,
-            ReaderIllustrationGallery(urls: illustrations, initialUrl: url),
+            ReaderIllustrationGallery(
+              urls: illustrations,
+              initialUrl: url,
+              cache: sourceCache,
+              allowExternalSource: allowExternal,
+            ),
             reduceMotion: widget.state.reduceMotion,
           ),
         ),
@@ -1331,11 +1364,20 @@ class _ReaderPageState extends State<ReaderPage>
     final url = readerIllustrationUrl(paragraphs[index]);
     if (url != null) {
       final illustrations = _currentContent?.illustrations ?? [url];
+      final sourceCache = _sourceIllustrationCache;
+      final allowExternal = isSourceNovelId(_novel.id);
       return ReaderIllustration(
         url: url,
+        cache: sourceCache,
+        allowExternalSource: allowExternal,
         onOpen: () => pushNovelPage<void>(
           context,
-          ReaderIllustrationGallery(urls: illustrations, initialUrl: url),
+          ReaderIllustrationGallery(
+            urls: illustrations,
+            initialUrl: url,
+            cache: sourceCache,
+            allowExternalSource: allowExternal,
+          ),
           reduceMotion: widget.state.reduceMotion,
         ),
       );
@@ -1715,6 +1757,7 @@ class _ReaderPageState extends State<ReaderPage>
           preferences: prefs,
           style: style,
           controller: _paged,
+          illustrationCache: _sourceIllustrationCache,
           title: purifiedTitle,
           bookTitle: _novel.title,
           chrome: _chrome,
@@ -1960,16 +2003,43 @@ class _ReaderPageState extends State<ReaderPage>
                     ),
                     if (failed)
                       SliverToBoxAdapter(
-                        child: Column(
-                          children: [
-                            const Text('章节加载失败'),
-                            GlassTextButton(
-                              onPressed: () => setState(() {
-                                _content = _loadContent();
-                              }),
-                              child: const Text('重试'),
-                            ),
-                          ],
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 26),
+                          child: Column(
+                            children: [
+                              Text(
+                                switch (snapshot.error ?? snapshot.data?.error) {
+                                  final SourceChallengeException e => e.message,
+                                  _ => '章节加载失败',
+                                },
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 8),
+                              Wrap(
+                                alignment: WrapAlignment.center,
+                                spacing: 12,
+                                children: [
+                                  GlassTextButton(
+                                    onPressed: () => setState(() {
+                                      _content = _loadContent();
+                                    }),
+                                    child: const Text('重试'),
+                                  ),
+                                  if (isSourceNovelId(_novel.id) &&
+                                      sourceRepositoryOf(widget.repository) !=
+                                          null)
+                                    GlassTextButton(
+                                      key: const ValueKey(
+                                        'reader-error-switch-source',
+                                      ),
+                                      onPressed: () =>
+                                          _switchSourceInReader(context),
+                                      child: const Text('换源'),
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
                       )
                     else if (!ready)
@@ -2311,6 +2381,33 @@ class _ReaderPageState extends State<ReaderPage>
     } finally {
       _findOpen = false;
     }
+  }
+
+  Future<void> _switchSourceInReader(BuildContext context) async {
+    final currentTitle =
+        _chapter >= 0 && _chapter < _novel.chapters.length
+        ? _novel.chapters[_chapter].title
+        : null;
+    final switched = await showSwitchBookSourceSheet(
+      context: context,
+      bookId: _novel.id,
+      state: widget.state,
+      repository: widget.repository,
+      currentChapterTitle: currentTitle,
+      currentChapterIndex: _chapter,
+    );
+    if (switched == null || !mounted) return;
+    final updated = switched.novel.withChapters(switched.chapters);
+    unawaited(widget.state.rememberNovel(updated).catchError((Object _) {}));
+    setState(() {
+      _parsedChapters.clear();
+      _resolvedChapters.clear();
+      _novel = updated;
+      if (_novel.chapters.isNotEmpty) {
+        _chapter = switched.alignedIndex.clamp(0, _novel.chapters.length - 1);
+      }
+      _content = _loadContent();
+    });
   }
 }
 

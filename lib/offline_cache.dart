@@ -181,10 +181,18 @@ class OfflineCacheStore extends ChangeNotifier {
         if (value is! Map<String, dynamic>) return null;
         final cid = value['id'];
         final title = value['title'];
+        final volume = value['volume'];
         if (cid is! int || cid <= 0 || title is! String || !ids.add(cid)) {
           return null;
         }
-        chapters.add(NovelChapter(title, '', id: cid));
+        chapters.add(
+          NovelChapter(
+            title,
+            '',
+            id: cid,
+            volume: volume is String ? volume : '',
+          ),
+        );
       }
       return meta.withChapters(List.unmodifiable(chapters));
     } on FileSystemException {
@@ -241,7 +249,11 @@ class OfflineCacheStore extends ChangeNotifier {
         'novel': stored.toSnapshot(),
         'chapters': [
           for (final chapter in stored.chapters)
-            {'id': chapter.id, 'title': chapter.title},
+            {
+              'id': chapter.id,
+              'title': chapter.title,
+              if (chapter.volume.isNotEmpty) 'volume': chapter.volume,
+            },
         ],
       };
       final encoded = stored.chapters.length > 300

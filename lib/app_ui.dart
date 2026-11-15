@@ -1777,7 +1777,9 @@ class NovelCover extends StatelessWidget {
       ),
     );
     final hasCover =
-        novel.coverUrl != null || LegacyCover.hasLocalCover(novel.id);
+        novel.coverUrl != null ||
+        LegacyCover.hasLocalCover(novel.id) ||
+        LegacyCover.hasSourceCover(novel.id);
     final rawFace = !hasCover
         ? fallback
         : Builder(
@@ -1791,7 +1793,7 @@ class NovelCover extends StatelessWidget {
               );
               return FutureBuilder<Uint8List>(
                 key: ValueKey('cover-bytes-${novel.id}'),
-                future: LegacyCover.bytes(novel.id),
+                future: LegacyCover.bytes(novel.id, coverUrl: novel.coverUrl),
                 initialData: LegacyCover.peek(novel.id),
                 builder: (context, snapshot) {
                   final bytes = snapshot.data;
@@ -1870,14 +1872,16 @@ class CoverGlow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if ((novel.coverUrl == null && !LegacyCover.hasLocalCover(novel.id)) ||
+    if ((novel.coverUrl == null &&
+            !LegacyCover.hasLocalCover(novel.id) &&
+            !LegacyCover.hasSourceCover(novel.id)) ||
         !PerformanceScope.of(context).blur) {
       return const SizedBox.shrink();
     }
     final dark = Theme.of(context).brightness == Brightness.dark;
     final background = dark ? ArchiveDesign.darkBackground : Colors.white;
     return FutureBuilder(
-      future: LegacyCover.bytes(novel.id),
+      future: LegacyCover.bytes(novel.id, coverUrl: novel.coverUrl),
       builder: (context, snapshot) {
         if (!snapshot.hasData) return const SizedBox.shrink();
         return ShaderMask(

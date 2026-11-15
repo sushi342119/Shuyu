@@ -47,6 +47,12 @@ import 'wenku_errors.dart';
 part 'local_text_worker.dart';
 part 'local_chapter_remap_journal.dart';
 
+/// 线上书源图书 ID 段（`0x20000000 .. 0x3fffffff`）：与旧文库在线 ID（`< 0x20000000`）
+/// 和本地图书 ID（`0x40000000 .. 0x7fffffff`）严格三段隔离，且落在十进制 9~10 位正整数内，
+/// 直接兼容原生 SharedPreferences 白名单与阅读进度存储。
+const sourceNovelIdBase = 0x20000000;
+const sourceNovelIdMax = 0x3fffffff;
+
 /// 本地图书 ID 段：避开文库在线 aid（通常远小于此），落在 int32 范围内，
 /// 因此书架、历史、进度等既有 `id > 0` 逻辑无需改动。
 const localNovelIdBase = 0x40000000;
@@ -55,6 +61,9 @@ const localEpubMaxSourceBytes = 1024 * 1024 * 1024;
 const localTextMaxDecodedBytes = 3 * localTextMaxSourceBytes;
 const localTextMaxReadCodeUnits = 4 * 1024 * 1024;
 
+bool isWenkuNovelId(int id) => id > 0 && id < sourceNovelIdBase;
+bool isSourceNovelId(int id) =>
+    id >= sourceNovelIdBase && id <= sourceNovelIdMax;
 bool isLocalNovelId(int id) => id >= localNovelIdBase && id <= 0x7fffffff;
 bool isLocalBook(int id) => isLocalNovelId(id);
 

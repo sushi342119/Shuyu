@@ -54,10 +54,17 @@ class SettingsPage extends StatelessWidget {
         state.settingsChanges,
         ?localLib,
         ?TagStore.maybeShared,
+        BookSourceStore.shared,
       ]),
       builder: (context, child) {
         final localCount = localLib?.books.length ?? 0;
         final tagCount = TagStore.maybeShared?.tags.length ?? 0;
+        final sourceStore = BookSourceStore.shared;
+        final sourceTrailing = sourceStore.enabledCount > 0
+            ? '已启用 ${sourceStore.enabledCount} 条'
+            : (sourceStore.totalCount > 0
+                  ? '共 ${sourceStore.totalCount} 条'
+                  : null);
         return GlassHeaderLayout(
           showHeader: showHeader,
           header: buildHeader(context),
@@ -242,6 +249,30 @@ class SettingsPage extends StatelessWidget {
                     ]),
                   ],
                 ),
+              ),
+              const SizedBox(height: 24),
+
+              // 在线书源：小说与漫画规则导入、启用开关及四步诊断。
+              sectionHeader(context, '在线书源', '小说 · 漫画 · 规则诊断'),
+              const SizedBox(height: 14),
+              ContentPanel(
+                child: _settingsToolList(context, [
+                  _SettingsBentoItem(
+                    key: const ValueKey('settings-book-sources'),
+                    icon: CupertinoIcons.globe,
+                    title: '在线书源管理',
+                    subtitle: '链接/JSON 导入小说与漫画书源、Cookie 配置与诊断',
+                    trailingText: sourceTrailing,
+                    onTap: () => pushNovelPage<void>(
+                      context,
+                      BookSourceManagePage(
+                        state: state,
+                        repository: repository,
+                      ),
+                      reduceMotion: state.reduceMotion,
+                    ),
+                  ),
+                ]),
               ),
               const SizedBox(height: 24),
 

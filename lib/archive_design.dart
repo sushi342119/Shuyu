@@ -100,12 +100,16 @@ abstract final class ArchiveDesign {
   );
 
   static bool isBookCode(String code) =>
-      RegExp(r'^(WK|LC)-\d+$').hasMatch(code.trim());
+      RegExp(r'^(WK|SR|LC)-\d+$').hasMatch(code.trim());
 
   static String fileCode(int id) {
     if (id >= 0x40000000 && id <= 0x7fffffff) {
       final shortId = (id - 0x40000000) % 100000;
       return 'LC-${shortId.toString().padLeft(5, '0')}';
+    }
+    if (id >= 0x20000000 && id <= 0x3fffffff) {
+      final shortId = (id - 0x20000000) % 100000;
+      return 'SR-${shortId.toString().padLeft(5, '0')}';
     }
     final shortId = id.abs() % 100000;
     return 'WK-${shortId.toString().padLeft(5, '0')}';

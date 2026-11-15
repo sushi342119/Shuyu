@@ -429,7 +429,8 @@ Future<String?> cachedReadingWidgetCover(
   final url =
       state.localLibrary?.novelFor(id)?.coverUrl ??
       state.cachedNovel(id)?.coverUrl;
-  final hasLocal = LegacyCover.hasLocalCover(id);
+  final hasLocal =
+      LegacyCover.hasLocalCover(id) || LegacyCover.hasSourceCover(id);
   if (url == null && !hasLocal) return null;
   try {
     final directory = Directory(
@@ -439,7 +440,7 @@ Future<String?> cachedReadingWidgetCover(
     if (await target.exists()) return target.path;
     final Uint8List bytes = url != null && url.startsWith('file://')
         ? await File(Uri.parse(url).toFilePath()).readAsBytes()
-        : await LegacyCover.bytes(id);
+        : await LegacyCover.bytes(id, coverUrl: url);
     final codec = await ui.instantiateImageCodec(bytes, targetWidth: 360);
     try {
       final frame = await codec.getNextFrame();

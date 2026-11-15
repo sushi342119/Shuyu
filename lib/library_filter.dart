@@ -4,6 +4,7 @@ import 'book_tags.dart';
 import 'catalog.dart';
 import 'library_state.dart';
 import 'local_library.dart';
+import 'sources/online_book_origins.dart';
 import 'ui_preferences.dart';
 
 enum BookFormatFilter {
@@ -113,6 +114,16 @@ class LibraryFilter extends ChangeNotifier {
     LibraryState? state,
   }) {
     if (_formats.isEmpty) return true;
+    if (isSourceNovelId(bookId)) {
+      final isOnlineManga =
+          (state?.isMangaModeForBook(bookId) ?? false) ||
+          (OnlineBookOriginStore.shared.byBookId(bookId)?.isManga ?? false);
+      if (isOnlineManga) {
+        return _formats.contains(BookFormatFilter.comic);
+      }
+      return _formats.contains(BookFormatFilter.novel) ||
+          _formats.contains(BookFormatFilter.txt);
+    }
     final book = local?.bookFor(bookId);
     final kind = book?.kind ?? local?.kindFor(bookId);
     final isManga = switch (kind) {

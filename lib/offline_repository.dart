@@ -4,9 +4,11 @@ import 'dart:collection';
 import 'package:flutter/foundation.dart';
 
 import 'catalog.dart';
+import 'local_library.dart' show isSourceNovelId;
 import 'offline_cache.dart';
 import 'reader_content.dart'
     show readerHasMissingIllustrations, readerIllustrationUrl;
+import 'sources/source_image_cache.dart';
 import 'ui_notifiers.dart';
 
 enum DownloadPhase {
@@ -302,7 +304,9 @@ class OfflineNovelRepository extends FrameChangeNotifier
     if (identical(a, b)) return true;
     if (a.length != b.length) return false;
     for (var index = 0; index < a.length; index++) {
-      if (a[index].id != b[index].id || a[index].title != b[index].title) {
+      if (a[index].id != b[index].id ||
+          a[index].title != b[index].title ||
+          a[index].volume != b[index].volume) {
         return false;
       }
     }
@@ -443,6 +447,7 @@ class OfflineNovelRepository extends FrameChangeNotifier
         try {
           final saved = await cache.readChapter(meta.id, chapter.id);
           if (!_current(job)) return;
+          late final String body;
           if (saved == null) {
             final text = await _fetch(meta.id, chapter, request);
             // Cancelling stops further calls and suppresses a late body commit.
@@ -455,6 +460,21 @@ class OfflineNovelRepository extends FrameChangeNotifier
             );
             if (!_current(job)) return;
             if (!stored) throw StateError('章节已不在本地目录中');
+            body = text;
+          } else {
+            body = saved;
+          }
+          if (isSourceNovelId(meta.id)) {
+            for (final rawLine in body.split(RegExp(r'\r?\n+'))) {
+              if (!_current(job)) return;
+              final imageSpec = readerIllustrationUrl(rawLine.trim());
+              if (imageSpec == null || imageSpec.isEmpty) continue;
+              await SourceImageCache.shared.fetchImage(
+                imageSpec,
+                bookId: meta.id,
+                pinOffline: true,
+              );
+            }
           }
           if (!_current(job)) return;
           job.completed++;
@@ -480,6 +500,9 @@ class OfflineNovelRepository extends FrameChangeNotifier
     final previousJob = _jobs[id];
     cancel(id);
     await cache.removeBook(id);
+    if (isSourceNovelId(id)) {
+      await SourceImageCache.shared.deleteBookImages(id);
+    }
     // A newer download may already own the new cache generation. Deletion
     // completion must not remove that later user action's progress entry.
     if (identical(_jobs[id], previousJob)) _jobs.remove(id);
@@ -495,6 +518,7 @@ class OfflineNovelRepository extends FrameChangeNotifier
     }
     _changed();
     await cache.clear();
+    await SourceImageCache.shared.clearAllImages();
     _jobs.removeWhere((_, job) => !cache.isCurrent(job.novel.id, job.epoch));
     _offlineDirectories.clear();
     _illustrationRepairs.clear();

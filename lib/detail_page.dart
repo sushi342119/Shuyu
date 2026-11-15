@@ -356,10 +356,15 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
         : null;
     final local = localLibraryOf(repository);
     final localBook = local?.bookFor(novel.id);
+    final isOnlineSource = isSourceNovelId(novel.id);
+    final isOnlineManga =
+        isOnlineSource && (novel.isManga || state.isMangaModeForBook(novel.id));
     final chapterUnit =
         (localBook?.kind == LocalBookKind.pdf ||
             localBook?.kind == LocalBookKind.comic)
         ? '页'
+        : isOnlineManga
+        ? '话'
         : '章';
     final comicChapters =
         (localBook?.kind == LocalBookKind.comic &&
@@ -568,8 +573,11 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                                     ),
                                                   ),
                                                 const SizedBox(height: 8),
-                                                Builder(
-                                                  builder: (context) {
+                                                ListenableBuilder(
+                                                  listenable:
+                                                      OnlineBookOriginStore
+                                                          .shared,
+                                                  builder: (context, _) {
                                                     final badgeLabel =
                                                         mangaBadgeLabelForBook(
                                                           localBook,
@@ -578,7 +586,21 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                                                 novel.id,
                                                                 book: localBook,
                                                               ),
+                                                          onlineEpisodeCount:
+                                                              isOnlineSource
+                                                              ? (novel.chapters.isNotEmpty
+                                                                    ? novel.chapters.length
+                                                                    : novel.chapterCount)
+                                                              : null,
                                                         );
+                                                    final origin =
+                                                        isOnlineSource
+                                                        ? OnlineBookOriginStore
+                                                              .shared
+                                                              .byBookId(
+                                                                novel.id,
+                                                              )
+                                                        : null;
                                                     return Wrap(
                                                       spacing: 8,
                                                       runSpacing: 6,
@@ -598,6 +620,64 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                                               'detail-manga-badge-${novel.id}',
                                                             ),
                                                             label: badgeLabel,
+                                                          ),
+                                                        if (origin != null &&
+                                                            origin
+                                                                .sourceName
+                                                                .isNotEmpty)
+                                                          Container(
+                                                            key: ValueKey(
+                                                              'detail-source-pill-${novel.id}',
+                                                            ),
+                                                            padding:
+                                                                const EdgeInsets.symmetric(
+                                                                  horizontal: 8,
+                                                                  vertical: 3,
+                                                                ),
+                                                            decoration: BoxDecoration(
+                                                              color: scheme
+                                                                  .surfaceContainerHighest,
+                                                              borderRadius:
+                                                                  BorderRadius.circular(
+                                                                    999,
+                                                                  ),
+                                                            ),
+                                                            child: Text(
+                                                              '来源：${origin.sourceName}',
+                                                              style: TextStyle(
+                                                                fontSize: 11,
+                                                                color: scheme
+                                                                    .onSurfaceVariant,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        if (isOnlineSource &&
+                                                            sourceRepositoryOf(
+                                                                  repository,
+                                                                ) !=
+                                                                null)
+                                                          ActionChip(
+                                                            key: ValueKey(
+                                                              'detail-switch-source-${novel.id}',
+                                                            ),
+                                                            visualDensity:
+                                                                VisualDensity
+                                                                    .compact,
+                                                            avatar: const Icon(
+                                                              CupertinoIcons
+                                                                  .arrow_right_arrow_left,
+                                                              size: 13,
+                                                            ),
+                                                            label: const Text(
+                                                              '换源',
+                                                              style: TextStyle(
+                                                                fontSize: 11,
+                                                              ),
+                                                            ),
+                                                            onPressed: () =>
+                                                                _switchOnlineSource(
+                                                                  context,
+                                                                ),
                                                           ),
                                                       ],
                                                     );
@@ -649,12 +729,41 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                               if (isLoading) ...[
                                 const DetailSkeleton(),
                               ] else if (loadError != null) ...[
-                                const Center(child: Text('书籍详情加载失败')),
                                 Center(
-                                  child: GlassTextButton(
-                                    onPressed: onRetry,
-                                    child: const Text('重试'),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                    ),
+                                    child: Text(
+                                      loadError is SourceChallengeException
+                                          ? (loadError
+                                                    as SourceChallengeException)
+                                                .message
+                                          : '书籍详情加载失败',
+                                      textAlign: TextAlign.center,
+                                    ),
                                   ),
+                                ),
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  alignment: WrapAlignment.center,
+                                  spacing: 12,
+                                  children: [
+                                    GlassTextButton(
+                                      onPressed: onRetry,
+                                      child: const Text('重试'),
+                                    ),
+                                    if (isOnlineSource &&
+                                        sourceRepositoryOf(repository) != null)
+                                      GlassTextButton(
+                                        key: const ValueKey(
+                                          'detail-error-switch-source',
+                                        ),
+                                        onPressed: () =>
+                                            _switchOnlineSource(context),
+                                        child: const Text('换源'),
+                                      ),
+                                  ],
                                 ),
                               ] else ...[
                                 RevealFromTop(
@@ -1312,6 +1421,48 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       );
   }
 
+  Future<void> _switchOnlineSource(BuildContext context) async {
+    final currentIdx = state.hasRead(novel.id) && novel.chapters.isNotEmpty
+        ? state.chapterForNovel(novel)
+        : 0;
+    final currentTitle =
+        currentIdx >= 0 && currentIdx < novel.chapters.length
+        ? novel.chapters[currentIdx].title
+        : null;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final switched = await showSwitchBookSourceSheet(
+      context: context,
+      bookId: novel.id,
+      state: state,
+      repository: repository,
+      currentChapterTitle: currentTitle,
+      currentChapterIndex: currentIdx,
+    );
+    if (switched == null || !mounted) return;
+    final updated = switched.novel.withChapters(switched.chapters);
+    setState(() => _novelOverride = updated);
+    unawaited(state.rememberNovel(updated).catchError((Object _) {}));
+    if (state.hasRead(novel.id) &&
+        switched.chapters.isNotEmpty &&
+        switched.alignedIndex >= 0 &&
+        switched.alignedIndex < switched.chapters.length) {
+      unawaited(
+        state
+            .savePosition(
+              novel: updated,
+              chapter: switched.alignedIndex,
+              offset: 0,
+              maximum: 1,
+              width: screenWidth,
+            )
+            .catchError((Object _) {}),
+      );
+    }
+    if (loadError != null && onRetry != null) {
+      onRetry!();
+    }
+  }
+
   Future<void> _openReader(BuildContext context, int chapter) async {
     if (_readerOpening || !mounted || !context.mounted) return;
     _readerOpening = true;
@@ -1394,6 +1545,16 @@ Widget readerPageFor({
       state: state,
       local: local,
       initialChapter: chapter,
+    );
+  }
+  if (isSourceNovelId(novel.id) &&
+      (novel.isManga || state.isMangaModeForBook(novel.id))) {
+    return LocalMangaReaderPage(
+      novel: novel,
+      state: state,
+      repository: repository,
+      initialChapter: chapter,
+      initialPage: bookmark?.position.paragraphIndex,
     );
   }
   return ReaderPage(

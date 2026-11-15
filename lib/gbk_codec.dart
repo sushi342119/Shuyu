@@ -55,6 +55,87 @@ String decodeGbkBytes(Uint8List bytes, {bool allowMalformed = true}) {
   return String.fromCharCodes(units);
 }
 
+Uint16List? _cachedGbkEncodeTable;
+
+Uint16List _gbkEncodeTable() {
+  final existing = _cachedGbkEncodeTable;
+  if (existing != null) return existing;
+  final decodeTable = _gbkTable();
+  final encode = Uint16List(65536);
+  for (var lead = 0x81; lead <= 0xfe; lead++) {
+    final rowOffset = (lead - 0x81) * 191;
+    for (var trail = 0x40; trail <= 0xfe; trail++) {
+      if (trail == 0x7f) continue;
+      final cp = decodeTable[rowOffset + (trail - 0x40)];
+      if (cp != 0 && cp != 0xfffd && encode[cp] == 0) {
+        encode[cp] = (lead << 8) | trail;
+      }
+    }
+  }
+  _cachedGbkEncodeTable = encode;
+  return encode;
+}
+
+/// Encodes a Dart [String] into CP936 / GBK bytes in pure Dart.
+Uint8List encodeGbkBytes(String input, {int unmappedByte = 0x3f}) {
+  if (input.isEmpty) return Uint8List(0);
+  final encode = _gbkEncodeTable();
+  final out = BytesBuilder(copy: false);
+  for (final rune in input.runes) {
+    if (rune < 0x80) {
+      out.addByte(rune);
+      continue;
+    }
+    if (rune <= 0xffff) {
+      final pair = encode[rune];
+      if (pair != 0) {
+        out
+          ..addByte((pair >> 8) & 0xff)
+          ..addByte(pair & 0xff);
+        continue;
+      }
+    }
+    out.addByte(unmappedByte & 0xff);
+  }
+  return out.takeBytes();
+}
+
+/// Percent-encodes [value] using either UTF-8 (default) or GBK/GB2312/GB18030
+/// when requested by a book source (`{"charset":"GBK"}`).
+String encodeQueryValueWithCharset(
+  String value, {
+  String? charset,
+  bool spaceAsPlus = false,
+}) {
+  final norm = (charset ?? 'utf-8').trim().toLowerCase();
+  final isGbk =
+      norm.contains('gbk') || norm.contains('gb2312') || norm.contains('gb18030');
+  final bytes = isGbk
+      ? encodeGbkBytes(value)
+      : Uint8List.fromList(utf8.encode(value));
+  final buf = StringBuffer();
+  for (final b in bytes) {
+    final isUnreserved =
+        (b >= 0x41 && b <= 0x5a) || // A-Z
+        (b >= 0x61 && b <= 0x7a) || // a-z
+        (b >= 0x30 && b <= 0x39) || // 0-9
+        b == 0x2d || // -
+        b == 0x5f || // _
+        b == 0x2e || // .
+        b == 0x7e; // ~
+    if (isUnreserved) {
+      buf.writeCharCode(b);
+    } else if (spaceAsPlus && b == 0x20) {
+      buf.write('+');
+    } else {
+      buf
+        ..write('%')
+        ..write(b.toRadixString(16).toUpperCase().padLeft(2, '0'));
+    }
+  }
+  return buf.toString();
+}
+
 const String _gbkDeltaZlibBase64 =
   'eNrtvQd4FNX6OHx2yvaW3jc9hHQSCC30ZgEEQYpIFRBFUaqIgIDSBFREQUBFaQoiiIKU0EsoIYV0'
   '0nvv2Wyy9fzPTNqW2SSae39+3ufLPEl2p5yZeXs778EmYoCFNh7AAQm49GcMfaa+UZ9aNhIQrUcw'
