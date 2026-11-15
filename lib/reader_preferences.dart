@@ -187,7 +187,7 @@ class ReaderPreferences {
     this.paragraphGap = 12,
     this.paragraphGapOverride = false,
     this.catalogueReversed = false,
-    this.indent = false,
+    this.indent = true,
     this.justify = false,
     this.tapPaging = false,
     this.tapBothSidesNext = false,
@@ -428,6 +428,7 @@ class ReaderPreferences {
       'paragraphGapOverride': paragraphGapOverride,
     if (catalogueReversed) 'catalogueReversed': true,
     'indent': indent,
+    if (!indent) 'indentConfigured': true,
     'justify': justify,
     'tapPaging': tapPaging,
     'tapBothSidesNext': tapBothSidesNext,
@@ -494,6 +495,7 @@ class ReaderPreferences {
 
     for (final key in [
       'indent',
+      'indentConfigured',
       'justify',
       'tapPaging',
       'tapBothSidesNext',
@@ -548,7 +550,9 @@ class ReaderPreferences {
           json['paragraphGapOverride'] as bool? ??
           number('paragraphGap', 0, 32, 12) != 12,
       catalogueReversed: json['catalogueReversed'] == true,
-      indent: json['indent'] == true,
+      indent: json['indent'] == false && json['indentConfigured'] == true
+          ? false
+          : true,
       justify: json['justify'] == true,
       tapPaging: json['tapPaging'] == true,
       tapBothSidesNext: json['tapBothSidesNext'] == true,

@@ -35,6 +35,7 @@ import 'reader_preferences.dart' show ReaderPaper, ReaderMode;
 import 'reader_paged_view.dart' show ReaderPagedController, ReaderPagedView;
 import 'reader_pagination.dart' show ReaderPageFragment, ReaderTextAnchor;
 import 'reader_paging.dart';
+import 'reader_text.dart' show shouldIndentReaderParagraph;
 import 'reader_content.dart';
 import 'reader_rich_content.dart'
     show

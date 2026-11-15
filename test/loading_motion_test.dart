@@ -93,7 +93,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.byType(ReaderSkeleton), findsNothing);
-    expect(find.text('第一段正文。'), findsOneWidget);
+    expect(find.textContaining('第一段正文。'), findsOneWidget);
     expect(tester.takeException(), isNull);
     semantics.dispose();
   });

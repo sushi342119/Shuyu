@@ -375,7 +375,11 @@ Future<ReaderPagination?> paginateReader({
       continue;
     }
     if (text.isEmpty) continue;
-    final indent = preferences.indent && format.allowsIndent;
+    final indent = shouldIndentReaderParagraph(
+      text,
+      enabled: preferences.indent,
+      allowsIndent: format.allowsIndent,
+    );
     final prefix = indent ? readerIndentPlaceholder : '';
     final display = '$prefix$text';
     var metrics = measured.horizontal[index];

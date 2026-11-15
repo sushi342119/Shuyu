@@ -156,6 +156,35 @@ class SettingsPage extends StatelessWidget {
                         () => state.setFontSize(value),
                       ),
                     ),
+                    _settingsDivider(context),
+                    Row(
+                      children: [
+                        _settingsIconBadge(
+                          context,
+                          CupertinoIcons.increase_indent,
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            '首行缩进（空两格）',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        CupertinoSwitch(
+                          key: const ValueKey('settings-first-line-indent'),
+                          value: state.readerPreferences.indent,
+                          activeTrackColor: Theme.of(
+                            context,
+                          ).colorScheme.primary,
+                          onChanged: (value) => _savePreference(
+                            context,
+                            () => state.setReaderPreferences(
+                              state.readerPreferences.copyWith(indent: value),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                     if (LocalPlatform.android) ...[
                       _settingsDivider(context),
                       Row(

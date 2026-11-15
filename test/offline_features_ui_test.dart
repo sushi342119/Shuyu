@@ -131,7 +131,7 @@ void main({
         ),
       );
       await _settleIo(tester);
-      expect(find.text('前文。'), findsOneWidget);
+      expect(find.textContaining('前文。'), findsOneWidget);
       expect(remote.activeReads, 1);
       final slot = find.byWidgetPredicate(
         (w) => w is LoadingSkeleton && w.label == '正在补全插图',
@@ -140,7 +140,7 @@ void main({
       final height = tester.getSize(slot).height;
       held.completeError(StateError('fixture offline'));
       await _settleIo(tester);
-      expect(find.text('前文。'), findsOneWidget);
+      expect(find.textContaining('前文。'), findsOneWidget);
       expect(find.text('重试本章插图'), findsOneWidget);
       expect(await tester.runAsync(() => cache.readChapter(71, 71001)), old);
       remote.held.remove(71001);

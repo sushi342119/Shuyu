@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import 'app_ui.dart';
 import 'reader_content.dart';
+import 'reader_text.dart';
 import 'reader_underline.dart';
 
 class ReaderMatch {
@@ -273,12 +274,18 @@ class ReaderHighlightText extends StatelessWidget {
     required this.match,
     required this.style,
     this.marks = const [],
+    this.indent = false,
+    this.compressPunctuation = false,
+    this.textAlign,
   });
   final int index;
   final String text;
   final ValueListenable<ReaderMatch?> match;
   final TextStyle style;
   final List<ReaderTextMark> marks;
+  final bool indent;
+  final bool compressPunctuation;
+  final TextAlign? textAlign;
   @override
   Widget build(BuildContext context) => ValueListenableBuilder<ReaderMatch?>(
     valueListenable: match,
@@ -287,30 +294,44 @@ class ReaderHighlightText extends StatelessWidget {
           selected != null &&
           selected.paragraph == index &&
           selected.end <= text.length;
-      if (!hasMatch && marks.isEmpty) {
-        return Text(text, key: ValueKey('paragraph-$index'), style: style);
+      if (!hasMatch && marks.isEmpty && !indent && !compressPunctuation) {
+        return Text(
+          text,
+          key: ValueKey('paragraph-$index'),
+          style: style,
+          textAlign: textAlign,
+        );
       }
       final scheme = Theme.of(context).colorScheme;
       final dark = Theme.of(context).brightness == Brightness.dark;
-      final spans = buildReaderMarkedSpans(
-        text: text,
-        marks: marks,
-        baseTextColor: style.color ?? scheme.onSurface,
-        dark: dark,
-        findStart: hasMatch ? selected.start : null,
-        findEnd: hasMatch ? selected.end : null,
-        findBackground: scheme.onSurface.withValues(alpha: .14),
-      );
+      final spans = !hasMatch && marks.isEmpty
+          ? <InlineSpan>[TextSpan(text: text)]
+          : buildReaderMarkedSpans(
+              text: text,
+              marks: marks,
+              baseTextColor: style.color ?? scheme.onSurface,
+              dark: dark,
+              findStart: hasMatch ? selected.start : null,
+              findEnd: hasMatch ? selected.end : null,
+              findBackground: scheme.onSurface.withValues(alpha: .14),
+            );
       Widget child = Text.rich(
-        TextSpan(children: spans),
+        readerParagraphSpan(
+          children: spans,
+          style: style,
+          indent: indent,
+          compressPunctuation: compressPunctuation,
+        ),
         key: ValueKey('paragraph-$index'),
         style: style,
+        textAlign: textAlign,
       );
       if (marks.any((m) => m.style == ReaderMarkStyle.outline)) {
         child = ReaderAnnotationOutlines(
           marks: marks,
           baseTextColor: style.color ?? scheme.onSurface,
           dark: dark,
+          leadingPlaceholders: indent ? 1 : 0,
           child: child,
         );
       }

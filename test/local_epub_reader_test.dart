@@ -105,6 +105,14 @@ Finder _control(String label) => find.descendant(
   matching: find.byType(InkWell),
 );
 
+Finder _blockText(String text) => find.byWidgetPredicate(
+  (widget) =>
+      widget is Text &&
+      (widget.data ??
+              widget.textSpan?.toPlainText(includePlaceholders: false)) ==
+          text,
+);
+
 Future<void> _settle(WidgetTester tester) async {
   await tester.runAsync(
     () => Future<void>.delayed(const Duration(milliseconds: 10)),
@@ -371,7 +379,7 @@ void main() {
   testWidgets('EPUB 文字块点按显隐不改章节', (tester) async {
     await state.setMotionLevel(MotionLevel.light);
     await reader(tester, chapter: 1);
-    final text = find.text((local.data(1).blocks.first).text!);
+    final text = _blockText((local.data(1).blocks.first).text!);
     expectChrome(tester, true);
     await tester.tap(text);
     await tester.pumpAndSettle();
@@ -433,7 +441,7 @@ void main() {
     await tester.tap(find.text('重试'));
     await tester.pumpAndSettle();
     expect(find.text('章节加载失败'), findsNothing);
-    expect(find.text(local.data(0).blocks.first.text!), findsOneWidget);
+    expect(_blockText(local.data(0).blocks.first.text!), findsOneWidget);
     expect(local.loads, [0, 0]);
   });
 
@@ -449,11 +457,11 @@ void main() {
     await state.setMotionLevel(MotionLevel.light);
     await reader(tester, chapter: 1);
     expect(progressBar().hitTestable(), findsOneWidget);
-    await tester.tap(find.text(local.data(1).blocks.first.text!));
+    await tester.tap(_blockText(local.data(1).blocks.first.text!));
     await tester.pumpAndSettle();
     expectChrome(tester, false);
     expect(progressBar().hitTestable(), findsNothing);
-    await tester.tap(find.text(local.data(1).blocks.first.text!));
+    await tester.tap(_blockText(local.data(1).blocks.first.text!));
     await tester.pumpAndSettle();
     expect(progressBar().hitTestable(), findsOneWidget);
 
@@ -544,13 +552,13 @@ void main() {
     local.pending[1] = delayed;
     await tester.tap(find.text('下一章'));
     await tester.pump();
-    expect(find.text(local.data(0).blocks.first.text!), findsNothing);
+    expect(_blockText(local.data(0).blocks.first.text!), findsNothing);
     await tester.tap(find.text('下一章'));
     await tester.pumpAndSettle();
     delayed.complete(local.data(1));
     await tester.pumpAndSettle();
-    expect(find.text(local.data(1).blocks.first.text!), findsNothing);
-    expect(find.text(local.data(2).blocks.first.text!), findsOneWidget);
+    expect(_blockText(local.data(1).blocks.first.text!), findsNothing);
+    expect(_blockText(local.data(2).blocks.first.text!), findsOneWidget);
     expect(state.chapterFor(_novel.id), 2);
   });
 
@@ -689,7 +697,7 @@ void main() {
     expect(preferences.getDouble('readerLineHeight'), 2);
     await closeTools(tester);
     final text = tester.widget<Text>(
-      find.text(local.data(2).blocks.first.text!),
+      _blockText(local.data(2).blocks.first.text!),
     );
     expect(text.style!.fontSize, 24);
     expect(text.style!.height, 2);
@@ -701,7 +709,7 @@ void main() {
     await reader(tester, chapter: -1);
     expect(_dock(tester).items[1].label, '3 / 3');
     final restored = tester.widget<Text>(
-      find.text(local.data(2).blocks.first.text!),
+      _blockText(local.data(2).blocks.first.text!),
     );
     expect(restored.style!.fontSize, 24);
     expect(restored.style!.height, 2);
@@ -724,7 +732,7 @@ void main() {
     await tester.tap(focus);
     await tester.pumpAndSettle();
     expectChrome(tester, false);
-    await tester.tap(find.text(local.data(0).blocks.first.text!));
+    await tester.tap(_blockText(local.data(0).blocks.first.text!));
     await tester.pumpAndSettle();
     expectChrome(tester, true);
   });

@@ -4,6 +4,26 @@ import 'package:flutter/widgets.dart';
 // justification. One placeholder code unit maps back to zero source characters.
 const readerIndentPlaceholder = '\ufffc';
 
+final _explicitLeadingIndentPattern = RegExp(r'^(?:[\u3000\t]| {2,})');
+
+/// Whether a body paragraph should receive a 2-em first-line placeholder box.
+///
+/// Headings, non-left-aligned blocks, empty/illustration lines, and paragraphs
+/// that already start with explicit indentation are excluded to avoid indenting
+/// titles or double-indenting manually formatted lines.
+bool shouldIndentReaderParagraph(
+  String text, {
+  required bool enabled,
+  bool allowsIndent = true,
+  bool heading = false,
+}) {
+  if (!enabled || !allowsIndent || heading) return false;
+  final trimmed = text.trim();
+  if (trimmed.isEmpty || trimmed == '[插图]') return false;
+  if (_explicitLeadingIndentPattern.hasMatch(text)) return false;
+  return true;
+}
+
 const cjkClosingPunctuation = '，。！？、；：）》」』】〕］｝’”';
 const cjkOpeningPunctuation = '（《「『【〔［｛‘“';
 

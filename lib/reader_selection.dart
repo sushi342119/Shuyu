@@ -791,9 +791,27 @@ class _SentenceSelectable with Selectable {
     final result = _delegate.dispatchSelectionEvent(event);
     if (!_expandingSentence && event is SelectWordSelectionEvent) {
       final range = _delegate.getSelection();
-      if (range != null && _text.isNotEmpty) {
+      int? fallbackOffset;
+      if (range == null && _leadingPlaceholders > 0) {
+        final paragraph = _findParagraph();
+        if (paragraph != null && paragraph.attached && paragraph.hasSize) {
+          final local = paragraph.globalToLocal(event.globalPosition);
+          if ((Offset.zero & paragraph.size).inflate(4).contains(local)) {
+            final pos = paragraph.getPositionForOffset(local);
+            fallbackOffset = (pos.offset - _leadingPlaceholders).clamp(
+              0,
+              _text.length - 1,
+            );
+          }
+        }
+      }
+      if ((range != null || fallbackOffset != null) && _text.isNotEmpty) {
         final localOffset =
-            (range.startOffset - _leadingPlaceholders).clamp(0, _text.length - 1);
+            fallbackOffset ??
+            (range!.startOffset - _leadingPlaceholders).clamp(
+              0,
+              _text.length - 1,
+            );
         final sentence = readerSentenceRange(_text, localOffset);
         return _selectRange(
           sentence.$1 + _leadingPlaceholders,

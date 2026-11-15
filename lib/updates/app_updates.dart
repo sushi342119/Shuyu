@@ -15,13 +15,12 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.9.16',
+  defaultValue: '1.9.17',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 90);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 91);
 const currentReleaseNotes = '''
-1. 新增漫画画布底色预设与色卡一键切换：默认画布由强制纯黑调整为「跟随外观」（浅色外观采用柔和雾灰 `#F2F3F5`，深色外观采用沉稳暗蓝灰 `#141821`，同时兼容全局纸色与旧版深色画布备份），并在漫画「画面」面板提供跟随外观、雾灰、暖沙、浅绿、纯白、炭灰、夜读黑 7 款底色色卡。
-2. 修复漫画阅读器底部边缘发虚、重叠阴影与亮暗割裂问题：移除漫画及分页 `PDF` 底部多余的滚动羽化渐变与底层重复页码胶囊，补齐上下安全边距留白，并让顶底控制栏、底部信息条（含夜间降亮护眼遮罩混色）及系统状态栏时间/电量图标亮暗随画布底色实时同步。
-3. 修复漫画夜间降亮护眼遮罩在高挡位（65%–75%）下的偏好解析上限不一致问题。
+1. 修复阅读器正文「无首行缩进」或「只缩进一个汉字」的问题（#19）：修复单换行 `TXT` 段落重组时仅剥离单个全角空格或制表符导致第二段起残留单字缩进的缺陷，统一清理各段段首空白字符并默认开启标准空两格（`2em`）几何首行缩进，同时兼容升级旧版阅读偏好、补齐上下滚动模式与本地 `EPUB` 阅读器的首行缩进渲染，自动跳过章节标题、居中/右对齐段落与插图，且复制、查词与划线批注坐标保持纯净不混入前导空格。
+2. 新增「首行缩进」排版开关：在阅读器「阅读设置 → 排版与进度」、本地 `EPUB` 排版面板及全局「设置 → 阅读偏好」中提供首行缩进开关，支持实时切换并随「恢复默认排版」一键还原。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

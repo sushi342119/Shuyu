@@ -473,7 +473,8 @@ final _cjkOrPunctStartPattern = RegExp(
   r'^[\u3400-\u9fff，,。！？!?、；;：:”’」』）)】\]》〉〕]',
 );
 final _prosePunctPattern = RegExp(r'[，,。！？!?、；;：:“”‘’「」『』（）()]');
-final _indentStartPattern = RegExp(r'^(?:[　\t]| {2,})');
+final _indentStartPattern = RegExp(r'^(?:[　\t]+| {2,})');
+final _leadingParagraphSpacePattern = RegExp(r'^[ \t\u00a0\u3000]+');
 final _openQuoteEndPattern = RegExp(r'[“‘「『（(《〈【\[]$');
 final _asciiWordEndPattern = RegExp(r'[A-Za-z0-9]$');
 final _asciiWordStartPattern = RegExp(r'^[A-Za-z0-9]');
@@ -648,8 +649,14 @@ ReflowedReaderParagraph _joinReflowedParagraph(
   );
 }
 
+String _stripLeadingParagraphText(String input) {
+  if (input.trim().isEmpty) return input;
+  return input.replaceFirst(_leadingParagraphSpacePattern, '');
+}
+
 ReflowedReaderParagraph _stripLeadingIndent(ReflowedReaderParagraph input) {
-  final match = _indentStartPattern.firstMatch(input.text);
+  if (input.text.trim().isEmpty) return input;
+  final match = _leadingParagraphSpacePattern.firstMatch(input.text);
   final drop = match?.end ?? 0;
   if (drop <= 0) return input;
   return ReflowedReaderParagraph(
@@ -697,7 +704,7 @@ List<ReflowedReaderParagraph> reflowReaderParagraphsWithOffsets(String source) {
             current = _joinReflowedParagraph(current, next);
           } else {
             expanded.add(current);
-            current = _stripLeadingIndent(next);
+            current = next;
           }
         }
         expanded.add(current);
@@ -706,7 +713,9 @@ List<ReflowedReaderParagraph> reflowReaderParagraphsWithOffsets(String source) {
     if (sep < 0) break;
     blockStart = sep + 2;
   }
-  if (expanded.length <= 1) return expanded;
+  if (expanded.length <= 1) {
+    return [for (final item in expanded) _stripLeadingIndent(item)];
+  }
   final merged = <ReflowedReaderParagraph>[expanded.first];
   for (var i = 1; i < expanded.length; i++) {
     final next = expanded[i];
@@ -716,7 +725,7 @@ List<ReflowedReaderParagraph> reflowReaderParagraphsWithOffsets(String source) {
       merged.add(next);
     }
   }
-  return merged;
+  return [for (final item in merged) _stripLeadingIndent(item)];
 }
 
 ({int paragraph, int offset}) locateReflowedStart(
@@ -834,12 +843,14 @@ List<String> reflowReaderParagraphs(String source) {
         current = joinBrokenParagraph(current, next);
       } else {
         expanded.add(current);
-        current = next.replaceFirst(_indentStartPattern, '');
+        current = next;
       }
     }
     expanded.add(current);
   }
-  if (expanded.length <= 1) return expanded;
+  if (expanded.length <= 1) {
+    return [for (final item in expanded) _stripLeadingParagraphText(item)];
+  }
   final merged = <String>[expanded.first];
   for (var i = 1; i < expanded.length; i++) {
     final next = expanded[i];
@@ -849,7 +860,7 @@ List<String> reflowReaderParagraphs(String source) {
       merged.add(next);
     }
   }
-  return merged;
+  return [for (final item in merged) _stripLeadingParagraphText(item)];
 }
 
 class ReaderRichBody {

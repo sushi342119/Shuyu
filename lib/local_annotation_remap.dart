@@ -62,7 +62,15 @@ Future<List<ReaderUnderlineRange>> remapLocalUnderlineRanges({
 
     final canSliceOld =
         oldBody.end - oldBody.start <= FileTextAnchor.maxSliceLength;
-    if (canSliceOld && (!validRaw || cleanQuote.isNotEmpty)) {
+    String? oldSlice;
+    if (canSliceOld) {
+      oldSlice = await oldText.slice(oldBody.start, oldBody.end);
+    }
+    final oldHasLeadingIndent =
+        oldSlice != null &&
+        RegExp(r'(?:^|\n)[ \t\u00a0\u3000]+\S').hasMatch(oldSlice);
+    if (oldSlice != null &&
+        (!validRaw || cleanQuote.isNotEmpty || oldHasLeadingIndent)) {
       String? rawSliceQuote;
       if (validRaw && cleanQuote.isNotEmpty) {
         rawSliceQuote = _normalizeQuoteComparison(
@@ -71,12 +79,12 @@ Future<List<ReaderUnderlineRange>> remapLocalUnderlineRanges({
       }
       final rawMatchesQuote =
           validRaw &&
+          !oldHasLeadingIndent &&
           cleanQuote.isNotEmpty &&
           (rawSliceQuote == cleanQuote ||
               cleanQuote.contains(rawSliceQuote!) &&
                   rawSliceQuote.isNotEmpty);
       if (!validRaw || !rawMatchesQuote) {
-        final oldSlice = await oldText.slice(oldBody.start, oldBody.end);
         final reflowed = reflowReaderParagraphsWithOffsets(oldSlice);
         if (source.startParagraph < reflowed.length &&
             source.endParagraph < reflowed.length &&
@@ -92,7 +100,7 @@ Future<List<ReaderUnderlineRange>> remapLocalUnderlineRanges({
           if (candidateStart >= oldBody.start &&
               candidateEnd <= oldBody.end &&
               candidateEnd > candidateStart) {
-            if (!validRaw) {
+            if (!validRaw || (oldHasLeadingIndent && cleanQuote.isEmpty)) {
               oldStart = candidateStart;
               oldEnd = candidateEnd;
               useReflow = true;
@@ -117,7 +125,6 @@ Future<List<ReaderUnderlineRange>> remapLocalUnderlineRanges({
           }
         }
       } else if (validRaw && cleanQuote.isNotEmpty) {
-        final oldSlice = await oldText.slice(oldBody.start, oldBody.end);
         if (!oldSlice.contains('\n\n') && oldSlice.contains('\n')) {
           useReflow = true;
         }
@@ -147,12 +154,16 @@ Future<List<ReaderUnderlineRange>> remapLocalUnderlineRanges({
       final canSliceNew =
           body.end - body.start <= FileTextAnchor.maxSliceLength;
       String? newSlice;
-      if (canSliceNew && (useReflow || cleanQuote.isNotEmpty)) {
+      if (canSliceNew) {
         newSlice = await newText.slice(body.start, body.end);
       }
+      final newHasLeadingIndent =
+          newSlice != null &&
+          RegExp(r'(?:^|\n)[ \t\u00a0\u3000]+\S').hasMatch(newSlice);
       final projectViaReflow =
           newSlice != null &&
           (useReflow ||
+              newHasLeadingIndent ||
               (!newSlice.contains('\n\n') && newSlice.contains('\n')));
       if (projectViaReflow) {
         final reflowedNew = reflowReaderParagraphsWithOffsets(newSlice);

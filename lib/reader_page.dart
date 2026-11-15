@@ -1326,8 +1326,21 @@ class _ReaderPageState extends State<ReaderPage>
   Widget _paragraphContent(
     List<String> paragraphs,
     int index,
-    TextStyle style,
-  ) {
+    TextStyle style, {
+    PurifiedParagraph? purifiedParagraph,
+    ReaderRichParagraph format = const ReaderRichParagraph(),
+    bool indent = false,
+  }) {
+    if (format.rule) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Divider(
+          height: 1,
+          thickness: 1,
+          color: Theme.of(context).dividerColor,
+        ),
+      );
+    }
     final url = readerIllustrationUrl(paragraphs[index]);
     if (url != null) {
       final illustrations = _currentContent?.illustrations ?? [url];
@@ -1368,13 +1381,16 @@ class _ReaderPageState extends State<ReaderPage>
               ),
       );
     }
-    final purified = _purifyParagraphAt(paragraphs, _chapter, index);
+    final purified =
+        purifiedParagraph ?? _purifyParagraphAt(paragraphs, _chapter, index);
     final chapterId = _chapter >= 0 && _chapter < _novel.chapters.length
         ? _novel.chapters[_chapter].id
         : null;
+    final effectiveStyle = format.textStyle(style);
     return ReaderSelectionFragment(
       paragraph: index,
       chapter: chapterId,
+      leadingPlaceholders: indent ? 1 : 0,
       text: purified.text,
       child: AnimatedBuilder(
         animation: widget.state.underlineChanges,
@@ -1401,8 +1417,20 @@ class _ReaderPageState extends State<ReaderPage>
             text: purified.text,
             index: index,
             match: _findMatch,
-            style: style,
+            style: effectiveStyle,
             marks: marks,
+            indent: indent,
+            compressPunctuation:
+                widget.state.readerPreferences.kinsokuCompression,
+            textAlign:
+                format.alignment.isEmpty &&
+                    !widget.state.readerPreferences.justify
+                ? null
+                : format.textAlign(
+                    widget.state.readerPreferences.justify
+                        ? TextAlign.justify
+                        : TextAlign.start,
+                  ),
           );
         },
       ),
@@ -1983,64 +2011,87 @@ class _ReaderPageState extends State<ReaderPage>
                         sliver: SliverList.builder(
                           addAutomaticKeepAlives: false,
                           itemCount: paragraphs.length,
-                          itemBuilder: (context, index) => ReaderParagraph(
-                            key: ValueKey(
-                              'paragraph-anchor-$_contentGeneration-$index',
-                            ),
-                            registry: _paragraphRegistry,
-                            index: index,
-                            child: LoadedContentItem(
-                              key: ValueKey('reader-paragraph-reveal-$index'),
-                              index: index - _chapterRevealFirst,
-                              animation: _chapterReveal,
-                              child: Padding(
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: ValueListenableBuilder<int?>(
-                                  valueListenable: _bookmarkLanding,
-                                  child: _listening == null
-                                      ? _paragraphContent(
-                                          paragraphs,
-                                          index,
-                                          paragraphStyle,
-                                        )
-                                      : ListeningParagraphHighlight(
-                                          controller: _listening!,
-                                          novelId: _novel.id,
-                                          chapter: _chapter,
-                                          paragraph: index,
-                                          onDoubleTap: () =>
-                                              _doubleTapListeningParagraph(
-                                                index,
-                                              ),
-                                          interactive:
-                                              readerIllustrationUrl(
-                                                    paragraphs[index],
-                                                  ) ==
-                                                  null &&
-                                              paragraphs[index].trim() !=
-                                                  '[插图]' &&
-                                              hasSpeechText(paragraphs[index]),
-                                          child: _paragraphContent(
-                                            paragraphs,
-                                            index,
-                                            paragraphStyle,
+                          itemBuilder: (context, index) {
+                            final rawParagraph = paragraphs[index];
+                            final format =
+                                content.formats[index] ??
+                                const ReaderRichParagraph();
+                            final isIllustration =
+                                format.rule ||
+                                readerIllustrationUrl(rawParagraph) != null ||
+                                rawParagraph.trim() == '[插图]';
+                            final purified = isIllustration
+                                ? null
+                                : _purifyParagraphAt(
+                                    paragraphs,
+                                    _chapter,
+                                    index,
+                                  );
+                            final indent =
+                                purified != null &&
+                                shouldIndentReaderParagraph(
+                                  purified.text,
+                                  enabled:
+                                      widget.state.readerPreferences.indent,
+                                  allowsIndent: format.allowsIndent,
+                                );
+                            final paragraphWidget = _paragraphContent(
+                              paragraphs,
+                              index,
+                              paragraphStyle,
+                              purifiedParagraph: purified,
+                              format: format,
+                              indent: indent,
+                            );
+                            return ReaderParagraph(
+                              key: ValueKey(
+                                'paragraph-anchor-$_contentGeneration-$index',
+                              ),
+                              registry: _paragraphRegistry,
+                              index: index,
+                              textOffset: indent ? 1 : 0,
+                              child: LoadedContentItem(
+                                key: ValueKey(
+                                  'reader-paragraph-reveal-$index',
+                                ),
+                                index: index - _chapterRevealFirst,
+                                animation: _chapterReveal,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(bottom: 12),
+                                  child: ValueListenableBuilder<int?>(
+                                    valueListenable: _bookmarkLanding,
+                                    child: _listening == null
+                                        ? paragraphWidget
+                                        : ListeningParagraphHighlight(
+                                            controller: _listening!,
+                                            novelId: _novel.id,
+                                            chapter: _chapter,
+                                            paragraph: index,
+                                            onDoubleTap: () =>
+                                                _doubleTapListeningParagraph(
+                                                  index,
+                                                ),
+                                            interactive:
+                                                !isIllustration &&
+                                                hasSpeechText(rawParagraph),
+                                            child: paragraphWidget,
                                           ),
-                                        ),
-                                  builder: (context, selected, child) =>
-                                      selected == index
-                                      ? ReaderLandingHighlight(
-                                          key: ValueKey(
-                                            'bookmark-landing-$index',
-                                          ),
-                                          reduceMotion:
-                                              widget.state.reduceMotion,
-                                          child: child!,
-                                        )
-                                      : child!,
+                                    builder: (context, selected, child) =>
+                                        selected == index
+                                        ? ReaderLandingHighlight(
+                                            key: ValueKey(
+                                              'bookmark-landing-$index',
+                                            ),
+                                            reduceMotion:
+                                                widget.state.reduceMotion,
+                                            child: child!,
+                                          )
+                                        : child!,
+                                  ),
                                 ),
                               ),
-                            ),
-                          ),
+                            );
+                          },
                         ),
                       ),
                       SliverPadding(
@@ -2124,7 +2175,16 @@ class _ReaderPageState extends State<ReaderPage>
             _typographyPreviewing = value;
             preview.value = value;
           },
-          onReset: () => _applyTypography(fontSize: 19, lineHeight: 1.72),
+          onReset: () {
+            _applyTypography(fontSize: 19, lineHeight: 1.72);
+            if (!widget.state.readerPreferences.indent) {
+              unawaited(
+                widget.state.setReaderPreferences(
+                  widget.state.readerPreferences.copyWith(indent: true),
+                ),
+              );
+            }
+          },
           initialBookmarks: bookmarks,
         ),
       );

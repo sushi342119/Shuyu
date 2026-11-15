@@ -148,10 +148,21 @@ void main({
       await tester.tap(_tapKey('reader-find-result-0'));
       await tester.pumpAndSettle();
       expect(find.byType(GlassOverlaySurface), findsNothing);
+      bool hasHighlight(InlineSpan span) {
+        if (span is TextSpan) {
+          if (span.style?.backgroundColor != null) return true;
+          for (final child in span.children ?? const <InlineSpan>[]) {
+            if (hasHighlight(child)) return true;
+          }
+        }
+        return false;
+      }
+
       final paragraph = find.byKey(const ValueKey('paragraph-95'));
       expect(paragraph, findsOneWidget);
       final selected = tester.widget<Text>(paragraph);
       expect(selected.textSpan, isNotNull);
+      expect(hasHighlight(selected.textSpan!), isTrue);
       final scroll = tester.state<ScrollableState>(
         find
             .descendant(
@@ -165,7 +176,15 @@ void main({
       expect(repository.calls.length, requests);
       await shot(tester, 'chapter-find-highlight');
       await tester.pump(const Duration(seconds: 9));
-      expect(tester.widget<Text>(paragraph).data, paragraphs[95]);
+      final cleared = tester.widget<Text>(paragraph);
+      expect(
+        cleared.data ??
+            cleared.textSpan!.toPlainText(includePlaceholders: false),
+        paragraphs[95],
+      );
+      if (cleared.textSpan != null) {
+        expect(hasHighlight(cleared.textSpan!), isFalse);
+      }
       expect(scroll.position.pixels, closeTo(position, 1));
       expect(state.positionFor(71)!.paragraphIndex, 95);
       expect(tester.takeException(), isNull);

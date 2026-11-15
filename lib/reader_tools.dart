@@ -296,6 +296,58 @@ class _ReaderToolsState extends State<ReaderTools> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 8, bottom: 2),
+                  child: Row(
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(left: 4, right: 10),
+                        child: Icon(
+                          CupertinoIcons.increase_indent,
+                          size: 18,
+                        ),
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '首行缩进',
+                              style: TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            Text(
+                              '段落首行自动空两格',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      CupertinoSwitch(
+                        key: const ValueKey('reader-first-line-indent'),
+                        value: widget.state.readerPreferences.indent,
+                        activeTrackColor: Theme.of(context).colorScheme.primary,
+                        onChanged: (value) async {
+                          try {
+                            await widget.state.setReaderPreferences(
+                              widget.state.readerPreferences.copyWith(
+                                indent: value,
+                              ),
+                            );
+                          } catch (_) {
+                            if (context.mounted) {
+                              showNovelFeedback(context, '排版设置保存失败，请重试');
+                            }
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                ),
                 Align(
                   alignment: Alignment.centerRight,
                   child: GlassTextButton(

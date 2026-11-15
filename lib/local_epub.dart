@@ -13,13 +13,17 @@ import 'reader_rich_content.dart'
 
 /// 块：文本或图片二选一
 class EpubBlock {
-  const EpubBlock.text(this.text) : kind = EpubBlockKind.text, entryPath = null;
+  const EpubBlock.text(this.text, {this.heading = false})
+    : kind = EpubBlockKind.text,
+      entryPath = null;
   const EpubBlock.image(this.entryPath)
     : kind = EpubBlockKind.image,
-      text = null;
+      text = null,
+      heading = false;
   final EpubBlockKind kind;
   final String? text;
   final String? entryPath; // 图片在 ZIP 内的规范化路径
+  final bool heading;
 }
 
 enum EpubBlockKind { text, image }
@@ -1908,6 +1912,7 @@ class _BlockCollector {
   final anchors = <String, int>{};
   final _buf = StringBuffer();
   bool _anchorBoundary = false;
+  bool _heading = false;
 
   void markAnchor(String? rawId) {
     final id = rawId?.trim();
@@ -1925,15 +1930,17 @@ class _BlockCollector {
 
   void _appendParagraph(String rawLine, String trimmed) {
     if (trimmed.isEmpty) return;
-    if (!_anchorBoundary &&
+    if (!_heading &&
+        !_anchorBoundary &&
         blocks.isNotEmpty &&
+        !blocks.last.heading &&
         blocks.last.text != null &&
         shouldMergeBrokenParagraph(blocks.last.text!, rawLine)) {
       blocks[blocks.length - 1] = EpubBlock.text(
         joinBrokenParagraph(blocks.last.text!, trimmed),
       );
     } else {
-      blocks.add(EpubBlock.text(trimmed));
+      blocks.add(EpubBlock.text(trimmed, heading: _heading));
     }
     _anchorBoundary = false;
   }
@@ -2009,6 +2016,7 @@ final _epubInlineHeadingLine = RegExp(
   caseSensitive: false,
 );
 final _whitespace = RegExp(r'\s+');
+const _headingTags = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'};
 const _blockTags = {
   'p',
   'div',
@@ -2569,9 +2577,12 @@ void _walk(
       }
     } else if (_blockTags.contains(name)) {
       c.flush();
+      final prevHeading = c._heading;
+      if (_headingTags.contains(name)) c._heading = true;
       _recordElementAnchors(child, c);
       _walk(child, c, resolveImage);
       c.flush();
+      c._heading = prevHeading;
     } else {
       _recordElementAnchors(child, c);
       _walk(child, c, resolveImage);
@@ -2648,6 +2659,7 @@ bool _isSelfClosingTag(String tag) => RegExp(r'/\s*>$').hasMatch(tag);
   final skipped = <String>[];
   var previousEnd = 0;
   var svgDepth = 0;
+  var headingDepth = 0;
   for (final token in _markupTokens.allMatches(text)) {
     if (svgDepth == 0 && skipped.isEmpty) {
       collector.addText(
@@ -2676,6 +2688,10 @@ bool _isSelfClosingTag(String tag) => RegExp(r'/\s*>$').hasMatch(tag);
     if (skipped.isNotEmpty) continue;
     if (!closing && (name == 'br' || _blockTags.contains(name))) {
       collector.flush();
+      if (_headingTags.contains(name) && !_isSelfClosingTag(tag)) {
+        headingDepth++;
+        collector._heading = true;
+      }
     }
     if (!closing) {
       collector.markAnchor(_tagAttribute(tag, 'id', anyPrefix: true));
@@ -2706,11 +2722,16 @@ bool _isSelfClosingTag(String tag) => RegExp(r'/\s*>$').hasMatch(tag);
       );
     } else if (name == 'br' || _blockTags.contains(name)) {
       collector.flush();
+      if (closing && _headingTags.contains(name) && headingDepth > 0) {
+        headingDepth--;
+        collector._heading = headingDepth > 0;
+      }
     }
   }
   if (svgDepth == 0 && skipped.isEmpty) {
     collector.addText(_decodeEntities(text.substring(previousEnd)));
   }
   collector.flush();
+  collector._heading = false;
   return (blocks: collector.blocks, anchors: collector.anchors);
 }

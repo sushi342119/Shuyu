@@ -21,6 +21,7 @@ import 'reader_catalogue.dart';
 import 'reader_chrome.dart';
 import 'reader_selection.dart';
 import 'reader_skeleton.dart';
+import 'reader_text.dart';
 import 'reader_tools.dart';
 import 'reader_underline.dart';
 
@@ -1214,6 +1215,11 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     }
     final purified = _purifyBlockAt(blockIndex, blocks: allBlocks);
     final chapterId = _total > 0 ? _novel.chapters[_chapter].id : null;
+    final indent = shouldIndentReaderParagraph(
+      purified.text,
+      enabled: widget.state.readerPreferences.indent,
+      heading: block.heading,
+    );
     final style = TextStyle(
       fontSize: widget.state.fontSize,
       height: widget.state.lineHeight,
@@ -1224,6 +1230,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       child: ReaderSelectionFragment(
         paragraph: blockIndex,
         chapter: chapterId,
+        leadingPlaceholders: indent ? 1 : 0,
         text: purified.text,
         child: AnimatedBuilder(
           animation: widget.state.underlineChanges,
@@ -1246,24 +1253,34 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                     paragraph: blockIndex,
                     textLength: purified.text.length,
                   );
-            if (marks.isEmpty) {
+            if (marks.isEmpty && !indent) {
               return Text(purified.text, style: style);
             }
             final dark = Theme.of(context).brightness == Brightness.dark;
             final baseColor =
                 style.color ?? Theme.of(context).colorScheme.onSurface;
-            final spans = buildReaderMarkedSpans(
-              text: purified.text,
-              marks: marks,
-              baseTextColor: baseColor,
-              dark: dark,
+            final spans = marks.isEmpty
+                ? <InlineSpan>[TextSpan(text: purified.text)]
+                : buildReaderMarkedSpans(
+                    text: purified.text,
+                    marks: marks,
+                    baseTextColor: baseColor,
+                    dark: dark,
+                  );
+            Widget child = Text.rich(
+              readerParagraphSpan(
+                children: spans,
+                style: style,
+                indent: indent,
+              ),
+              style: style,
             );
-            Widget child = Text.rich(TextSpan(children: spans), style: style);
             if (marks.any((m) => m.style == ReaderMarkStyle.outline)) {
               child = ReaderAnnotationOutlines(
                 marks: marks,
                 baseTextColor: baseColor,
                 dark: dark,
+                leadingPlaceholders: indent ? 1 : 0,
                 child: child,
               );
             }
@@ -1327,6 +1344,16 @@ class _LocalEpubReaderToolsState extends State<LocalEpubReaderTools> {
         fontSize: fontSize,
         lineHeight: lineHeight,
         persist: persist,
+      );
+    } catch (_) {
+      if (mounted) setState(() => _error = '排版设置保存失败，请重试');
+    }
+  }
+
+  Future<void> _setIndent(bool value) async {
+    try {
+      await widget.state.setReaderPreferences(
+        widget.state.readerPreferences.copyWith(indent: value),
       );
     } catch (_) {
       if (mounted) setState(() => _error = '排版设置保存失败，请重试');
@@ -1452,10 +1479,38 @@ class _LocalEpubReaderToolsState extends State<LocalEpubReaderTools> {
       onPreview: (value) => _typography(lineHeight: value, persist: false),
       onCommitted: (value) => _typography(lineHeight: value),
     ),
+    Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        children: [
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('首行缩进', style: TextStyle(fontWeight: FontWeight.w600)),
+                SizedBox(height: 2),
+                Text('段落首行自动空两格', style: TextStyle(fontSize: 12)),
+              ],
+            ),
+          ),
+          CupertinoSwitch(
+            key: const ValueKey('epub-first-line-indent'),
+            value: widget.state.readerPreferences.indent,
+            activeTrackColor: Theme.of(context).colorScheme.primary,
+            onChanged: _setIndent,
+          ),
+        ],
+      ),
+    ),
     Align(
       alignment: Alignment.centerRight,
       child: GlassTextButton(
-        onPressed: () => _typography(fontSize: 19, lineHeight: 1.72),
+        onPressed: () {
+          unawaited(_typography(fontSize: 19, lineHeight: 1.72));
+          if (!widget.state.readerPreferences.indent) {
+            unawaited(_setIndent(true));
+          }
+        },
         child: const Text('恢复默认排版'),
       ),
     ),

@@ -76,7 +76,7 @@ void main() {
     await tester.tap(find.text('重试'));
     await tester.pumpAndSettle();
     expect(find.text('章节加载失败'), findsNothing);
-    expect(find.text('恢复的正文。'), findsOneWidget);
+    expect(find.textContaining('恢复的正文。'), findsOneWidget);
     expect(repository.attempts, 2);
     expect(tester.takeException(), isNull);
   });
