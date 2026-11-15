@@ -10,7 +10,30 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  publish_preview:
+    if: github.event_name == 'workflow_dispatch' && github.ref_name == 'feat/online-book-sources'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download built APK from run 43677984929 and create temporary prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/preview-apk
+          gh run download 43677984929 -R "${{ github.repository }}" -n shuyu-apk -D /tmp/preview-apk
+          mv /tmp/preview-apk/app-release.apk /tmp/preview-apk/shuyu-online-test-arm64-v8a.apk
+          gh release delete dev-preview-sources -R "${{ github.repository }}" --cleanup-tag -y || true
+          gh release create dev-preview-sources /tmp/preview-apk/shuyu-online-test-arm64-v8a.apk \
+            -R "${{ github.repository }}" \
+            --target "feat/online-book-sources" \
+            --prerelease \
+            --latest=false \
+            --title "内部自测临时包 (下载后即删)" \
+            --notes "仅用于在线书源分支自测下载，不影响正式版更新。"
   build:
+    if: github.event_name != 'workflow_dispatch' || github.ref_name != 'feat/online-book-sources'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
