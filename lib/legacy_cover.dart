@@ -42,8 +42,8 @@ abstract final class LegacyCover {
   static Uint8List? peek(int aid) => _cache.peek(aid);
   static Future<Uint8List> bytes(int aid, {String? coverUrl}) {
     if (isLocalNovelId(aid)) {
-      final cached = _cache.peek(aid);
-      if (cached != null) return Future.value(cached);
+      final cached = _cache.peekFuture(aid);
+      if (cached != null) return cached;
       final loader = _loadLocal;
       if (loader != null && (_canLoadLocal?.call(aid) ?? false)) {
         return _cache.loadWith(aid, loader);
@@ -51,8 +51,8 @@ abstract final class LegacyCover {
       return Future.error(const FormatException('本地书籍没有远程封面'));
     }
     if (isSourceNovelId(aid)) {
-      final cached = _cache.peek(aid);
-      if (cached != null) return Future.value(cached);
+      final cached = _cache.peekFuture(aid);
+      if (cached != null) return cached;
       final sourceLoader = _loadSource;
       return _cache.loadWith(
         aid,
@@ -98,6 +98,7 @@ class LegacyCoverCache {
   }
 
   Uint8List? peek(int aid) => _touch(aid)?.bytes;
+  Future<Uint8List>? peekFuture(int aid) => _touch(aid)?.future;
 
   void evict(int aid) {
     final previous = _entries.remove(aid);

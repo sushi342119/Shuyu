@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show InternetAddress;
 
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
@@ -189,7 +190,8 @@ abstract final class SourceRuleEngine {
     final seenUrls = <String>{};
 
     for (final ctx in items) {
-      final title = _cleanSingleLine(evalString(ctx, rule.name));
+      final rawTitle = evalString(ctx, rule.name);
+      final title = _cleanSingleLine(rawTitle);
       if (title.isEmpty) continue;
       final rawUrl = rule.bookUrl.isEmpty
           ? (ctx.element?.attributes['href'] ??
@@ -200,7 +202,7 @@ abstract final class SourceRuleEngine {
         baseUrl,
         rawUrl.isNotEmpty ? rawUrl : baseUrl,
       );
-      if (resolvedBookUrl == null || !seenUrls.add(resolvedBookUrl)) continue;
+      if (resolvedBookUrl == null) continue;
 
       final author = _cleanSingleLine(
         evalString(ctx, rule.author),
@@ -214,7 +216,25 @@ abstract final class SourceRuleEngine {
       final wordCount = _cleanSingleLine(evalString(ctx, rule.wordCount));
       final intro = _cleanMultilineSummary(evalString(ctx, rule.intro));
       final rawCover = evalString(ctx, rule.coverUrl, preferImageSrc: true);
-      final coverUrl = _resolveImageSpecUrl(baseUrl, rawCover);
+
+      if (_isPollutedBookEntry(
+        title: title,
+        rawTitle: rawTitle,
+        author: author,
+        latestChapter: latest,
+        rawBookUrl: rawUrl,
+        resolvedBookUrl: resolvedBookUrl,
+        rawCover: rawCover,
+        baseUrl: baseUrl,
+      )) {
+        continue;
+      }
+      if (!seenUrls.add(resolvedBookUrl)) continue;
+
+      final coverUrl = _sanitizeExtractedCoverUrl(
+        baseUrl,
+        _resolveImageSpecUrl(baseUrl, rawCover),
+      );
 
       results.add(
         ExtractedBookItem(
@@ -260,7 +280,10 @@ abstract final class SourceRuleEngine {
     final intro = nonEmpty(_cleanMultilineSummary(evalString(ctx, rule.intro)));
     final latest = nonEmpty(_cleanSingleLine(evalString(ctx, rule.lastChapter)));
     final rawCover = evalString(ctx, rule.coverUrl, preferImageSrc: true);
-    final coverUrl = _resolveImageSpecUrl(pageUrl, rawCover);
+    final coverUrl = _sanitizeExtractedCoverUrl(
+      pageUrl,
+      _resolveImageSpecUrl(pageUrl, rawCover),
+    );
     final rawToc = evalString(ctx, rule.tocUrl).trim();
     final tocUrl = rawToc.isEmpty ? null : _resolveHttpUrl(pageUrl, rawToc);
 
@@ -1818,14 +1841,168 @@ abstract final class SourceRuleEngine {
     return flattened;
   }
 
-  static String _cleanSingleLine(String input) => input
-      .replaceAll('\u00a0', ' ')
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
+  static final RegExp _htmlNumericEntityPattern = RegExp(
+    r'&#(?:x([0-9a-fA-F]{1,6})|([0-9]{1,7}))(?:;|(?![0-9a-fA-F]))',
+  );
+
+  static String _decodeResidualHtmlEntities(String input) {
+    if (!input.contains('&')) return input;
+    var out = input
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&apos;', "'")
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&amp;', '&');
+    if (out.contains('&#')) {
+      out = out.replaceAllMapped(_htmlNumericEntityPattern, (m) {
+        final hex = m.group(1);
+        final dec = m.group(2);
+        final code = hex != null
+            ? int.tryParse(hex, radix: 16)
+            : int.tryParse(dec ?? '');
+        if (code == null ||
+            code < 0x20 ||
+            code > 0x10FFFF ||
+            (code >= 0xD800 && code <= 0xDFFF)) {
+          return m.group(0)!;
+        }
+        return String.fromCharCode(code);
+      });
+    }
+    return out;
+  }
+
+  static final RegExp _scannerPayloadPattern = RegExp(
+    r'(?:<\s*(?:script|img|svg|iframe|body|object|embed)\b|on(?:error|load|mouseover|focus)\s*=|javascript\s*:|alert\s*\(|["\x27]\s*>\s*<)',
+    caseSensitive: false,
+  );
+
+  static final RegExp _latin1MojibakePattern = RegExp(
+    r'(?:[\u00E0-\u00EF][\u0080-\u00BF\s€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ]{2}){2,}|\uFFFD{2,}',
+  );
+
+  static final RegExp _asciiFuzzTokenPattern = RegExp(
+    r'^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_-]{3,32}$',
+  );
+
+  static bool _isCrossOriginDummyHost(String baseUrl, String rawTargetHost) {
+    final host = rawTargetHost.trim().toLowerCase();
+    if (host.isEmpty) return false;
+    final baseHost = Uri.tryParse(baseUrl)?.host.trim().toLowerCase() ?? '';
+    if (baseHost.isNotEmpty &&
+        (host == baseHost ||
+            host.endsWith('.$baseHost') ||
+            baseHost.endsWith('.$host'))) {
+      return false;
+    }
+    return host == 'example.com' ||
+        host.endsWith('.example.com') ||
+        host == 'example.org' ||
+        host.endsWith('.example.org') ||
+        host == 'example.net' ||
+        host.endsWith('.example.net') ||
+        host.endsWith('.example') ||
+        host == 'placeholder.com' ||
+        host.endsWith('.placeholder.com');
+  }
+
+  static bool _isPollutedBookEntry({
+    required String title,
+    required String rawTitle,
+    required String author,
+    required String latestChapter,
+    required String rawBookUrl,
+    required String resolvedBookUrl,
+    required String rawCover,
+    required String baseUrl,
+  }) {
+    if (_scannerPayloadPattern.hasMatch(title) ||
+        _scannerPayloadPattern.hasMatch(rawTitle) ||
+        _scannerPayloadPattern.hasMatch(author) ||
+        _scannerPayloadPattern.hasMatch(latestChapter) ||
+        _scannerPayloadPattern.hasMatch(rawCover)) {
+      return true;
+    }
+    if (_latin1MojibakePattern.hasMatch(rawTitle) ||
+        _latin1MojibakePattern.hasMatch(title) ||
+        _latin1MojibakePattern.hasMatch(latestChapter)) {
+      return true;
+    }
+
+    // Reject paths containing embedded schemes or open-redirect double slashes
+    // injected by automated web vulnerability scanners (e.g. `/comic///example.com/...`
+    // or `/comic/http://...`).
+    final trimmedRawUrl = rawBookUrl.trim();
+    if (trimmedRawUrl.startsWith('/') &&
+        (trimmedRawUrl.contains('//') ||
+            trimmedRawUrl.toLowerCase().contains('http://') ||
+            trimmedRawUrl.toLowerCase().contains('https://'))) {
+      return true;
+    }
+
+    final resolvedUri = Uri.tryParse(resolvedBookUrl);
+    if (resolvedUri != null &&
+        _isCrossOriginDummyHost(baseUrl, resolvedUri.host)) {
+      return true;
+    }
+
+    // Reject machine-generated ASCII alphanumeric fuzz tokens (`zzc2197`,
+    // `ZZT2216JS2`, `i1792p`, `sfl2_pic_15`) that lack an author or point at a
+    // broken/raw-IP callback cover. Real English titles with spaces (`Wicked Spot`),
+    // pure-word titles (`NANA`, `BLEACH`), pure-number titles (`1984`, `86`), or
+    // CJK titles (`斗罗大陆4`) never match `_asciiFuzzTokenPattern`.
+    if (_asciiFuzzTokenPattern.hasMatch(title)) {
+      final suspiciousCover =
+          rawCover.trim().isEmpty ||
+          _sanitizeExtractedCoverUrl(
+                baseUrl,
+                _resolveImageSpecUrl(baseUrl, rawCover),
+              ) ==
+              null;
+      if (author.isEmpty || suspiciousCover) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static String? _sanitizeExtractedCoverUrl(
+    String baseUrl,
+    String? resolvedSpecUrl,
+  ) {
+    if (resolvedSpecUrl == null || resolvedSpecUrl.isEmpty) return null;
+    final spec = tryParseSourceImageSpec(resolvedSpecUrl);
+    if (spec == null) return null;
+    final coverUri = Uri.tryParse(spec.url);
+    if (coverUri == null || coverUri.host.isEmpty) return null;
+    if (_isCrossOriginDummyHost(baseUrl, coverUri.host)) return null;
+
+    // When scraping a domain-based public book source, never connect to raw IP
+    // literal callback servers embedded in polluted cover tags (while keeping
+    // IP-based local mock servers in unit tests working).
+    final baseUri = Uri.tryParse(baseUrl);
+    final baseIsDomain =
+        baseUri != null &&
+        baseUri.host.isNotEmpty &&
+        InternetAddress.tryParse(baseUri.host) == null &&
+        baseUri.host.toLowerCase() != 'localhost';
+    if (baseIsDomain && InternetAddress.tryParse(coverUri.host) != null) {
+      return null;
+    }
+    return resolvedSpecUrl;
+  }
+
+  static String _cleanSingleLine(String input) =>
+      _decodeResidualHtmlEntities(input)
+          .replaceAll('\u00a0', ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
 
   static String _cleanMultilineSummary(String input) {
     final lines = <String>[];
-    for (final line in input.replaceAll('\r\n', '\n').split('\n')) {
+    for (final line
+        in _decodeResidualHtmlEntities(input).replaceAll('\r\n', '\n').split('\n')) {
       final cleaned = line
           .replaceAll('\u00a0', ' ')
           .replaceAll(RegExp(r'[ \t]+'), ' ')

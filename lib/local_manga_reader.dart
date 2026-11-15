@@ -303,7 +303,7 @@ class LocalMangaReaderPage extends StatefulWidget {
 
 class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
-  static const _maxCachedPages = 20;
+  static const _maxCachedPages = 48;
   static const _invertFilter = ColorFilter.matrix(<double>[
     -1, 0, 0, 0, 255, //
     0, -1, 0, 0, 255, //
@@ -345,6 +345,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   List<int> _epubPageToSpine = const [];
 
   int _page = 0;
+  final ValueNotifier<int> _pageNotifier = ValueNotifier<int>(0);
   PageController? _pageController;
   final ScrollController _webtoonController = ScrollController();
   bool _jumpingProgrammatically = false;
@@ -352,6 +353,13 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   Timer? _scrollSaveTimer;
   double _viewportWidth = 0;
   double _viewportHeight = 0;
+
+  void _setCurrentPage(int nextPage) {
+    _page = nextPage;
+    if (_pageNotifier.value != nextPage) {
+      _pageNotifier.value = nextPage;
+    }
+  }
 
   final LinkedHashMap<int, _MangaPageData> _pageCache =
       LinkedHashMap<int, _MangaPageData>();
@@ -506,7 +514,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
       _folderManifest = folderManifest;
       _epubPages = epubPages;
       _epubPageToSpine = epubSpineMap;
-      _page = startPage;
+      _setCurrentPage(startPage);
       _loadingDescriptor = false;
       _syncReadingActivity();
       setState(() {});
@@ -621,7 +629,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
       _pageCount = specs.length;
       _chapters = const [];
       _chapterStartPages = const {};
-      _page = startPage;
+      _setCurrentPage(startPage);
       _loadingDescriptor = false;
       _syncReadingActivity();
       setState(() {});
@@ -664,7 +672,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
         );
         if (!mounted || token != _onlineLoadToken) return;
         final specs = _parseOnlineMangaSpecs(raw);
-        for (final spec in specs.take(2)) {
+        for (final spec in specs.take(4)) {
           SourceImageCache.shared
               .fetchImage(spec, bookId: widget.novel.id)
               .ignore();
@@ -743,6 +751,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     _webtoonController.removeListener(_onWebtoonScroll);
     _webtoonController.dispose();
     _pageController?.dispose();
+    _pageNotifier.dispose();
     _chrome.dispose();
     _pageCache.clear();
     _pendingPages.clear();
@@ -822,8 +831,9 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   }
 
   _MangaPageData? _readyPageData(int page, {required bool cropMargins}) {
-    final cached = _pageCache[page];
+    final cached = _pageCache.remove(page);
     if (cached == null) return null;
+    _pageCache[page] = cached;
     if (cropMargins && cached.cropRect == null) return null;
     return cached;
   }
@@ -853,6 +863,8 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
         final previousSize = _knownSizes[page];
         _knownSizes[page] = intrinsicSize;
         if (mounted &&
+            widget.state.readerPreferences.mangaMode !=
+                MangaReadingMode.webtoon &&
             (previousSize == null ||
                 _isWideComicPage(previousSize) !=
                     _isWideComicPage(intrinsicSize))) {
@@ -919,10 +931,17 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
 
   void _preloadNeighbors(int centerPage) {
     if (!mounted || _pageCount <= 0) return;
-    final cropMargins = widget.state.readerPreferences.mangaCropMargins;
-    for (final delta in const [1, 2, -1]) {
+    final prefs = widget.state.readerPreferences;
+    final cropMargins = prefs.mangaCropMargins;
+    final deltas = prefs.mangaMode == MangaReadingMode.webtoon
+        ? const <int>[1, 2, 3, 4, 5, 6, -1, -2]
+        : const <int>[1, 2, -1];
+    for (final delta in deltas) {
       final target = centerPage + delta;
-      if (target >= 0 && target < _pageCount && !_pageCache.containsKey(target)) {
+      if (target >= 0 &&
+          target < _pageCount &&
+          !_pageCache.containsKey(target) &&
+          !_pendingPages.containsKey(target)) {
         _loadPageData(target, cropMargins: cropMargins).ignore();
       }
     }
@@ -1044,8 +1063,8 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
 
   void _scheduleScrollSave() {
     _dirtyPosition = true;
-    _scrollSaveTimer?.cancel();
-    _scrollSaveTimer = Timer(const Duration(milliseconds: 200), () {
+    if (_scrollSaveTimer?.isActive ?? false) return;
+    _scrollSaveTimer = Timer(const Duration(milliseconds: 350), () {
       if (!mounted) return;
       unawaited(_saveCurrentPosition(_page));
     });
@@ -1056,7 +1075,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     if (spreadIndex < 0 || spreadIndex >= _currentSpreads.length) return;
     final nextPage = _currentSpreads[spreadIndex].firstPage;
     if (_page == nextPage) return;
-    setState(() => _page = nextPage);
+    setState(() => _setCurrentPage(nextPage));
     _preloadNeighbors(nextPage);
     unawaited(_saveCurrentPosition(nextPage));
   }
@@ -1071,7 +1090,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     if (pos.maxScrollExtent <= 0) return;
     if (pos.pixels >= pos.maxScrollExtent - 24) {
       if (_page != _pageCount - 1) {
-        setState(() => _page = _pageCount - 1);
+        _setCurrentPage(_pageCount - 1);
         _preloadNeighbors(_page);
       }
       _scheduleScrollSave();
@@ -1081,7 +1100,7 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
       pos.pixels + math.max(80.0, _viewportHeight * 0.35),
     );
     if (estimated != _page) {
-      setState(() => _page = estimated);
+      _setCurrentPage(estimated);
       _preloadNeighbors(estimated);
     }
     _scheduleScrollSave();
@@ -1163,9 +1182,13 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     if (_pageCount <= 0) return;
     _readingActivity.notifyInteraction();
     final clamped = targetPage.clamp(0, _pageCount - 1);
-    setState(() => _page = clamped);
-    _preloadNeighbors(clamped);
     final mode = widget.state.readerPreferences.mangaMode;
+    if (mode == MangaReadingMode.webtoon) {
+      _setCurrentPage(clamped);
+    } else {
+      setState(() => _setCurrentPage(clamped));
+    }
+    _preloadNeighbors(clamped);
     if (mode == MangaReadingMode.webtoon) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _scrollToWebtoonPage(clamped, animate: animate);
@@ -1726,28 +1749,38 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
           child: Theme(
             data: mangaTheme,
             child: Builder(
-              builder: (themedContext) => ReaderScaffold(
-                chrome: _chrome,
-                novelId: widget.novel.id,
-                title: _effectiveNovel.title,
-                bookmarkListenable: widget.state.bookmarkChanges,
-                isBookmarked: () => _pageBookmarks().isNotEmpty,
-                onAddBookmark: _pageCount == 0 ? null : _toggleBookmark,
-                actions: _actions(),
-                progress: showProgress
-                    ? _buildProgressBar(themedContext, prefs)
-                    : null,
-                useAtmosphere: false,
-                blurBottom: false,
-                maskTopSafeArea: () => false,
-                bottomMaxWidth: 520,
-                backgroundColor: canvasColor,
-                showStatusLine: prefs.showStatusInfo,
-                featherStatusLine: false,
-                statusBackgroundColor: statusBg,
-                statusText: _statusText(prefs),
-                body: _buildBody(themedContext, prefs, canvasColor),
-              ),
+              builder: (themedContext) {
+                final bodyWidget = _buildBody(themedContext, prefs, canvasColor);
+                return ValueListenableBuilder<int>(
+                  valueListenable: _pageNotifier,
+                  child: bodyWidget,
+                  builder: (context, _, bodyChild) => ReaderScaffold(
+                    chrome: _chrome,
+                    novelId: widget.novel.id,
+                    title: _effectiveNovel.title,
+                    bookmarkListenable: Listenable.merge([
+                      widget.state.bookmarkChanges,
+                      _pageNotifier,
+                    ]),
+                    isBookmarked: () => _pageBookmarks().isNotEmpty,
+                    onAddBookmark: _pageCount == 0 ? null : _toggleBookmark,
+                    actions: _actions(),
+                    progress: showProgress
+                        ? _buildProgressBar(themedContext, prefs)
+                        : null,
+                    useAtmosphere: false,
+                    blurBottom: false,
+                    maskTopSafeArea: () => false,
+                    bottomMaxWidth: 520,
+                    backgroundColor: canvasColor,
+                    showStatusLine: prefs.showStatusInfo,
+                    featherStatusLine: false,
+                    statusBackgroundColor: statusBg,
+                    statusText: _statusText(prefs),
+                    body: bodyChild!,
+                  ),
+                );
+              },
             ),
           ),
         );
@@ -2099,6 +2132,40 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     );
   }
 
+  Widget _buildWebtoonReadySlice(
+    _MangaPageData data, {
+    required int page,
+    required bool cropMargins,
+    required bool invert,
+    required int decodeWidth,
+    required Color muted,
+  }) {
+    final rect = cropMargins
+        ? (data.cropRect ?? const Rect.fromLTWH(0, 0, 1, 1))
+        : const Rect.fromLTWH(0, 0, 1, 1);
+    Widget painted = _CroppedMemoryMangaImage(
+      bytes: data.bytes,
+      intrinsicSize: data.intrinsicSize,
+      cropRect: rect,
+      decodeWidth: decodeWidth,
+      muted: muted,
+      onError: () => _pageCache.remove(page),
+    );
+    if (invert) {
+      painted = ColorFiltered(
+        key: ValueKey('manga-color-invert-$page'),
+        colorFilter: _invertFilter,
+        child: painted,
+      );
+    }
+    final croppedW = math.max(1.0, data.intrinsicSize.width * rect.width);
+    final croppedH = math.max(1.0, data.intrinsicSize.height * rect.height);
+    return AspectRatio(
+      aspectRatio: croppedW / croppedH,
+      child: FittedBox(fit: BoxFit.fill, child: painted),
+    );
+  }
+
   Widget _buildWebtoonPageItem(
     BuildContext context, {
     required int page,
@@ -2110,58 +2177,52 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
         ? _viewportWidth
         : MediaQuery.sizeOf(context).width;
     final decodeWidth = _targetDecodeWidth();
-    return FutureBuilder<_MangaPageData>(
-      initialData: _readyPageData(page, cropMargins: cropMargins),
-      future: _loadPageData(page, cropMargins: cropMargins),
-      builder: (context, snapshot) {
-        if (snapshot.hasData) {
-          final data = snapshot.data!;
-          final rect = cropMargins
-              ? (data.cropRect ?? const Rect.fromLTWH(0, 0, 1, 1))
-              : const Rect.fromLTWH(0, 0, 1, 1);
-          Widget painted = _CroppedMemoryMangaImage(
-            bytes: data.bytes,
-            intrinsicSize: data.intrinsicSize,
-            cropRect: rect,
-            decodeWidth: decodeWidth,
-            muted: muted,
-            onError: () => _pageCache.remove(page),
-          );
-          if (invert) {
-            painted = ColorFiltered(
-              key: ValueKey('manga-color-invert-$page'),
-              colorFilter: _invertFilter,
-              child: painted,
+    final ready = _readyPageData(page, cropMargins: cropMargins);
+    if (ready != null) {
+      return RepaintBoundary(
+        child: _buildWebtoonReadySlice(
+          ready,
+          page: page,
+          cropMargins: cropMargins,
+          invert: invert,
+          decodeWidth: decodeWidth,
+          muted: muted,
+        ),
+      );
+    }
+    return RepaintBoundary(
+      child: FutureBuilder<_MangaPageData>(
+        future: _loadPageData(page, cropMargins: cropMargins),
+        builder: (context, snapshot) {
+          if (snapshot.hasData) {
+            return _buildWebtoonReadySlice(
+              snapshot.data!,
+              page: page,
+              cropMargins: cropMargins,
+              invert: invert,
+              decodeWidth: decodeWidth,
+              muted: muted,
             );
           }
-          final croppedW = math.max(1.0, data.intrinsicSize.width * rect.width);
-          final croppedH = math.max(
-            1.0,
-            data.intrinsicSize.height * rect.height,
-          );
-          return AspectRatio(
-            aspectRatio: croppedW / croppedH,
-            child: FittedBox(fit: BoxFit.fill, child: painted),
-          );
-        }
-        final placeholderHeight = _estimatedWebtoonItemHeight(page, width);
-        if (snapshot.hasError) {
+          final placeholderHeight = _estimatedWebtoonItemHeight(page, width);
+          if (snapshot.hasError) {
+            return SizedBox(
+              height: math.min(placeholderHeight, 320),
+              child: _buildPageError(page, muted),
+            );
+          }
           return SizedBox(
-            height: math.min(placeholderHeight, 320),
-            child: _buildPageError(page, muted),
-          );
-        }
-        return SizedBox(
-          height: placeholderHeight,
-          child: Center(
-            child: SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(strokeWidth: 2, color: muted),
+            height: placeholderHeight,
+            child: Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2, color: muted),
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 

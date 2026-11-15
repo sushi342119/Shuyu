@@ -309,8 +309,9 @@ abstract final class NetworkUrlSafety {
       return isBlockedAddress(parsed);
     }
 
-    // Reject non-standard numeric/hex/octal IPv4 encodings (`2130706433`, `0x7f000001`).
-    if (_numericOrHexHostPattern.hasMatch(host)) {
+    // Reject single-label hostnames (`https://x/a.jpg`, intranet names) and
+    // non-standard numeric/hex/octal IPv4 encodings (`2130706433`, `0x7f000001`).
+    if (!host.contains('.') || _numericOrHexHostPattern.hasMatch(host)) {
       return true;
     }
     return false;

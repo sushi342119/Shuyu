@@ -194,10 +194,10 @@ class SourceImageCache {
     Future<Directory> Function()? rootDirectoryProvider,
     SourceImageTransport? transport,
     this.enableDiskCache = true,
-    this.maxMemoryBytes = 24 * 1024 * 1024,
+    this.maxMemoryBytes = 36 * 1024 * 1024,
     this.maxCoverBytes = 8 * 1024 * 1024,
     this.maxPageImageBytes = 15 * 1024 * 1024,
-    this.maxConcurrentPerHost = 3,
+    this.maxConcurrentPerHost = 6,
     this.requestTimeout = const Duration(seconds: 15),
   }) : _rootDirectoryProvider = rootDirectoryProvider,
        _transport = transport;
@@ -227,10 +227,24 @@ class SourceImageCache {
   final Map<String, Future<Uint8List>> _inFlight =
       <String, Future<Uint8List>>{};
   final Map<String, _HostLimiter> _hostLimiters = <String, _HostLimiter>{};
+  final Map<String, DateTime> _failedCovers = <String, DateTime>{};
+  static const Duration _failedCoverCooldown = Duration(seconds: 45);
+  HttpClient? _sharedHttpClient;
   Directory? _resolvedRoot;
   int _memoryBytes = 0;
 
   int get memoryBytes => _memoryBytes;
+
+  HttpClient _obtainHttpClient() {
+    final existing = _sharedHttpClient;
+    if (existing != null) return existing;
+    final created = HttpClient()
+      ..connectionTimeout = requestTimeout
+      ..idleTimeout = const Duration(seconds: 20)
+      ..maxConnectionsPerHost = maxConcurrentPerHost;
+    _sharedHttpClient = created;
+    return created;
+  }
 
   Future<Directory?> _rootDir() async {
     if (!enableDiskCache) return null;
@@ -279,6 +293,7 @@ class SourceImageCache {
 
   void clearMemory() {
     _memory.clear();
+    _failedCovers.clear();
     _memoryBytes = 0;
   }
 
@@ -362,58 +377,54 @@ class SourceImageCache {
       () => _HostLimiter(maxConcurrentPerHost),
     );
     return limiter.run(() async {
-      final client = HttpClient()..connectionTimeout = requestTimeout;
-      try {
-        var currentUri = initialUri;
-        for (var hop = 0; hop <= 4; hop++) {
-          await NetworkUrlSafety.ensureSafeDestination(currentUri);
-          final req = await client
-              .getUrl(currentUri)
-              .timeout(requestTimeout);
-          req.followRedirects = false;
-          try {
-            req.maxRedirects = 0;
-          } catch (_) {}
-          headers.forEach(req.headers.set);
-          final res = await req.close().timeout(requestTimeout);
-          if (HttpDownload.redirectStatuses.contains(res.statusCode)) {
-            final loc = res.headers.value(HttpHeaders.locationHeader);
-            await res.drain<void>();
-            if (loc == null || hop == 4) {
-              throw const FormatException('图片地址重定向过多或无效');
-            }
-            currentUri = NetworkUrlSafety.parsePublicHttpUrl(
-              currentUri.resolve(loc).toString(),
-            );
-            continue;
+      final client = _obtainHttpClient();
+      var currentUri = initialUri;
+      for (var hop = 0; hop <= 4; hop++) {
+        await NetworkUrlSafety.ensureSafeDestination(currentUri);
+        final req = await client
+            .getUrl(currentUri)
+            .timeout(requestTimeout);
+        req.followRedirects = false;
+        try {
+          req.maxRedirects = 0;
+        } catch (_) {}
+        headers.forEach(req.headers.set);
+        final res = await req.close().timeout(requestTimeout);
+        if (HttpDownload.redirectStatuses.contains(res.statusCode)) {
+          final loc = res.headers.value(HttpHeaders.locationHeader);
+          await res.drain<void>();
+          if (loc == null || hop == 4) {
+            throw const FormatException('图片地址重定向过多或无效');
           }
-          if (res.statusCode != HttpStatus.ok) {
-            await res.drain<void>();
-            if (res.statusCode == HttpStatus.forbidden ||
-                res.statusCode == 429 ||
-                res.statusCode == 503) {
-              throw HttpException(
-                '图源拒绝访问或触发限流（HTTP ${res.statusCode}）',
-              );
-            }
-            throw HttpException('图片下载失败（HTTP ${res.statusCode}）');
-          }
-          final bytes = await HttpDownload.readBytes(
-            res,
-            maxBytes: maxBytes,
-            streamTimeout: requestTimeout,
-            onLimitExceeded: () =>
-                const FormatException('图片体积超出安全上限'),
+          currentUri = NetworkUrlSafety.parsePublicHttpUrl(
+            currentUri.resolve(loc).toString(),
           );
-          if (!isRecognizedImageBytes(bytes)) {
-            throw const EncryptedOrInvalidImageException();
-          }
-          return bytes;
+          continue;
         }
-        throw const FormatException('图片地址重定向过多');
-      } finally {
-        client.close(force: true);
+        if (res.statusCode != HttpStatus.ok) {
+          await res.drain<void>();
+          if (res.statusCode == HttpStatus.forbidden ||
+              res.statusCode == 429 ||
+              res.statusCode == 503) {
+            throw HttpException(
+              '图源拒绝访问或触发限流（HTTP ${res.statusCode}）',
+            );
+          }
+          throw HttpException('图片下载失败（HTTP ${res.statusCode}）');
+        }
+        final bytes = await HttpDownload.readBytes(
+          res,
+          maxBytes: maxBytes,
+          streamTimeout: requestTimeout,
+          onLimitExceeded: () =>
+              const FormatException('图片体积超出安全上限'),
+        );
+        if (!isRecognizedImageBytes(bytes)) {
+          throw const EncryptedOrInvalidImageException();
+        }
+        return bytes;
       }
+      throw const FormatException('图片地址重定向过多');
     });
   }
 
@@ -438,6 +449,14 @@ class SourceImageCache {
     final memKey = 'cover:$bookId:${coverUrl ?? ''}';
     final fromMem = _touchMemory(memKey);
     if (fromMem != null) return fromMem;
+
+    final failedAt = _failedCovers[memKey];
+    if (failedAt != null) {
+      if (DateTime.now().difference(failedAt) < _failedCoverCooldown) {
+        throw const HttpException('封面加载失败（短期冷却中）');
+      }
+      _failedCovers.remove(memKey);
+    }
 
     final root = await _rootDir();
     final diskFile = root == null
@@ -484,6 +503,7 @@ class SourceImageCache {
       if (diskFile != null) {
         await _atomicWriteFile(diskFile, bytes);
       }
+      _failedCovers.remove(memKey);
       _storeMemory(memKey, bytes);
       return bytes.asUnmodifiableView();
     }();
@@ -491,6 +511,12 @@ class SourceImageCache {
     _inFlight[memKey] = future;
     try {
       return await future;
+    } catch (_) {
+      _failedCovers[memKey] = DateTime.now();
+      if (_failedCovers.length > 512) {
+        _failedCovers.remove(_failedCovers.keys.first);
+      }
+      rethrow;
     } finally {
       if (identical(_inFlight[memKey], future)) {
         _inFlight.remove(memKey);

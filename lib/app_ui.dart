@@ -1651,6 +1651,12 @@ class NovelCover extends StatelessWidget {
   final bool isDetailCover;
   final bool fadeIn;
 
+  int? _onlineTargetCacheWidth(BuildContext context, Uint8List bytes) {
+    if (novel.id >= 0 || bytes.length <= 4096) return null;
+    final dpr = MediaQuery.devicePixelRatioOf(context).clamp(1.0, 3.5);
+    return (width * dpr).round().clamp(140, isDetailCover ? 960 : 360);
+  }
+
   @override
   Widget build(BuildContext context) {
     final cover = _visual();
@@ -1668,6 +1674,10 @@ class NovelCover extends StatelessWidget {
       ),
       flightShuttleBuilder: (context, animation, direction, from, to) {
         final pushing = direction == HeroFlightDirection.push;
+        final peekBytes = LegacyCover.peek(novel.id);
+        final cacheWidth = peekBytes == null
+            ? null
+            : _onlineTargetCacheWidth(context, peekBytes);
         return PaperCoverFlight(
           key: ValueKey('cover-flight-${novel.id}'),
           animation:
@@ -1675,10 +1685,13 @@ class NovelCover extends StatelessWidget {
                 direction == HeroFlightDirection.push ? to : from,
               )?.animation ??
               animation,
-          imageProvider: switch (LegacyCover.peek(novel.id)) {
-            final bytes? => MemoryImage(bytes),
-            null => null,
-          },
+          imageProvider: peekBytes == null
+              ? null
+              : ResizeImage.resizeIfNeeded(
+                  cacheWidth,
+                  null,
+                  MemoryImage(peekBytes),
+                ),
           faceSize: Size(width, height),
           beginPlane: PaperCoverPlane.fromHero(pushing ? from : to),
           endPlane: PaperCoverPlane.fromHero(pushing ? to : from),
@@ -1731,6 +1744,34 @@ class NovelCover extends StatelessWidget {
       return _coastalShelfPalette[novel.id % _coastalShelfPalette.length];
     }
     return const [Color(0xFF2C3444), accent];
+  }
+
+  Widget _buildCoverMemoryImage(
+    BuildContext context, {
+    required Uint8List bytes,
+    required Widget placeholder,
+    required Widget fallback,
+    required bool recordArrival,
+  }) {
+    final cacheWidth = _onlineTargetCacheWidth(context, bytes);
+    return Image.memory(
+      bytes,
+      cacheWidth: cacheWidth,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      errorBuilder: (context, error, stack) => fallback,
+      frameBuilder: (context, child, frame, synchronous) => CoverArrival(
+        bytes: bytes,
+        ready: frame != null,
+        placeholder: placeholder,
+        recordArrival: recordArrival,
+        fade: fadeIn,
+        child: ColoredBox(
+          color: Theme.of(context).colorScheme.surface,
+          child: child,
+        ),
+      ),
+    );
   }
 
   Widget _visual({bool clip = true, bool recordArrival = true}) {
@@ -1791,32 +1832,30 @@ class NovelCover extends StatelessWidget {
                   label: '正在载入封面',
                 ),
               );
+              final peeked = LegacyCover.peek(novel.id);
+              if (peeked != null) {
+                return _buildCoverMemoryImage(
+                  context,
+                  bytes: peeked,
+                  placeholder: placeholder,
+                  fallback: fallback,
+                  recordArrival: recordArrival,
+                );
+              }
               return FutureBuilder<Uint8List>(
                 key: ValueKey('cover-bytes-${novel.id}'),
                 future: LegacyCover.bytes(novel.id, coverUrl: novel.coverUrl),
-                initialData: LegacyCover.peek(novel.id),
                 builder: (context, snapshot) {
                   final bytes = snapshot.data;
                   if (bytes == null) {
                     return snapshot.hasError ? fallback : placeholder;
                   }
-                  return Image.memory(
-                    bytes,
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                    errorBuilder: (context, error, stack) => fallback,
-                    frameBuilder: (context, child, frame, synchronous) =>
-                        CoverArrival(
-                          bytes: bytes,
-                          ready: frame != null,
-                          placeholder: placeholder,
-                          recordArrival: recordArrival,
-                          fade: fadeIn,
-                          child: ColoredBox(
-                            color: Theme.of(context).colorScheme.surface,
-                            child: child,
-                          ),
-                        ),
+                  return _buildCoverMemoryImage(
+                    context,
+                    bytes: bytes,
+                    placeholder: placeholder,
+                    fallback: fallback,
+                    recordArrival: recordArrival,
                   );
                 },
               );

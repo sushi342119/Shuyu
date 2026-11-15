@@ -1008,4 +1008,106 @@ void main() {
       expect(stateB.chapterFor(origin.bookId), 1);
     });
   });
+
+  group('脏数据清洗、实体解码与发现分类分页能力识别', () {
+    test('过滤扫描器 XSS/乱码/随机串脏条目，还原无分号 HTML 数字实体并保留真实英文/中日文作品', () {
+      const html = '''
+        <div class="list">
+          <div class="card">
+            <a class="title" href="/comic/zzc2197">zzc2197</a>
+            <img data-src="https://x/a.jpg" />
+          </div>
+          <div class="card">
+            <a class="title" href="/comic/xss1">zzx2197"&gt;&lt;img src=x onerror=alert(1)&gt;</a>
+            <span class="author">scanner</span>
+            <img data-src="https://cdn.comic-hub.org/c1.jpg" />
+          </div>
+          <div class="card">
+            <a class="title" href="/comic///example.com/zzt">ZZT2216JS2</a>
+            <img data-src="http://198.51.100.42:18099/p.png" />
+          </div>
+          <div class="card">
+            <a class="title" href="/comic/mojibake">è¿žè½½ä¸­</a>
+            <img data-src="https://cdn.comic-hub.org/m.jpg" />
+          </div>
+          <div class="card">
+            <a class="title" href="/comic/dragon">召唤蜥蜴&amp;#40其实是神龙&amp;#41</a>
+            <span class="author">作者：佐藤</span>
+            <img data-src="http://198.51.100.42:18099/callback.png" />
+          </div>
+          <div class="card">
+            <a class="title" href="/comic/wicked-spot">Wicked Spot</a>
+            <span class="author">Studio K</span>
+            <img data-src="https://cdn.comic-hub.org/wicked.jpg" />
+          </div>
+          <div class="card">
+            <a class="title" href="/comic/op">ONE PIECE航海王</a>
+            <span class="author">尾田荣一郎</span>
+            <img data-src="https://cdn.comic-hub.org/op.jpg" />
+          </div>
+        </div>
+      ''';
+
+      final items = SourceRuleEngine.parseBookListDirect(
+        body: html,
+        baseUrl: 'https://www.comic-hub.org/update',
+        rule: const SourceListRule(
+          bookList: '.card',
+          name: '.title@text',
+          bookUrl: '.title@href',
+          author: '.author@text',
+          coverUrl: 'img@data-src',
+        ),
+      );
+
+      expect(
+        items.map((e) => e.title).toList(),
+        equals(['召唤蜥蜴(其实是神龙)', 'Wicked Spot', 'ONE PIECE航海王']),
+      );
+      // 域名书源下混入的公网裸 IP 回调封面应被自动剥离置空，避免无意义超时与探针回连
+      expect(items[0].coverUrl, isNull);
+      expect(items[1].coverUrl, 'https://cdn.comic-hub.org/wicked.jpg');
+      expect(items[2].coverUrl, 'https://cdn.comic-hub.org/op.jpg');
+    });
+
+    test('拒绝单标签无点号主机名，并准确识别分类 URL 是否支持翻页', () {
+      expect(
+        () => NetworkUrlSafety.parsePublicHttpUrl('https://x/a.jpg'),
+        throwsFormatException,
+      );
+      expect(
+        () => NetworkUrlSafety.parsePublicHttpUrl('http://intranet/probe.png'),
+        throwsFormatException,
+      );
+
+      final parsed = parseBookSourcesJson(
+        jsonEncode([
+          {
+            'bookSourceUrl': 'https://www.comic-hub.org',
+            'bookSourceName': '漫画源',
+            'bookSourceType': 2,
+            'exploreUrl':
+                '人气榜单::/top\n最近更新::/update\n全部漫画::/category?page={{page}}\n奇幻::<index.html,{{page}}.html>',
+            'ruleExplore': {
+              'bookList': '.card',
+              'name': 'a@text',
+              'bookUrl': 'a@href',
+            },
+            'ruleToc': {
+              'chapterList': 'a',
+              'chapterName': 'text',
+              'chapterUrl': 'href',
+            },
+            'ruleContent': {'content': 'img'},
+          },
+        ]),
+      );
+      final kinds = parsed.sources.single.exploreKinds;
+      expect(kinds.length, 4);
+      expect(kinds[0].supportsPagination, isFalse);
+      expect(kinds[1].supportsPagination, isFalse);
+      expect(kinds[2].supportsPagination, isTrue);
+      expect(kinds[3].supportsPagination, isTrue);
+    });
+  });
 }

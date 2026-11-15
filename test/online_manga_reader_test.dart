@@ -14,6 +14,7 @@ import 'package:shuyu/library_filter.dart';
 import 'package:shuyu/library_state.dart';
 import 'package:shuyu/local_manga_reader.dart';
 import 'package:shuyu/pages.dart';
+import 'package:shuyu/reader_preferences.dart';
 import 'package:shuyu/sources/book_source.dart';
 import 'package:shuyu/sources/book_source_store.dart';
 import 'package:shuyu/sources/network_url_safety.dart';
@@ -422,9 +423,161 @@ void main() {
         expect(find.textContaining('第2话 重逢 · 第 1 / 2 页'), findsOneWidget);
         expect(state.chapterForNovel(mangaNovel), 1);
 
+        // 切换至条漫下拉模式，验证上下滑动时页码进度正常随 _pageNotifier 刷新且不崩坏
+        await tester.runAsync(
+          () => state.setReaderPreferences(
+            state.readerPreferences.copyWith(mangaMode: MangaReadingMode.webtoon),
+          ),
+        );
+        await _pumpAsyncUi(tester);
+        expect(find.byKey(const ValueKey('manga-webtoon-list')), findsOneWidget);
+        await tester.drag(
+          find.byKey(const ValueKey('manga-webtoon-list')),
+          const Offset(0, -680),
+        );
+        await _pumpAsyncUi(tester);
+        expect(find.textContaining('第2话 重逢 · 第 2 / 2 页'), findsOneWidget);
+
         await tester.pumpWidget(const SizedBox.shrink());
         await tester.pump(const Duration(milliseconds: 50));
       },
     );
+
+    testWidgets('不含 {{page}} 的单页榜单分类拉到底部时正常显示已展示全部作品，不陷入死循环转圈', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(420, 860);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      late Directory temp;
+      late PathProviderPlatform prevPaths;
+      late BookSourceStore prevSourceStore;
+      late OnlineBookOriginStore prevOriginStore;
+      late SourceHttpClient prevHttp;
+      late LibraryState state;
+      var topFetchCount = 0;
+
+      await tester.runAsync(() async {
+        temp = await Directory.systemTemp.createTemp('shuyu_single_page_feed_');
+        prevPaths = PathProviderPlatform.instance;
+        PathProviderPlatform.instance = _WidgetTestPaths(temp.path);
+        prevSourceStore = BookSourceStore.shared;
+        prevOriginStore = OnlineBookOriginStore.shared;
+        prevHttp = SourceHttpClient.shared;
+
+        BookSourceStore.shared = BookSourceStore(
+          directoryProvider: () async => Directory('${temp.path}/sources'),
+        );
+        OnlineBookOriginStore.shared = OnlineBookOriginStore(
+          directoryProvider: () async => Directory('${temp.path}/sources'),
+          sourceStore: BookSourceStore.shared,
+          enablePersistence: false,
+        );
+        SourceHttpClient.shared = SourceHttpClient(
+          transport: (req) async {
+            if (req.uri.path == '/top') {
+              topFetchCount++;
+              return SourceHttpResponse(
+                finalUri: req.uri,
+                statusCode: 200,
+                body: '''
+                  <div class="b"><a href="/c/1">在魔王城说晚安</a></div>
+                  <div class="b"><a href="/c/2">葬送的芙莉莲</a></div>
+                  <div class="b"><a href="/c/3">迷宫饭</a></div>
+                  <div class="b"><a href="/c/4">银之匙</a></div>
+                  <div class="b"><a href="/c/5">间谍过家家</a></div>
+                  <div class="b"><a href="/c/6">跃动青春</a></div>
+                  <div class="b"><a href="/c/zzc2197">zzc2197</a></div>
+                ''',
+                headers: const {},
+              );
+            }
+            throw HttpException('Unexpected URL ${req.uri}');
+          },
+        );
+        await BookSourceStore.shared.load();
+        await OnlineBookOriginStore.shared.load();
+
+        await BookSourceStore.shared.importFromJsonText(
+          jsonEncode([
+            {
+              'bookSourceUrl': 'https://manga-rank.example.org',
+              'bookSourceName': '榜单漫画源',
+              'bookSourceType': 2,
+              'searchUrl': '/search?q={{key}}',
+              'exploreUrl': '人气榜单::/top',
+              'ruleSearch': {
+                'bookList': '.b',
+                'name': 'a@text',
+                'bookUrl': 'a@href',
+              },
+              'ruleExplore': {
+                'bookList': '.b',
+                'name': 'a@text',
+                'bookUrl': 'a@href',
+              },
+              'ruleToc': {
+                'chapterList': 'a',
+                'chapterName': 'text',
+                'chapterUrl': 'href',
+              },
+              'ruleContent': {'content': 'img'},
+            },
+          ]),
+        );
+
+        LibraryFilter.shared.resetForTesting();
+        SharedPreferences.setMockInitialValues({'reduceMotion': true});
+        await TagStore.load();
+        state = await LibraryState.load();
+      });
+
+      addTearDown(() async {
+        state.dispose();
+        BookSourceStore.shared = prevSourceStore;
+        OnlineBookOriginStore.shared = prevOriginStore;
+        SourceHttpClient.shared = prevHttp;
+        PathProviderPlatform.instance = prevPaths;
+        await tester.runAsync(() async {
+          if (await temp.exists()) await temp.delete(recursive: true);
+        });
+      });
+
+      final sourceRepo = SourceNovelRepository(
+        sourceStore: BookSourceStore.shared,
+        originStore: OnlineBookOriginStore.shared,
+        httpClient: SourceHttpClient.shared,
+      );
+      final router = RemoteRouterRepository(
+        legacy: const DemoNovelRepository(),
+        sources: sourceRepo,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: DiscoverPage(
+              books: const [],
+              state: state,
+              repository: router,
+              onSearch: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.tap(find.text('在线书源'));
+      await _pumpAsyncUi(tester);
+
+      // 脏数据 zzc2197 已被过滤，仅保留 6 部真实作品；继续上拉到底部也不会重复请求 /top 或一直转圈
+      expect(find.text('在魔王城说晚安'), findsWidgets);
+      expect(find.text('zzc2197'), findsNothing);
+      await tester.drag(find.byType(CustomScrollView).last, const Offset(0, -500));
+      await _pumpAsyncUi(tester);
+      expect(find.textContaining('已显示全部 6 部作品'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(topFetchCount, 1);
+    });
   });
 }

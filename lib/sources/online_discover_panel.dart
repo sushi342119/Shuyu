@@ -60,6 +60,7 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
 
   // Streaming search state
   StreamSubscription<SourceSearchBatch>? _searchSub;
+  Completer<void>? _searchCompleter;
   String _activeQuery = '';
   bool _searching = false;
   int _completedSources = 0;
@@ -71,6 +72,7 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
   // Explore feed state
   bool _loadingExplore = false;
   Object? _exploreError;
+  Object? _exploreLoadMoreError;
   int _explorePage = 1;
   bool _exploreHasMore = false;
   final List<Novel> _exploreBooks = <Novel>[];
@@ -104,6 +106,9 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
     widget.focusSearchSignal?.removeListener(_onFocusSearchRequested);
     _store.removeListener(_onStoreChanged);
     _searchSub?.cancel();
+    if (_searchCompleter != null && !_searchCompleter!.isCompleted) {
+      _searchCompleter!.complete();
+    }
     _scrollCtrl.dispose();
     _searchCtrl.dispose();
     _searchFocus.dispose();
@@ -190,6 +195,8 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
       _selectedKindIndex = 0;
       _exploreBooks.clear();
       _exploreError = null;
+      _exploreLoadMoreError = null;
+      _exploreHasMore = false;
       return;
     }
     final active = _currentExploreSource(sources)!;
@@ -211,12 +218,20 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
 
     final kindIdx = _selectedKindIndex.clamp(0, source.exploreKinds.length - 1);
     final kind = source.exploreKinds[kindIdx];
+    if (!reset && !kind.supportsPagination) {
+      if (_exploreHasMore && mounted) {
+        setState(() => _exploreHasMore = false);
+      }
+      return;
+    }
     final nextPage = reset ? 1 : _explorePage + 1;
 
     setState(() {
       _loadingExplore = true;
+      _exploreLoadMoreError = null;
       if (reset) {
         _exploreError = null;
+        _exploreHasMore = false;
         _exploreBooks.clear();
       }
     });
@@ -231,24 +246,43 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
       setState(() {
         _explorePage = nextPage;
         final existing = {for (final b in _exploreBooks) b.id};
+        var addedCount = 0;
         for (final item in page.items) {
-          if (existing.add(item.id)) _exploreBooks.add(item);
+          if (existing.add(item.id)) {
+            _exploreBooks.add(item);
+            addedCount++;
+          }
         }
-        _exploreHasMore = page.items.isNotEmpty;
+        _exploreHasMore = kind.supportsPagination && addedCount > 0;
         _loadingExplore = false;
       });
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _exploreError = error;
+        if (reset || _exploreBooks.isEmpty) {
+          _exploreError = error;
+        } else {
+          _exploreLoadMoreError = error;
+        }
         _loadingExplore = false;
       });
     }
   }
 
+  Future<void> _handlePullRefresh() {
+    if (_activeQuery.isNotEmpty) {
+      _startSearch(_activeQuery);
+      return _searchCompleter?.future ?? Future<void>.value();
+    }
+    return _loadExplore(reset: true);
+  }
+
   void _startSearch(String rawQuery) {
     final q = rawQuery.trim();
     _searchSub?.cancel();
+    if (_searchCompleter != null && !_searchCompleter!.isCompleted) {
+      _searchCompleter!.complete();
+    }
     if (q.isEmpty) {
       setState(() {
         _activeQuery = '';
@@ -264,6 +298,8 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
     }
 
     unawaited(widget.state.recordSearch(q).catchError((Object _) {}));
+    final completer = Completer<void>();
+    _searchCompleter = completer;
 
     setState(() {
       _activeQuery = q;
@@ -316,9 +352,11 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
             });
           },
           onDone: () {
+            if (!completer.isCompleted) completer.complete();
             if (mounted) setState(() => _searching = false);
           },
           onError: (Object err) {
+            if (!completer.isCompleted) completer.complete();
             if (mounted) {
               setState(() {
                 _lastSearchError = err;
@@ -334,6 +372,8 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
     final scheme = Theme.of(context).colorScheme;
     final exploreSources = _eligibleExploreSources();
     final activeSource = _currentExploreSource(exploreSources);
+    final topInset =
+        MediaQuery.paddingOf(context).top + FrostedHeader.toolbarHeight;
 
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
@@ -343,16 +383,21 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
             !_loadingExplore &&
             _exploreHasMore &&
             _exploreError == null &&
+            _exploreLoadMoreError == null &&
             notification.metrics.extentAfter < 500) {
           unawaited(_loadExplore(reset: false));
         }
         return false;
       },
-      child: CustomScrollView(
-        key: const PageStorageKey('discover-online-sources'),
-        controller: _scrollCtrl,
-        physics: const AlwaysScrollableScrollPhysics(),
-        slivers: [
+      child: RefreshIndicator(
+        edgeOffset: topInset,
+        onRefresh: _handlePullRefresh,
+        child: CustomScrollView(
+          key: const PageStorageKey('discover-online-sources'),
+          controller: _scrollCtrl,
+          cacheExtent: 600,
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
           SliverPadding(
             padding: EdgeInsets.fromLTRB(
               24,
@@ -397,6 +442,7 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
             sliver: const SliverToBoxAdapter(child: SizedBox.shrink()),
           ),
         ],
+        ),
       ),
     );
   }
@@ -759,15 +805,58 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
       );
     }
 
+    final showFooter =
+        _loadingExplore ||
+        _exploreLoadMoreError != null ||
+        (!_exploreHasMore && _exploreBooks.length >= 6);
+
     return SliverPadding(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       sliver: SliverList.builder(
-        itemCount: _exploreBooks.length + (_loadingExplore ? 1 : 0),
+        itemCount: _exploreBooks.length + (showFooter ? 1 : 0),
         itemBuilder: (context, index) {
           if (index >= _exploreBooks.length) {
-            return const Padding(
-              padding: EdgeInsets.symmetric(vertical: 18),
-              child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+            if (_loadingExplore) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 18),
+                child: Center(
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              );
+            }
+            if (_exploreLoadMoreError != null) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Center(
+                  child: TextButton.icon(
+                    key: const ValueKey('online-explore-load-more-retry'),
+                    onPressed: () => _loadExplore(reset: false),
+                    icon: const Icon(CupertinoIcons.refresh, size: 14),
+                    label: Text(
+                      '加载下一页失败（${describeSourceError(_exploreLoadMoreError!)}）· 点击重试',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ),
+              );
+            }
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 18),
+              child: Center(
+                child: Text(
+                  '— 已显示全部 ${_exploreBooks.length} 部作品 —',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.72),
+                  ),
+                ),
+              ),
             );
           }
           return _buildOnlineBookTile(context, _exploreBooks[index]);
@@ -783,117 +872,119 @@ class _OnlineDiscoverViewState extends State<OnlineDiscoverView> {
     final sourceLabel = origin?.sourceName ?? '';
     final latest = book.lastUpdate ?? origin?.latestChapterTitle ?? '';
 
-    return InkWell(
-      key: ValueKey('online-book-tile-${book.id}'),
-      onTap: () => widget.onOpenBook(context, book, heroTag),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: BorderSide(color: Theme.of(context).dividerColor),
+    return RepaintBoundary(
+      child: InkWell(
+        key: ValueKey('online-book-tile-${book.id}'),
+        onTap: () => widget.onOpenBook(context, book, heroTag),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: Theme.of(context).dividerColor),
+            ),
           ),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            NovelCover(book, width: 56, height: 76, heroTag: heroTag),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              NovelCover(book, width: 56, height: 76, heroTag: heroTag),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(
+                          ArchiveDesign.fileCode(book.id),
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w600,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                        if (book.isManga) const MangaBadge(label: '漫画'),
+                        if (sourceLabel.isNotEmpty)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: scheme.primary.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              sourceLabel,
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: scheme.primary,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      book.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 15,
+                      ),
+                    ),
+                    if (book.author.trim().isNotEmpty) ...[
+                      const SizedBox(height: 3),
                       Text(
-                        ArchiveDesign.fileCode(book.id),
+                        book.author,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
                           color: scheme.onSurfaceVariant,
                         ),
                       ),
-                      if (book.isManga) const MangaBadge(label: '漫画'),
-                      if (sourceLabel.isNotEmpty)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 1,
-                          ),
-                          decoration: BoxDecoration(
-                            color: scheme.primary.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            sourceLabel,
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                              color: scheme.primary,
-                            ),
-                          ),
-                        ),
                     ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    book.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 15,
-                    ),
-                  ),
-                  if (book.author.trim().isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Text(
-                      book.author,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: scheme.onSurfaceVariant,
+                    if (latest.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        '最新：$latest',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
-                    ),
+                    ] else if (book.summary.trim().isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        book.summary.replaceAll(RegExp(r'\s+'), ' '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
                   ],
-                  if (latest.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Text(
-                      '最新：$latest',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ] else if (book.summary.trim().isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Text(
-                      book.summary.replaceAll(RegExp(r'\s+'), ' '),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ],
+                ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(top: 26),
-              child: Icon(
-                CupertinoIcons.chevron_right,
-                size: 15,
-                color: scheme.onSurfaceVariant,
+              Padding(
+                padding: const EdgeInsets.only(top: 26),
+                child: Icon(
+                  CupertinoIcons.chevron_right,
+                  size: 15,
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

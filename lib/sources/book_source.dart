@@ -59,6 +59,15 @@ class SourceExploreKind {
   final String title;
   final String url;
 
+  /// Whether [url] contains a Legado pagination placeholder (`{{page}}`,
+  /// `{{page-1}}`, `<,page_2.html>`, etc.) rather than a static single-page feed.
+  bool get supportsPagination {
+    final lower = url.toLowerCase();
+    return lower.contains('{{page') ||
+        lower.contains('<,') ||
+        RegExp(r'\{\{[^}]*\bpage\b[^}]*\}\}').hasMatch(lower);
+  }
+
   Map<String, Object?> toJson() => {'title': title, 'url': url};
 
   static SourceExploreKind? fromJson(Object? raw) {
