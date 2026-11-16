@@ -67,7 +67,7 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
   bool _activityForeground = true;
   bool _activityRouteCurrent = true;
   bool _addingBookmark = false;
-  final Map<int, Future<String>> _pending = {};
+  final Map<int, Future<Uint8List>> _pending = {};
 
   String? _openedFileUri;
 
@@ -288,7 +288,7 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
     ),
   ];
 
-  Future<String> _render(int page) {
+  Future<Uint8List> _render(int page) {
     final book = widget.local.bookFor(widget.novel.id);
     if (book == null) return Future.error(StateError('书籍已移除'));
     return _pending.putIfAbsent(page, () async {
@@ -297,9 +297,21 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
                   MediaQuery.sizeOf(context).width)
               .round()
               .clamp(800, 2400);
-      final path = await LocalPlatform.renderPdfPage(book.fileUri, page, width);
-      if (path.isEmpty) throw StateError('页面渲染失败');
-      return path;
+      Future<Uint8List> readPageBytes() async {
+        final path = await LocalPlatform.renderPdfPage(book.fileUri, page, width);
+        if (path.isEmpty) throw StateError('页面渲染失败');
+        return File(path).readAsBytes();
+      }
+
+      // 在完成 Future 前持有字节，后续解码/重建不再依赖 WebP 或旧 PNG 文件仍然存在。
+      // native 的 15 分钟保护覆盖交接；暂停超时、mtime 更新失败或显式清理仍可能抢先删除。
+      // 读取失败时重新请求一次；若持续删除或 I/O 失败，则进入现有的加载失败/重试界面。
+      try {
+        return await readPageBytes();
+      } on FileSystemException {
+        if (!mounted) rethrow;
+        return readPageBytes();
+      }
     });
   }
 
@@ -312,7 +324,7 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
     // 首帧完成后优先预渲染下一页，避免翻页回调里同时启动多个解码任务。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || page + 1 >= _pageCount) return;
-      _render(page + 1).catchError((Object _) => '');
+      unawaited(_render(page + 1).then<void>((_) {}, onError: (Object _) {}));
     });
   }
 
@@ -336,12 +348,12 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
       controller: _controller,
       itemCount: count,
       onPageChanged: _onPageChanged,
-      itemBuilder: (context, page) => FutureBuilder<String>(
+      itemBuilder: (context, page) => FutureBuilder<Uint8List>(
         future: _render(page),
         builder: (context, snapshot) {
           if (snapshot.hasData) {
-            Widget image = Image.file(
-              File(snapshot.data!),
+            Widget image = Image.memory(
+              snapshot.data!,
               fit: BoxFit.contain,
               cacheWidth: width,
               errorBuilder: (context, error, stack) {

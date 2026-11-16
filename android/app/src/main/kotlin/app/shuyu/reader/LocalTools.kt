@@ -34,6 +34,7 @@ import org.json.JSONArray
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
+import java.util.UUID
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
@@ -69,6 +70,9 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         private const val SCAN_TIMEOUT_MS = 60000L
         private const val PDF_CACHE_MAX_BYTES = 256L * 1024 * 1024
         private const val PDF_CACHE_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
+        private const val PDF_CACHE_URI_FILE = "uri.txt"
+        // 为 native 返回路径到 Dart 读完字节留出 15 分钟，容忍调度/短暂后台暂停；不豁免整本书。
+        private const val PDF_CACHE_ACCESS_GRACE_MS = 15L * 60 * 1000
         private const val PDF_CLEANUP_INTERVAL_MS = 60_000L
         private const val PDF_CLEANUP_WRITE_STEP = 16
         private const val MAX_OPEN_PDF_SESSIONS = 2
@@ -90,6 +94,11 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         }
     }
 
+    // SAF 修改时间缺失或非正时，用实例随机盐隔离缓存，避免跨启动复用仅按大小标识的旧页。
+    // 同一 LocalTools 实例内仍复用会话和页缓存：同 URI 替换且大小不变/未知时仍可能展示旧内容，
+    // 需 clearPdfCache 成功或重建 LocalTools。代价是跨实例不能命中旧页、暂时多占磁盘；
+    // 旧目录交给现有过期/容量淘汰。盐只生成一次，每次求键不增加源文件 I/O。
+    private val pdfFallbackCacheToken = UUID.randomUUID().toString()
     private val pdfPoolLock = Any()
     private val pdfSessions = object : LinkedHashMap<String, PdfSession>(4, 0.75f, true) {}
     private val pdfDigestCache = object : LinkedHashMap<String, String>(16, 0.75f, true) {
@@ -122,7 +131,8 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                     } else {
                         val size = if (cursor.isNull(0)) -1L else cursor.getLong(0)
                         val modified = if (cursor.isNull(1)) -1L else cursor.getLong(1)
-                        "size=$size;modified=$modified"
+                        if (modified > 0L) "size=$size;modified=$modified"
+                        else "size=$size;instance=$pdfFallbackCacheToken"
                     }
                 }
             }.getOrNull()
@@ -136,7 +146,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                 )?.use { cursor ->
                     if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else -1L
                 } ?: -1L
-            }.getOrDefault(-1L).let { size -> "size=$size" }
+            }.getOrDefault(-1L).let { size -> "size=$size;instance=$pdfFallbackCacheToken" }
         }
         return "$uriKey\u0000$version"
     }
@@ -1173,23 +1183,45 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
     private fun pdfPageCount(doc: Uri): Int =
         withPdfRenderer(doc) { renderer -> renderer.pageCount }
 
-    /** 按目标宽度渲染单页（白色底，优先高速 WebP 落盘），缓存命中零遍历直接返回路径。 */
+    /** 按目标宽度渲染单页（白色底，优先高速 WebP 落盘），命中时补齐归属并刷新访问时间，无目录遍历。 */
     private fun renderPdfPage(doc: Uri, page: Int, widthPx: Int): String {
         val sourceKey = pdfSourceKey(doc)
         val digest = pdfCacheDigest(sourceKey)
         val pdfRoot = File(activity.cacheDir, "local_pdf")
         val sub = File(pdfRoot, digest)
+        if (!sub.isDirectory && !sub.mkdirs() && !sub.isDirectory) {
+            throw IllegalStateException("PDF cache directory could not be created")
+        }
+        val uriKey = doc.toString()
+        val uriFile = File(sub, PDF_CACHE_URI_FILE)
+        // 页文件落盘前原子记录归属，缓存命中时也补齐旧目录；失败则不留下新的无归属页。
+        val cachedUri = runCatching { uriFile.readText() }.getOrNull()
+        if (!cachedUri.isNullOrBlank() && cachedUri != uriKey) {
+            throw IllegalStateException("PDF cache directory belongs to another URI")
+        }
+        if (cachedUri != uriKey) {
+            val uriTmp = File.createTempFile("uri_", ".tmp", sub)
+            try {
+                uriTmp.writeText(uriKey)
+                if (!uriTmp.renameTo(uriFile)) {
+                    throw IllegalStateException("PDF cache URI could not be recorded")
+                }
+            } finally {
+                uriTmp.delete()
+            }
+        }
         val w = widthPx.coerceIn(400, 2400)
         val out = File(sub, "p_${page}_w${w}.webp")
         if (out.isFile && out.length() > 0L) {
+            out.setLastModified(System.currentTimeMillis())
             return out.absolutePath
         }
         // 兼容直接命中已存在的旧版 .png 缓存页，避免升级后重渲。
         val legacyPng = File(sub, "p_${page}_w${w}.png")
         if (legacyPng.isFile && legacyPng.length() > 0L) {
+            legacyPng.setLastModified(System.currentTimeMillis())
             return legacyPng.absolutePath
         }
-        if (!sub.isDirectory) sub.mkdirs()
         withPdfRenderer(doc, sourceKey) { renderer ->
             require(page in 0 until renderer.pageCount) { "Page out of range" }
             // 双重检查：同一页并发排队时前序请求可能已完成落盘。
@@ -1224,6 +1256,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                 }
             }
         }
+        out.setLastModified(System.currentTimeMillis())
         maybeCleanupPdfCache(pdfRoot, out)
         return out.absolutePath
     }
@@ -1244,7 +1277,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         if (shouldRun) cleanupPdfCache(root, protectedFile, now)
     }
 
-    /** 单遍目录扫描完成残留临时文件、过期书籍与容量上限淘汰。 */
+    /** 单遍扫描清理临时文件；页缓存以 mtime 记录访问，保护窗口外按 7 天过期及 LRU 淘汰。 */
     private fun cleanupPdfCache(
         root: File,
         protectedFile: File? = null,
@@ -1254,7 +1287,8 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         var total = 0L
         val candidates = ArrayList<Pair<File, Long>>()
         for (file in root.walkTopDown()) {
-            if (!file.isFile) continue
+            // 归属记录随整个目录删除，不参与页缓存大小统计、过期或 LRU 淘汰。
+            if (!file.isFile || file.name == PDF_CACHE_URI_FILE) continue
             val modified = file.lastModified()
             val len = file.length()
             val name = file.name
@@ -1265,11 +1299,15 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                 file.delete()
                 continue
             }
-            if (!protected && now - modified > PDF_CACHE_MAX_AGE_MS) {
+            val recentlyAccessed = (name.endsWith(".webp") || name.endsWith(".png")) &&
+                now - modified < PDF_CACHE_ACCESS_GRACE_MS
+            val evictable = !protected && !recentlyAccessed
+            if (evictable && now - modified > PDF_CACHE_MAX_AGE_MS) {
                 if (file.delete()) continue
             }
+            // 近期页仍计入 256 MiB；只允许保护期间暂时超限，后续清理可淘汰这些页。
             total += len
-            if (!protected) candidates.add(file to modified)
+            if (evictable) candidates.add(file to modified)
         }
         if (total > PDF_CACHE_MAX_BYTES && candidates.isNotEmpty()) {
             candidates.sortBy { it.second }
@@ -1280,22 +1318,66 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
             }
         }
         root.listFiles()?.forEach { dir ->
-            if (dir.isDirectory && dir.listFiles().isNullOrEmpty()) {
-                dir.delete()
-            }
+            if (!dir.isDirectory) return@forEach
+            val remaining = dir.listFiles() ?: return@forEach
+            if (remaining.any { it.name != PDF_CACHE_URI_FILE || !it.isFile }) return@forEach
+            remaining.forEach { it.delete() }
+            dir.delete()
         }
     }
 
-    /** 删除某 PDF 的全部渲染缓存并释放打开的渲染句柄。 */
+    /**
+     * 按 URI 删除全部版本的渲染缓存并释放会话，不依赖源文件仍存在或可查询元数据。
+     * true：确认缓存根目录不存在，或扫描完整、所有目录归属可确认且目标目录均删除成功。
+     * false：目录扫描、归属读取或删除失败，或存在无记录/空记录目录，无法确认已经清干净。
+     * 未补齐记录的旧摘要目录无法反推 URI，只能靠 7 天过期和容量淘汰回收；即使它属于
+     * 其他 URI，也会保守返回 false。旧版 hashCode 目录仍按原规则删除。
+     * Dart 的 LocalPlatform.clearPdfCache 当前返回 Future<void>，丢弃此布尔值；
+     * 将来若暴露结果，只有 true 能表示本次确认清空，false 也可能已完成部分删除。
+     */
     private fun clearPdfCache(doc: Uri): Boolean {
         invalidatePdfSession(doc)
-        val digest = pdfCacheDigest(pdfSourceKey(doc))
-        val sub = File(File(activity.cacheDir, "local_pdf"), digest)
-        // 兼容旧版 hashCode 目录。
-        val legacy = File(File(activity.cacheDir, "local_pdf"), Integer.toHexString(doc.toString().hashCode()))
-        if (sub.isDirectory) sub.deleteRecursively()
-        if (legacy.isDirectory && legacy != sub) legacy.deleteRecursively()
-        return true
+        val uriKey = doc.toString()
+        if (uriKey.isBlank()) return false
+        return try {
+            val cacheDir = activity.cacheDir
+            val cacheEntries = cacheDir.list() ?: return false
+            if ("local_pdf" !in cacheEntries) return true
+            val root = File(cacheDir, "local_pdf")
+            val directories = root.listFiles() ?: return false
+            val legacyName = Integer.toHexString(uriKey.hashCode())
+            var cleared = true
+            for (dir in directories) {
+                if (!dir.isDirectory) {
+                    cleared = false
+                    continue
+                }
+                val uriFile = File(dir, PDF_CACHE_URI_FILE)
+                if (dir.name != legacyName) {
+                    val cachedUri = runCatching { uriFile.readText() }.getOrNull()
+                    if (cachedUri.isNullOrBlank()) {
+                        cleared = false
+                        continue
+                    }
+                    if (cachedUri != uriKey) continue
+                }
+                val deleted = runCatching {
+                    val files = dir.listFiles() ?: return@runCatching false
+                    var pagesDeleted = true
+                    for (file in files) {
+                        if (file.name != PDF_CACHE_URI_FILE && !file.deleteRecursively()) {
+                            pagesDeleted = false
+                        }
+                    }
+                    // 先删页，全部成功后才删归属记录，避免删除失败后丢失重试所需的 URI。
+                    pagesDeleted && (!uriFile.exists() || uriFile.delete()) && dir.delete()
+                }.getOrDefault(false)
+                if (!deleted) cleared = false
+            }
+            cleared
+        } catch (_: Exception) {
+            false
+        }
     }
 
     // 将 SAF 文档流式复制到应用私有目录内的 destPath，上限 MAX_EPUB_BYTES；通过同目录 .part 临时文件原子替换，失败不误删既有目标文件
