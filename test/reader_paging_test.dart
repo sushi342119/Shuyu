@@ -135,6 +135,8 @@ void main() {
       position: const ReadingPosition(
         chapter: 0,
         chapterId: 101,
+        paragraphIndex: 1,
+        textOffset: 0,
         offset: 80,
         fraction: 0.2,
         fontSize: 18,

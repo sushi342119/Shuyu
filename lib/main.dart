@@ -55,12 +55,14 @@ class _StartupFailure implements Exception {
   final StackTrace stackTrace;
 }
 
+const _startupTimeout = Duration(seconds: 30);
+
 Future<T> _requiredStartup<T>(
   String item,
   Future<T> Function() action,
 ) async {
   try {
-    return await action();
+    return await action().timeout(_startupTimeout);
   } catch (error, stackTrace) {
     throw _StartupFailure(item, error, stackTrace);
   }
@@ -71,7 +73,7 @@ Future<T?> _safeStartup<T>(
   FutureOr<T> Function() action,
 ) async {
   try {
-    return await action();
+    return await Future<T>.sync(action).timeout(_startupTimeout);
   } catch (error, stackTrace) {
     if (kDebugMode) {
       debugPrint('$item init failed: $error\n$stackTrace');
@@ -90,10 +92,18 @@ Future<void> main() async {
         () => SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge),
       ),
     );
-    // Wave 1: run independent disk, preference, and platform queries concurrently.
+    // Wave 1: load tags before the local library; run independent work concurrently.
     final stateFuture = _requiredStartup('本地阅读状态', LibraryState.load);
+    final tagLoadFuture = TagStore.load();
+    final tagFuture = _safeStartup<Object?>('TagStore.load', () async {
+      await tagLoadFuture;
+      return null;
+    });
     final localFuture = isAndroid
-        ? _requiredStartup('本地书库', LocalLibraryStore.load)
+        ? _requiredStartup('本地书库', () async {
+            await tagLoadFuture.onError((error, stackTrace) {});
+            return LocalLibraryStore.load();
+          })
         : Future<LocalLibraryStore?>.value(null);
     final deviceMapFuture = isAndroid
         ? _safeStartup('LocalPlatform.deviceProfile', LocalPlatform.deviceProfile)
@@ -102,13 +112,17 @@ Future<void> main() async {
         ? _safeStartup('SharedPreferences', SharedPreferences.getInstance)
         : Future<SharedPreferences?>.value(null);
     await Future.wait<Object?>([
-      _safeStartup('registerAppLicenses', registerAppLicenses),
+      _safeStartup<Object?>('registerAppLicenses', () {
+        registerAppLicenses();
+        return null;
+      }),
       _safeStartup('TouchSamplingPolicy', () => TouchSamplingPolicy(binding)),
       stateFuture,
+      tagFuture,
       localFuture,
       deviceMapFuture,
       sharedPrefsFuture,
-    ]);
+    ], eagerError: true);
     final state = await stateFuture;
     final local = await localFuture;
     final deviceMap = await deviceMapFuture;
@@ -124,24 +138,28 @@ Future<void> main() async {
       ThemeMode.system =>
         WidgetsBinding.instance.platformDispatcher.platformBrightness,
     };
-    // Wave 2: parallelize palette, tag store, fonts, shader warm-up & audio cache.
+    // Wave 2: parallelize palette, fonts, shader warm-up & audio cache.
     final audioCacheFuture = isAndroid
         ? _safeStartup('SpeechAudioCache', SpeechAudioCache.forApp)
         : Future<SpeechAudioCache?>.value(null);
     await Future.wait<Object?>([
-      _safeStartup('TagStore.load', TagStore.load),
       _safeStartup('state.loadFonts', state.loadFonts),
       if (state.appPalette.source == AppPaletteSource.system ||
           !state.appPalette.themedIcon)
         _safeStartup('refreshSystemPalette', state.refreshSystemPalette),
       if (state.effectivePerformance.needsRuntimeEffects)
         _safeStartup('NativeEffects.prepare', NativeEffects.prepare),
-      _safeStartup(
+      _safeStartup<Object?>(
         'setSystemUIOverlayStyle',
-        () => SystemChrome.setSystemUIOverlayStyle(novelSystemUiStyle(brightness)),
+        () {
+          SystemChrome.setSystemUIOverlayStyle(
+            novelSystemUiStyle(brightness),
+          );
+          return null;
+        },
       ),
       audioCacheFuture,
-    ]);
+    ], eagerError: true);
     final NovelRepository repository;
     if (isAndroid) {
       final localStore = local!;

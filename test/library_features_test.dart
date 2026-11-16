@@ -18,6 +18,39 @@ Novel _book(int id, {List<NovelChapter> chapters = const []}) => Novel(
   chapters: chapters,
 );
 
+class _PagedRepository extends NovelRepository {
+  _PagedRepository(this._loadPage);
+
+  final Future<NovelPage> Function(NovelSort sort, int page, bool refresh)
+  _loadPage;
+
+  @override
+  Future<NovelPage> browse({
+    NovelSort sort = NovelSort.lastUpdate,
+    int page = 1,
+    bool refresh = false,
+  }) => _loadPage(sort, page, refresh);
+
+  @override
+  Future<List<Novel>> list() => throw UnimplementedError();
+
+  @override
+  Future<Novel?> find(int id) => throw UnimplementedError();
+
+  @override
+  Future<List<Novel>> search(String query) => throw UnimplementedError();
+
+  @override
+  Future<Novel> detail(Novel novel) => throw UnimplementedError();
+
+  @override
+  Future<List<NovelChapter>> chapters(int id) => throw UnimplementedError();
+
+  @override
+  Future<String> chapterContent(int novelId, NovelChapter chapter) =>
+      throw UnimplementedError();
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 

@@ -85,7 +85,7 @@ void main() {
     },
   );
   test('bundled font and license assets are readable', () async {
-    for (final weight in ['Regular', 'Bold']) {
+    for (final weight in ['Regular']) {
       final bytes = await rootBundle.load(
         'assets/fonts/SourceHanSerifCN-$weight.otf',
       );

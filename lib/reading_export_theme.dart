@@ -14,7 +14,7 @@ String readingExportArt(
   if (theme == ReadingVisualTheme.editorial) {
     final season = switch ((at ?? DateTime.now()).month) {
       3 || 4 || 5 || 9 || 10 || 11 => 'spring',
-      _ => 'summer',
+      _ => 'spring',
     };
     return 'assets/report/char_season_$season.webp';
   }

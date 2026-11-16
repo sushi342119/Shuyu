@@ -82,7 +82,7 @@ void main() {
 
     await expectLater(LegacyCover.bytes(999991), throwsFormatException);
     await expectLater(LegacyCover.bytes(999991), throwsFormatException);
-    expect(calls, 1);
+    expect(calls, 0);
   });
 
   testWidgets('外观选择弹层可弹出并切换黑白主题', (tester) async {

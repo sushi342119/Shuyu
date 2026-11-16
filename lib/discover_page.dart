@@ -590,12 +590,10 @@ class _DiscoverLibraryOverviewState extends State<DiscoverLibraryOverview> {
         final byId = <int, Novel>{
           for (final book in widget.books) book.id: book,
         };
-        final offline = offlineRepositoryOf(widget.repository);
         Novel? knownBook(int id) =>
             byId[id] ??
             local?.novelFor(id) ??
-            widget.state.cachedNovel(id) ??
-            offline?.cache.book(id)?.novel;
+            widget.state.cachedNovel(id);
 
         final readBookIds = <int>{
           ...widget.state.recordedReadingIds,

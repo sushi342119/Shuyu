@@ -99,7 +99,8 @@ class _ShelfPageState extends State<ShelfPage> {
       return false;
     }
     final read = state.hasRead(id);
-    final finished = book != null && state.finishedReading(book);
+    final finished =
+        _known(id) != null && state.finishedReading(_known(id)!);
     return switch (state.shelfFilter) {
       'unread' => !read,
       'reading' => read && !finished,

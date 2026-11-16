@@ -1046,7 +1046,7 @@ void main() {
     ]);
     expect(parseMangaImageDimensions(webpVp8x), const Size(1200, 1800));
 
-    // Minimal JPEG with APP1 Exif Orientation=6 (90 deg CW) + SOF0 800x1200 -> swaps to 1200x800
+    // Minimal JPEG with APP1 Exif Orientation=6 (90 deg CW) + SOF0 stored width=1200, height=800 -> display 800x1200
     final exifRotatedJpeg = Uint8List.fromList([
       0xFF, 0xD8,
       // APP1 segment (length 32 = 0x0020)
@@ -1061,6 +1061,6 @@ void main() {
       0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
       0xFF, 0xD9,
     ]);
-    expect(parseMangaImageDimensions(exifRotatedJpeg), const Size(1200, 800));
+    expect(parseMangaImageDimensions(exifRotatedJpeg), const Size(800, 1200));
   });
 }

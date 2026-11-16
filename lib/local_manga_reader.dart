@@ -328,6 +328,7 @@ Size? parseMangaImageDimensions(Uint8List bytes) {
   // 4. JPEG: FF D8 ... scan APP1 Exif orientation & SOF0..SOF15 frame header
   if (bytes[0] == 0xFF && bytes[1] == 0xD8) {
     var swapAxes = false;
+    Size? frameSize;
     var offset = 2;
     while (offset + 3 < len) {
       if (bytes[offset] != 0xFF) {
@@ -407,11 +408,14 @@ Size? parseMangaImageDimensions(Uint8List bytes) {
         final h = (bytes[offset + 3] << 8) | bytes[offset + 4];
         final w = (bytes[offset + 5] << 8) | bytes[offset + 6];
         if (w <= 0 || h <= 0) return null;
-        return swapAxes
-            ? Size(h.toDouble(), w.toDouble())
-            : Size(w.toDouble(), h.toDouble());
+        frameSize = Size(w.toDouble(), h.toDouble());
       }
       offset += segLen;
+    }
+    if (frameSize != null) {
+      return swapAxes
+          ? Size(frameSize.height, frameSize.width)
+          : frameSize;
     }
   }
 
@@ -469,6 +473,7 @@ class LocalMangaReaderPage extends StatefulWidget {
 class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   static const _maxCachedPages = 20;
+  static const _maxCachedPageBytes = 64 * 1024 * 1024;
   static const _invertFilter = ColorFilter.matrix(<double>[
     -1, 0, 0, 0, 255, //
     0, -1, 0, 0, 255, //
@@ -903,7 +908,12 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   void _putPageCache(int page, _MangaPageData data) {
     _pageCache.remove(page);
     _pageCache[page] = data;
-    while (_pageCache.length > _maxCachedPages) {
+    while (_pageCache.length > _maxCachedPages ||
+        _pageCache.values.fold<int>(
+              0,
+              (total, entry) => total + entry.bytes.length,
+            ) >
+            _maxCachedPageBytes) {
       _pageCache.remove(_pageCache.keys.first);
     }
   }

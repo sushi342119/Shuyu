@@ -1745,6 +1745,7 @@ class LibraryState extends ChangeNotifier {
           _underlineChanges.notifyListeners();
         }
       }
+      if (!_disposed) _shelfChanges.notifyListeners();
       notifyListeners();
       });
     })();
@@ -2067,6 +2068,7 @@ class LibraryState extends ChangeNotifier {
         }),
       );
       // 不调用 _historyChanged()，不改变最近阅读排序。
+      if (!_disposed) _shelfChanges.notifyListeners();
       notifyListeners();
     });
   }
@@ -2166,10 +2168,10 @@ class LibraryState extends ChangeNotifier {
       );
     }
     if (novel.id <= 0) return Future.value();
+    final previous = _known[novel.id];
     if (accepts == null) _known[novel.id] = novel;
     final queued = _queuePositionWrite(() async {
       if (accepts != null && !accepts()) return;
-      final previous = _known[novel.id];
       final snapshot = _novelSnapshot(novel);
       if (snapshot != null) await _writeNovel(novel, snapshot);
       _known[novel.id] = novel;

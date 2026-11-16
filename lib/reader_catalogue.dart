@@ -563,7 +563,6 @@ class _ReaderMarksSheetState extends State<ReaderMarksSheet> {
         ReaderCatalogue(
           novel: widget.novel,
           currentChapter: widget.currentChapter,
-          cache: widget.cache,
           onConfigureTocRule: widget.onConfigureTocRule,
         ),
       );

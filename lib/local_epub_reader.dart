@@ -761,7 +761,6 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
           state: widget.state,
           novel: _novel,
           currentChapter: _chapter,
-          cache: null,
           onEditMark: (mark) => _editMark(mark, sheetContext: sheetContext),
         ),
       );

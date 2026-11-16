@@ -233,7 +233,6 @@ void main() {
       isTrue,
     );
     expect(catalogue.currentChapter, 0);
-    expect(catalogue.cache, isNull);
     expect(find.text('正在阅读'), findsOneWidget);
     final row = find.byKey(const ValueKey('reader-chapter-0'));
     expect(

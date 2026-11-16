@@ -75,6 +75,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
     }
 
     private class PdfSession(
+        val uriKey: String,
         val key: String,
         val pfd: android.os.ParcelFileDescriptor,
         val renderer: PdfRenderer,
@@ -94,24 +95,66 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
     private val pdfDigestCache = object : LinkedHashMap<String, String>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean = size > 32
     }
-    private var pdfPoolClosed = false
+    @Volatile private var pdfPoolClosed = false
     @Volatile private var lastPdfCleanupMs = 0L
     private var pdfWritesSinceCleanup = 0
 
-    private fun pdfCacheDigest(uriKey: String): String = synchronized(pdfPoolLock) {
-        pdfDigestCache.getOrPut(uriKey) {
+    private fun pdfSourceKey(doc: Uri): String {
+        val uriKey = doc.toString()
+        val path = doc.path
+        val version = if ((doc.scheme == "file" || doc.scheme == null) && !path.isNullOrEmpty()) {
+            val file = File(path)
+            "size=${file.length()};modified=${file.lastModified()}"
+        } else {
+            val metadata = runCatching {
+                activity.contentResolver.query(
+                    doc,
+                    arrayOf(
+                        DocumentsContract.Document.COLUMN_SIZE,
+                        DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                    ),
+                    null,
+                    null,
+                    null,
+                )?.use { cursor ->
+                    if (!cursor.moveToFirst()) {
+                        null
+                    } else {
+                        val size = if (cursor.isNull(0)) -1L else cursor.getLong(0)
+                        val modified = if (cursor.isNull(1)) -1L else cursor.getLong(1)
+                        "size=$size;modified=$modified"
+                    }
+                }
+            }.getOrNull()
+            metadata ?: runCatching {
+                activity.contentResolver.query(
+                    doc,
+                    arrayOf(OpenableColumns.SIZE),
+                    null,
+                    null,
+                    null,
+                )?.use { cursor ->
+                    if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else -1L
+                } ?: -1L
+            }.getOrDefault(-1L).let { size -> "size=$size" }
+        }
+        return "$uriKey\u0000$version"
+    }
+
+    private fun pdfCacheDigest(sourceKey: String): String = synchronized(pdfPoolLock) {
+        pdfDigestCache.getOrPut(sourceKey) {
             MessageDigest.getInstance("SHA-256")
-                .digest(uriKey.toByteArray())
+                .digest(sourceKey.toByteArray())
                 .joinToString("") { "%02x".format(it) }
                 .substring(0, 16)
         }
     }
 
-    private fun acquirePdfSession(doc: Uri): PdfSession {
-        val key = doc.toString()
+    private fun acquirePdfSession(doc: Uri, sourceKey: String = pdfSourceKey(doc)): PdfSession {
+        val uriKey = doc.toString()
         synchronized(pdfPoolLock) {
             if (pdfPoolClosed) throw IllegalStateException("Activity closed")
-            val cached = pdfSessions[key]
+            val cached = pdfSessions[sourceKey]
             if (cached != null && !cached.evicted) {
                 cached.refCount++
                 return cached
@@ -124,21 +167,34 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
             runCatching { pfd.close() }
             throw e
         }
-        val created = PdfSession(key, pfd, renderer)
+        val created = PdfSession(uriKey, sourceKey, pfd, renderer)
         val toClose = mutableListOf<PdfSession>()
-        var winner: PdfSession = created
+        var winner: PdfSession? = null
+        var closed = false
         synchronized(pdfPoolLock) {
             if (pdfPoolClosed) {
+                created.evicted = true
                 toClose.add(created)
+                closed = true
             } else {
-                val raced = pdfSessions[key]
+                val stale = pdfSessions.entries.iterator()
+                while (stale.hasNext()) {
+                    val session = stale.next().value
+                    if (session.uriKey == uriKey && session.key != sourceKey) {
+                        stale.remove()
+                        session.evicted = true
+                        if (session.refCount == 0) toClose.add(session)
+                    }
+                }
+                val raced = pdfSessions[sourceKey]
                 if (raced != null && !raced.evicted) {
                     raced.refCount++
                     winner = raced
                     toClose.add(created)
                 } else {
                     created.refCount = 1
-                    pdfSessions[key] = created
+                    pdfSessions[sourceKey] = created
+                    winner = created
                     val iter = pdfSessions.entries.iterator()
                     while (pdfSessions.size > MAX_OPEN_PDF_SESSIONS && iter.hasNext()) {
                         val victim = iter.next().value
@@ -151,10 +207,10 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
             }
         }
         toClose.forEach { it.closeQuietly() }
-        if (winner === created && pdfPoolClosed) {
+        if (closed) {
             throw IllegalStateException("Activity closed")
         }
-        return winner
+        return checkNotNull(winner)
     }
 
     private fun releasePdfSession(session: PdfSession, broken: Boolean = false) {
@@ -174,8 +230,12 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         if (closeNow) session.closeQuietly()
     }
 
-    private inline fun <T> withPdfRenderer(doc: Uri, block: (PdfRenderer) -> T): T {
-        val session = acquirePdfSession(doc)
+    private inline fun <T> withPdfRenderer(
+        doc: Uri,
+        sourceKey: String = pdfSourceKey(doc),
+        block: (PdfRenderer) -> T,
+    ): T {
+        val session = acquirePdfSession(doc, sourceKey)
         var broken = false
         return try {
             synchronized(session.renderLock) {
@@ -199,16 +259,20 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
     }
 
     private fun invalidatePdfSession(doc: Uri) {
-        val key = doc.toString()
-        var closeNow: PdfSession? = null
+        val uriKey = doc.toString()
+        val toClose = mutableListOf<PdfSession>()
         synchronized(pdfPoolLock) {
-            val existing = pdfSessions.remove(key)
-            if (existing != null) {
-                existing.evicted = true
-                if (existing.refCount == 0) closeNow = existing
+            val iter = pdfSessions.entries.iterator()
+            while (iter.hasNext()) {
+                val existing = iter.next().value
+                if (existing.uriKey == uriKey) {
+                    iter.remove()
+                    existing.evicted = true
+                    if (existing.refCount == 0) toClose.add(existing)
+                }
             }
         }
-        closeNow?.closeQuietly()
+        toClose.forEach { it.closeQuietly() }
     }
 
     private fun closeAllPdfSessions() {
@@ -1111,7 +1175,8 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
 
     /** 按目标宽度渲染单页（白色底，优先高速 WebP 落盘），缓存命中零遍历直接返回路径。 */
     private fun renderPdfPage(doc: Uri, page: Int, widthPx: Int): String {
-        val digest = pdfCacheDigest(doc.toString())
+        val sourceKey = pdfSourceKey(doc)
+        val digest = pdfCacheDigest(sourceKey)
         val pdfRoot = File(activity.cacheDir, "local_pdf")
         val sub = File(pdfRoot, digest)
         val w = widthPx.coerceIn(400, 2400)
@@ -1125,7 +1190,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
             return legacyPng.absolutePath
         }
         if (!sub.isDirectory) sub.mkdirs()
-        withPdfRenderer(doc) { renderer ->
+        withPdfRenderer(doc, sourceKey) { renderer ->
             require(page in 0 until renderer.pageCount) { "Page out of range" }
             // 双重检查：同一页并发排队时前序请求可能已完成落盘。
             if (out.isFile && out.length() > 0L) return@withPdfRenderer
@@ -1159,11 +1224,11 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                 }
             }
         }
-        maybeCleanupPdfCache(pdfRoot, sub)
+        maybeCleanupPdfCache(pdfRoot, out)
         return out.absolutePath
     }
 
-    private fun maybeCleanupPdfCache(root: File, active: File) {
+    private fun maybeCleanupPdfCache(root: File, protectedFile: File? = null) {
         val now = System.currentTimeMillis()
         var shouldRun = false
         synchronized(pdfPoolLock) {
@@ -1176,41 +1241,46 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                 shouldRun = true
             }
         }
-        if (shouldRun) cleanupPdfCache(root, active, now)
+        if (shouldRun) cleanupPdfCache(root, protectedFile, now)
     }
 
     /** 单遍目录扫描完成残留临时文件、过期书籍与容量上限淘汰。 */
-    private fun cleanupPdfCache(root: File, active: File, now: Long = System.currentTimeMillis()) {
+    private fun cleanupPdfCache(
+        root: File,
+        protectedFile: File? = null,
+        now: Long = System.currentTimeMillis(),
+    ) {
         if (!root.isDirectory) return
         var total = 0L
-        val inactiveCandidates = ArrayList<Pair<File, Long>>()
+        val candidates = ArrayList<Pair<File, Long>>()
         for (file in root.walkTopDown()) {
             if (!file.isFile) continue
             val modified = file.lastModified()
             val len = file.length()
             val name = file.name
-            if ((name.endsWith(".tmp") || name.contains(".tmp.")) && now - modified > 60 * 60 * 1000L) {
+            val protected = protectedFile?.absolutePath == file.absolutePath
+            if (!protected && (name.endsWith(".tmp") || name.contains(".tmp.")) &&
+                now - modified > 60 * 60 * 1000L
+            ) {
                 file.delete()
                 continue
             }
-            if (file.parentFile != active && now - modified > PDF_CACHE_MAX_AGE_MS) {
+            if (!protected && now - modified > PDF_CACHE_MAX_AGE_MS) {
                 if (file.delete()) continue
             }
             total += len
-            if (file.parentFile != active) {
-                inactiveCandidates.add(file to modified)
-            }
+            if (!protected) candidates.add(file to modified)
         }
-        if (total > PDF_CACHE_MAX_BYTES && inactiveCandidates.isNotEmpty()) {
-            inactiveCandidates.sortBy { it.second }
-            for ((file, _) in inactiveCandidates) {
+        if (total > PDF_CACHE_MAX_BYTES && candidates.isNotEmpty()) {
+            candidates.sortBy { it.second }
+            for ((file, _) in candidates) {
                 if (total <= PDF_CACHE_MAX_BYTES) break
                 val len = file.length()
                 if (file.delete()) total -= len
             }
         }
         root.listFiles()?.forEach { dir ->
-            if (dir.isDirectory && dir != active && dir.listFiles().isNullOrEmpty()) {
+            if (dir.isDirectory && dir.listFiles().isNullOrEmpty()) {
                 dir.delete()
             }
         }
@@ -1219,7 +1289,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
     /** 删除某 PDF 的全部渲染缓存并释放打开的渲染句柄。 */
     private fun clearPdfCache(doc: Uri): Boolean {
         invalidatePdfSession(doc)
-        val digest = pdfCacheDigest(doc.toString())
+        val digest = pdfCacheDigest(pdfSourceKey(doc))
         val sub = File(File(activity.cacheDir, "local_pdf"), digest)
         // 兼容旧版 hashCode 目录。
         val legacy = File(File(activity.cacheDir, "local_pdf"), Integer.toHexString(doc.toString().hashCode()))
