@@ -37,6 +37,7 @@ class _ShelfPageState extends State<ShelfPage> {
   final _query = TextEditingController();
   Timer? _queryDelay;
   Map<int, Novel?> _buildKnown = const {};
+  String _normalizedBuildQuery = '';
   SearchScope _scope = SearchScope.all;
   final Set<int> _selection = {};
   final _scroll = ScrollController();
@@ -62,7 +63,7 @@ class _ShelfPageState extends State<ShelfPage> {
   );
   LibraryState get state => widget.state;
   late final _changes = Listenable.merge([
-    state,
+    state.shelfChanges,
     state.historyChanges,
     state.shelfViewChanges,
     TagStore.shared,
@@ -87,8 +88,16 @@ class _ShelfPageState extends State<ShelfPage> {
     )) {
       return false;
     }
-    final book = _known(id);
-    if (!matchesSearch(book, id, _query.text, _scope)) return false;
+    if (_normalizedBuildQuery.isNotEmpty &&
+        !matchesSearch(
+          _known(id),
+          id,
+          _query.text,
+          _scope,
+          normalizedQuery: _normalizedBuildQuery,
+        )) {
+      return false;
+    }
     final read = state.hasRead(id);
     final finished = book != null && state.finishedReading(book);
     return switch (state.shelfFilter) {
@@ -161,6 +170,7 @@ class _ShelfPageState extends State<ShelfPage> {
       _buildKnown = {
         for (final id in state.shelf) id: _knownFromSources(id, feedById),
       };
+      _normalizedBuildQuery = _query.text.trim().toLowerCase();
       _filter.prune(TagStore.shared);
       final saved = state.shelf.where(_matches).toList()..sort(_compare);
       _selection.removeWhere((id) => !state.contains(id));

@@ -10,7 +10,6 @@ import 'package:shuyu/app_typography.dart';
 import 'package:shuyu/filename_tags.dart';
 import 'package:shuyu/lan_bookshelf_server.dart';
 import 'package:shuyu/legacy_cover.dart';
-import 'package:shuyu/legacy_transport.dart';
 import 'package:shuyu/library_backup.dart';
 import 'package:shuyu/library_state.dart';
 import 'package:shuyu/listening/edge_tts.dart';
@@ -113,25 +112,14 @@ void main() {
     expect(valid.records['recentSearches'], ['Book']);
   });
 
-  test('illustration boundary rejects invalid addresses before invoking native', () async {
-    var calls = 0;
-    messenger.setMockMethodCallHandler(LegacyTransport.channel, (call) async {
-      calls++;
-      expect((call.arguments as Map)['url'], 'https://pic.wenku8.cn/image');
-      return Uint8List.fromList([1]);
-    });
-    addTearDown(() => messenger.setMockMethodCallHandler(LegacyTransport.channel, null));
+  test('illustration URL normalizer rejects untrusted addresses', () {
     for (final url in [
       'file:///synthetic-image', 'https://outside.invalid/image',
       'https://wenku8.com:8443/image', 'https://user@wenku8.com/image',
       'https://wenku8.com.outside.invalid/image',
     ]) {
       expect(normalizeReaderIllustrationUrl(url), isNull);
-      await expectLater(LegacyTransport.illustration(url), throwsFormatException);
     }
-    expect(calls, 0);
-    await LegacyTransport.illustration('http://pic.wenku8.cn/image');
-    expect(calls, 1);
   });
 
   test('local cover never reaches native regardless of seeding order', () async {

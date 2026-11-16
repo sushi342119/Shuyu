@@ -293,6 +293,43 @@ class _ReaderPageState extends State<ReaderPage>
   bool _deferredProgressSync = false;
   bool _pagedTickQueued = false;
 
+  // Chapter-scoped memoization so scroll itemBuilder & paged rebuilds never
+  // re-run regex purification or O(N*M) annotation projection per frame.
+  List<String>? _purifyCacheSource;
+  int _purifyCacheBookId = -1;
+  int _purifyCacheChapter = -1;
+  int _purifyCacheRevision = -1;
+  List<PurifiedParagraph?>? _purifyCacheEntries;
+
+  ReaderContent? _purifiedChapterSource;
+  int _purifiedChapterBookId = -1;
+  int _purifiedChapterIndex = -1;
+  int _purifiedChapterRevision = -1;
+  ReaderContent? _purifiedChapterCached;
+
+  int _underlineCacheGen = 0;
+  int _annotationsCacheBookId = -1;
+  int _annotationsCacheChapterId = -1;
+  int _annotationsCacheChapterIndex = -1;
+  int _annotationsCacheUnderlineGen = -1;
+  int _annotationsCachePurifyRev = -1;
+  List<String>? _annotationsCacheSource;
+  List<ReaderAnnotationRange>? _annotationsCached;
+
+  int _bookmarkCacheGen = 0;
+  int _chapterBookmarkCheckGen = -1;
+  int _chapterBookmarkCheckIndex = -1;
+  bool _chapterHasPositionBookmarks = false;
+
+  void _onUnderlinesUpdated() {
+    _underlineCacheGen++;
+  }
+
+  void _onBookmarksUpdated() {
+    _bookmarkCacheGen++;
+    _syncBookmarkedState();
+  }
+
   void _rebuildMergedListenables() {
     _bookmarkMerged = Listenable.merge([
       _bookmarkedState,
@@ -362,9 +399,9 @@ class _ReaderPageState extends State<ReaderPage>
     }
     _computeChapterWeights();
     _scroll.addListener(_updateProgressFromScroll);
-    widget.state.bookmarkChanges.addListener(_syncBookmarkedState);
+    widget.state.bookmarkChanges.addListener(_onBookmarksUpdated);
+    widget.state.underlineChanges.addListener(_onUnderlinesUpdated);
     _bookmarkLanding.addListener(_syncBookmarkedState);
-    _progressValue.addListener(_syncBookmarkedState);
     _chapterReveal = AnimationController(
       vsync: this,
       duration: NovelMotion.enter,
@@ -406,8 +443,12 @@ class _ReaderPageState extends State<ReaderPage>
   void didUpdateWidget(covariant ReaderPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.state != widget.state) {
-      oldWidget.state.bookmarkChanges.removeListener(_syncBookmarkedState);
-      widget.state.bookmarkChanges.addListener(_syncBookmarkedState);
+      oldWidget.state.bookmarkChanges.removeListener(_onBookmarksUpdated);
+      oldWidget.state.underlineChanges.removeListener(_onUnderlinesUpdated);
+      widget.state.bookmarkChanges.addListener(_onBookmarksUpdated);
+      widget.state.underlineChanges.addListener(_onUnderlinesUpdated);
+      _underlineCacheGen++;
+      _bookmarkCacheGen++;
       _rebuildMergedListenables();
       _readingActivity.dispose();
       _readingActivity = ReadingActivitySession(
@@ -443,9 +484,9 @@ class _ReaderPageState extends State<ReaderPage>
   void dispose() {
     _readingActivity.dispose();
     _local?.removeListener(_localChanged);
-    widget.state.bookmarkChanges.removeListener(_syncBookmarkedState);
+    widget.state.bookmarkChanges.removeListener(_onBookmarksUpdated);
+    widget.state.underlineChanges.removeListener(_onUnderlinesUpdated);
     _bookmarkLanding.removeListener(_syncBookmarkedState);
-    _progressValue.removeListener(_syncBookmarkedState);
     _idleSave?.cancel();
     _prefetchTimer?.cancel();
     _savePosition(notify: false, finalSave: true);
@@ -761,14 +802,15 @@ class _ReaderPageState extends State<ReaderPage>
   void _applyProgressFromScroll() {
     if (!mounted || !_activityAttached) return;
     _syncProgressBarVisibility();
+    if (!_progressDragging) {
+      final v = _bookProgress();
+      if ((v - _progressValue.value).abs() > 0.0005) {
+        _progressValue.value = v;
+      }
+    }
     final nextBookmarked = _isCurrentPositionBookmarked;
     if (_bookmarkedState.value != nextBookmarked) {
       _bookmarkedState.value = nextBookmarked;
-    }
-    if (_progressDragging) return;
-    final v = _bookProgress();
-    if ((v - _progressValue.value).abs() > 0.0005) {
-      _progressValue.value = v;
     }
   }
 
@@ -888,7 +930,6 @@ class _ReaderPageState extends State<ReaderPage>
           state: widget.state,
           novel: _novel,
           currentChapter: _chapter,
-          cache: offlineRepositoryForBook(widget.repository, _novel.id)?.cache,
           onPickUnderline: _ready && _currentContent != null
               ? () => _pickChapterTextInMarksSheet(sheetContext: sheetContext)
               : null,
@@ -978,11 +1019,7 @@ class _ReaderPageState extends State<ReaderPage>
           if (mounted && generation == _contentGeneration) {
             _listeningTarget = null;
             _listeningChanged();
-            if (content.paragraphs.any((p) => p.trim() == '[插图]') &&
-                offlineRepositoryForBook(widget.repository, _novel.id) !=
-                    null) {
-              unawaited(_refreshIllustrations(automatic: true));
-            }
+
           }
         });
         // Design §4: the 420ms paragraph entrance on chapter change is
@@ -1141,29 +1178,16 @@ class _ReaderPageState extends State<ReaderPage>
 
   Future<String> _requestContent(int index, {bool refresh = false}) async {
     if (_novel.chapters.isEmpty) throw const FormatException('目录为空');
-    if (offlineRepositoryForBook(widget.repository, _novel.id)
-        case final offline?) {
-      await offline.rememberDirectory(_novel);
-      if (refresh) {
-        return offline.refreshChapterContent(_novel.id, _novel.chapters[index]);
-      }
-    }
     return widget.repository.chapterContent(_novel.id, _novel.chapters[index]);
   }
 
   Future<void> _refreshIllustrations({bool automatic = false}) async {
-    if (_illustrationsRefreshing) return;
+    if (_illustrationsRefreshing || automatic) return;
     final chapter = _chapter;
     final generation = _contentGeneration;
     setState(() => _illustrationsRefreshing = true);
     try {
-      final body = automatic
-          ? await offlineRepositoryForBook(widget.repository, _novel.id)
-                ?.repairChapterIllustrations(
-                  _novel.id,
-                  _novel.chapters[chapter],
-                )
-          : await _requestContent(chapter, refresh: true);
+      final body = await _requestContent(chapter, refresh: true);
       if (body == null) return;
       final content = await ReaderContent.parse(body);
       if (!mounted || chapter != _chapter || generation != _contentGeneration) {
@@ -1194,7 +1218,27 @@ class _ReaderPageState extends State<ReaderPage>
     if (paragraphIndex < 0 || paragraphIndex >= paragraphs.length) {
       return const PurifiedParagraph('');
     }
-    return ReaderPurificationStore.shared.purifyParagraphWithMap(
+    final store = ReaderPurificationStore.shared;
+    if (!store.hasEnabledRules &&
+        !store.hasChapterEdits(_novel.id, chapterIndex)) {
+      return PurifiedParagraph(paragraphs[paragraphIndex]);
+    }
+    if (!identical(paragraphs, _purifyCacheSource) ||
+        _purifyCacheBookId != _novel.id ||
+        _purifyCacheChapter != chapterIndex ||
+        _purifyCacheRevision != store.revision ||
+        _purifyCacheEntries == null ||
+        _purifyCacheEntries!.length != paragraphs.length) {
+      _purifyCacheSource = paragraphs;
+      _purifyCacheBookId = _novel.id;
+      _purifyCacheChapter = chapterIndex;
+      _purifyCacheRevision = store.revision;
+      _purifyCacheEntries = List<PurifiedParagraph?>.filled(
+        paragraphs.length,
+        null,
+      );
+    }
+    return _purifyCacheEntries![paragraphIndex] ??= store.purifyParagraphWithMap(
       paragraphs[paragraphIndex],
       bookId: _novel.id,
       bookTitle: _novel.title,
@@ -1205,6 +1249,45 @@ class _ReaderPageState extends State<ReaderPage>
           : null,
       isFirstParagraph: paragraphIndex == 0,
     );
+  }
+
+  List<ReaderAnnotationRange> _projectedAnnotationsForChapter(
+    int chapterId,
+    int chapterIndex,
+    List<String> rawParagraphs, {
+    bool identity = false,
+  }) {
+    final store = ReaderPurificationStore.shared;
+    if (_annotationsCached != null &&
+        _annotationsCacheBookId == _novel.id &&
+        _annotationsCacheChapterId == chapterId &&
+        _annotationsCacheChapterIndex == chapterIndex &&
+        _annotationsCacheUnderlineGen == _underlineCacheGen &&
+        _annotationsCachePurifyRev == store.revision &&
+        identical(_annotationsCacheSource, rawParagraphs)) {
+      return _annotationsCached!;
+    }
+    final rawAnnotations = widget.state.annotationsFor(
+      _novel.id,
+      chapterId: chapterId,
+    );
+    final projected = rawAnnotations.isEmpty ||
+            identity ||
+            (!store.hasEnabledRules &&
+                !store.hasChapterEdits(_novel.id, chapterIndex))
+        ? rawAnnotations
+        : store.mapAnnotationsToPurified(
+            rawAnnotations,
+            resolveParagraph: (pIdx) =>
+                _purifyParagraphAt(rawParagraphs, chapterIndex, pIdx),
+          );
+    _annotationsCacheBookId = _novel.id;
+    _annotationsCacheChapterId = chapterId;
+    _annotationsCacheChapterIndex = chapterIndex;
+    _annotationsCacheUnderlineGen = _underlineCacheGen;
+    _annotationsCachePurifyRev = store.revision;
+    _annotationsCacheSource = rawParagraphs;
+    return _annotationsCached = projected;
   }
 
   ReaderRichParagraph _projectRichParagraph(
@@ -1252,6 +1335,13 @@ class _ReaderPageState extends State<ReaderPage>
     if (!store.hasEnabledRules && !store.hasChapterEdits(_novel.id, chapterIndex)) {
       return raw;
     }
+    if (_purifiedChapterCached != null &&
+        identical(raw, _purifiedChapterSource) &&
+        _purifiedChapterBookId == _novel.id &&
+        _purifiedChapterIndex == chapterIndex &&
+        _purifiedChapterRevision == store.revision) {
+      return _purifiedChapterCached!;
+    }
     var changed = false;
     final paragraphs = <String>[];
     final projectedFormats = <int, ReaderRichParagraph>{};
@@ -1266,18 +1356,24 @@ class _ReaderPageState extends State<ReaderPage>
         projectedFormats[i] = _projectRichParagraph(rawFormat, p);
       }
     }
-    if (!changed) return raw;
-    return ReaderContent(
-      List.unmodifiable(paragraphs),
-      readingOrder: raw.readingOrder,
-      inlineOwners: raw.inlineOwners,
-      placementIds: raw.placementIds,
-      formats: projectedFormats,
-      notes: raw.notes,
-      revision: raw.revision,
-      coordinateMap: raw.coordinateMap,
-      languageFilter: raw.languageFilter,
-    );
+    final result = !changed
+        ? raw
+        : ReaderContent(
+            List.unmodifiable(paragraphs),
+            readingOrder: raw.readingOrder,
+            inlineOwners: raw.inlineOwners,
+            placementIds: raw.placementIds,
+            formats: projectedFormats,
+            notes: raw.notes,
+            revision: raw.revision,
+            coordinateMap: raw.coordinateMap,
+            languageFilter: raw.languageFilter,
+          );
+    _purifiedChapterSource = raw;
+    _purifiedChapterBookId = _novel.id;
+    _purifiedChapterIndex = chapterIndex;
+    _purifiedChapterRevision = store.revision;
+    return _purifiedChapterCached = result;
   }
 
   Widget _buildPagedIllustration(ReaderPageFragment fragment) {
@@ -1395,16 +1491,12 @@ class _ReaderPageState extends State<ReaderPage>
       child: AnimatedBuilder(
         animation: widget.state.underlineChanges,
         builder: (context, _) {
-          final rawAnnotations = chapterId == null
+          final annotations = chapterId == null
               ? const <ReaderAnnotationRange>[]
-              : widget.state.annotationsFor(_novel.id, chapterId: chapterId);
-          final annotations = rawAnnotations.isEmpty || purified.isIdentity
-              ? rawAnnotations
-              : ReaderPurificationStore.shared.mapAnnotationsToPurified(
-                  rawAnnotations,
-                  resolveParagraph: (pIdx) => pIdx == index
-                      ? purified
-                      : _purifyParagraphAt(paragraphs, _chapter, pIdx),
+              : _projectedAnnotationsForChapter(
+                  chapterId,
+                  _chapter,
+                  paragraphs,
                 );
           final marks = annotations.isEmpty
               ? const <ReaderTextMark>[]
@@ -1725,18 +1817,12 @@ class _ReaderPageState extends State<ReaderPage>
     return AnimatedBuilder(
       animation: widget.state.underlineChanges,
       builder: (context, _) {
-        final rawAnnotations = widget.state.annotationsFor(
-          _novel.id,
-          chapterId: chapterId,
+        final annotations = _projectedAnnotationsForChapter(
+          chapterId,
+          chapterIndex,
+          content.paragraphs,
+          identity: identical(purifiedContent, content),
         );
-        final annotations =
-            rawAnnotations.isEmpty || identical(purifiedContent, content)
-            ? rawAnnotations
-            : ReaderPurificationStore.shared.mapAnnotationsToPurified(
-                rawAnnotations,
-                resolveParagraph: (pIdx) =>
-                    _purifyParagraphAt(content.paragraphs, chapterIndex, pIdx),
-              );
         return ReaderPagedView(
           key: ValueKey(('reader-paged', prefs.mode, _novel.id)),
           content: purifiedContent,
@@ -2043,6 +2129,39 @@ class _ReaderPageState extends State<ReaderPage>
                               format: format,
                               indent: indent,
                             );
+                            final paddedParagraph = Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: ValueListenableBuilder<int?>(
+                                valueListenable: _bookmarkLanding,
+                                child: _listening == null
+                                    ? paragraphWidget
+                                    : ListeningParagraphHighlight(
+                                        controller: _listening!,
+                                        novelId: _novel.id,
+                                        chapter: _chapter,
+                                        paragraph: index,
+                                        onDoubleTap: () =>
+                                            _doubleTapListeningParagraph(
+                                              index,
+                                            ),
+                                        interactive:
+                                            !isIllustration &&
+                                            hasSpeechText(rawParagraph),
+                                        child: paragraphWidget,
+                                      ),
+                                builder: (context, selected, child) =>
+                                    selected == index
+                                    ? ReaderLandingHighlight(
+                                        key: ValueKey(
+                                          'bookmark-landing-$index',
+                                        ),
+                                        reduceMotion:
+                                            widget.state.reduceMotion,
+                                        child: child!,
+                                      )
+                                    : child!,
+                              ),
+                            );
                             return ReaderParagraph(
                               key: ValueKey(
                                 'paragraph-anchor-$_contentGeneration-$index',
@@ -2050,46 +2169,24 @@ class _ReaderPageState extends State<ReaderPage>
                               registry: _paragraphRegistry,
                               index: index,
                               textOffset: indent ? 1 : 0,
-                              child: LoadedContentItem(
-                                key: ValueKey(
-                                  'reader-paragraph-reveal-$index',
-                                ),
-                                index: index - _chapterRevealFirst,
-                                animation: _chapterReveal,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(bottom: 12),
-                                  child: ValueListenableBuilder<int?>(
-                                    valueListenable: _bookmarkLanding,
-                                    child: _listening == null
-                                        ? paragraphWidget
-                                        : ListeningParagraphHighlight(
-                                            controller: _listening!,
-                                            novelId: _novel.id,
-                                            chapter: _chapter,
-                                            paragraph: index,
-                                            onDoubleTap: () =>
-                                                _doubleTapListeningParagraph(
-                                                  index,
-                                                ),
-                                            interactive:
-                                                !isIllustration &&
-                                                hasSpeechText(rawParagraph),
-                                            child: paragraphWidget,
-                                          ),
-                                    builder: (context, selected, child) =>
-                                        selected == index
-                                        ? ReaderLandingHighlight(
-                                            key: ValueKey(
-                                              'bookmark-landing-$index',
-                                            ),
-                                            reduceMotion:
-                                                widget.state.reduceMotion,
-                                            child: child!,
-                                          )
-                                        : child!,
-                                  ),
-                                ),
-                              ),
+                              child: widget
+                                      .state
+                                      .readerPreferences
+                                      .chapterEntrance
+                                  ? LoadedContentItem(
+                                      key: ValueKey(
+                                        'reader-paragraph-reveal-$index',
+                                      ),
+                                      index: index - _chapterRevealFirst,
+                                      animation: _chapterReveal,
+                                      child: paddedParagraph,
+                                    )
+                                  : KeyedSubtree(
+                                      key: ValueKey(
+                                        'reader-paragraph-reveal-$index',
+                                      ),
+                                      child: paddedParagraph,
+                                    ),
                             );
                           },
                         ),

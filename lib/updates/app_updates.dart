@@ -15,12 +15,13 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.9.17',
+  defaultValue: '1.10.1',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 91);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 95);
 const currentReleaseNotes = '''
-1. 修复阅读器正文「无首行缩进」或「只缩进一个汉字」的问题（#19）：修复单换行 `TXT` 段落重组时仅剥离单个全角空格或制表符导致第二段起残留单字缩进的缺陷，统一清理各段段首空白字符并默认开启标准空两格（`2em`）几何首行缩进，同时兼容升级旧版阅读偏好、补齐上下滚动模式与本地 `EPUB` 阅读器的首行缩进渲染，自动跳过章节标题、居中/右对齐段落与插图，且复制、查词与划线批注坐标保持纯净不混入前导空格。
-2. 新增「首行缩进」排版开关：在阅读器「阅读设置 → 排版与进度」、本地 `EPUB` 排版面板及全局「设置 → 阅读偏好」中提供首行缩进开关，支持实时切换并随「恢复默认排版」一键还原。
+1. 优化本地 `PDF` 与 `PDF` 漫画原生翻页渲染链路：在 `LocalTools` 中引入带引用计数与并发渲染锁的 `PdfRenderer` LRU 会话复用池，避免连续翻页时逐页重复打开 SAF 文件描述符与重解析整本 `PDF` 交叉引用表；渲染缓存改为「先判命中直返、后按节流单遍清理」，并将新渲染页升级为高速 `WEBP_LOSSY`（API 30+）原子落盘（同时无缝兼容既有 `.png` 缓存），大幅缩短翻页等待耗时并降低缓存空间占用约七成。
+2. 新增漫画阅读器图片头部零拷贝宽高探测与章节二分定位：未开启「自动裁切白边」时直接从 `PNG`、`GIF`、`WebP`（`VP8` / `VP8L` / `VP8X`）与 `JPEG`（含 `EXIF Orientation` 90°/270° 旋转方向自动换算）文件头字节同步读取页面尺寸，免去整张数 MB 压缩缓冲区的跨引擎原生拷贝，并将多卷/多话页码归属查询升级为二分查找。
+3. 书签与划线批注索引改为冷启动按需懒加载：`LibraryState` 启动初始化时不再同步遍历解码全量书籍的 `reader_bookmarks_*` JSON 与排序构建划线区间索引，改为在首次打开对应书籍、查询划线或进入书签库/备份时按书懒加载，确保海量划线笔记规模下冷启动耗时保持恒定。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

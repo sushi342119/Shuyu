@@ -5,9 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:shuyu/legacy_transport.dart';
-import 'package:shuyu/legacy_wenku_repository.dart';
-import 'package:shuyu/reader_content.dart';
 
 import '../test/feature_completion_state_test.dart' as state;
 import '../test/feature_completion_ui_test.dart' as features;
@@ -32,33 +29,5 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   group('native new feature state', state.main);
   group('native new feature UI', () => features.main(capture: _capture));
-  testWidgets('native actual chapter illustration is preserved and cached', (
-    tester,
-  ) async {
-    final repository = LegacyWenkuRepository();
-    final chapters = await repository.chapters(1239);
-    expect(chapters, isNotEmpty);
-    String? imageUrl;
-    final candidates = [
-      ...chapters.where((chapter) => chapter.title.contains('插图')).take(3),
-      ...chapters.take(6),
-    ];
-    for (final chapter in candidates) {
-      final content = await ReaderContent.parse(
-        await repository.chapterContent(1239, chapter),
-      );
-      if (content.illustrations.isNotEmpty) {
-        imageUrl = content.illustrations.first;
-        break;
-      }
-    }
-    expect(imageUrl, isNotNull);
-    final bytes = await LegacyTransport.illustration(imageUrl!);
-    expect(bytes.length, greaterThan(1000));
-    final again = await LegacyTransport.illustration(imageUrl);
-    expect(again, bytes);
-    debugPrint(
-      'FEATURE_NATIVE_ILLUSTRATION bytes=${bytes.length} cached_read=true',
-    );
-  });
+
 }

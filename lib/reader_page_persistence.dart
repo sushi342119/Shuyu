@@ -614,6 +614,21 @@ extension _ReaderPagePersistence on _ReaderPageState {
   }
 
   List<ReaderBookmark> _currentPositionBookmarks() {
+    if (_chapterBookmarkCheckGen != _bookmarkCacheGen ||
+        _chapterBookmarkCheckIndex != _chapter) {
+      _chapterBookmarkCheckGen = _bookmarkCacheGen;
+      _chapterBookmarkCheckIndex = _chapter;
+      final allMarks = widget.state.bookmarksFor(_novel.id);
+      _chapterHasPositionBookmarks = allMarks.any(
+        (mark) =>
+            !mark.isUnderline &&
+            mark.quote.isEmpty &&
+            widget.state.chapterForPosition(_novel, mark.position) == _chapter,
+      );
+    }
+    if (!_chapterHasPositionBookmarks && _activeBookmarkId == null) {
+      return const [];
+    }
     final marks = widget.state.bookmarksFor(_novel.id);
     if (marks.isEmpty) return const [];
     final matched = <ReaderBookmark>[];

@@ -405,6 +405,81 @@ class ReaderPagingSettings extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
+            const Text('翻页动画', style: TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Wrap(
+              key: const ValueKey('reader-page-effect'),
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final effect in ReaderPageEffect.choices)
+                  Semantics(
+                    button: true,
+                    selected: prefs.pageEffect == effect,
+                    label: '翻页动画 ${effect.label}',
+                    child: InkWell(
+                      key: ValueKey('reader-page-effect-${effect.name}'),
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: () {
+                        if (prefs.pageEffect != effect) {
+                          _save(context, prefs.copyWith(pageEffect: effect));
+                        }
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: prefs.pageEffect == effect
+                              ? scheme.primary.withValues(alpha: 0.14)
+                              : scheme.surfaceContainerHighest.withValues(
+                                  alpha: 0.55,
+                                ),
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: prefs.pageEffect == effect
+                                ? scheme.primary
+                                : scheme.outlineVariant.withValues(alpha: 0.4),
+                            width: prefs.pageEffect == effect ? 1.4 : 1,
+                          ),
+                        ),
+                        child: Text(
+                          effect.label,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: prefs.pageEffect == effect
+                                ? FontWeight.w600
+                                : FontWeight.w500,
+                            color: prefs.pageEffect == effect
+                                ? scheme.primary
+                                : scheme.onSurface,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            if (prefs.pageEffect != ReaderPageEffect.none) ...[
+              const SizedBox(height: 12),
+              const Text('翻页速度', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              CupertinoSlidingSegmentedControl<ReaderPageSpeed>(
+                key: const ValueKey('reader-page-speed'),
+                groupValue: prefs.pageSpeed,
+                children: {
+                  for (final speed in ReaderPageSpeed.values)
+                    speed: Text(speed.label),
+                },
+                onValueChanged: (speed) {
+                  if (speed != null && speed != prefs.pageSpeed) {
+                    _save(context, prefs.copyWith(pageSpeed: speed));
+                  }
+                },
+              ),
+            ],
+            const SizedBox(height: 12),
             const Text('自动翻页', style: TextStyle(fontWeight: FontWeight.w600)),
             const SizedBox(height: 6),
             CupertinoSlidingSegmentedControl<ReaderAutoPageMode>(

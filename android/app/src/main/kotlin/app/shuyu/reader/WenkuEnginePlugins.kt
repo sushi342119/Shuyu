@@ -1,8 +1,6 @@
 package app.shuyu.reader
 
 import android.content.Intent
-import android.os.Handler
-import android.os.Looper
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
@@ -10,7 +8,7 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
 
-/** The repository survives a detached UI while the audio engine remains alive. */
+/** Registers host engine plugins while keeping audio and widget channels alive across UI detach. */
 internal fun attachWenkuEnginePlugins(engine: FlutterEngine) {
     if (!engine.plugins.has(ReadingWidgetsPlugin::class.java)) engine.plugins.add(ReadingWidgetsPlugin())
     if (!engine.plugins.has(AppHapticsPlugin::class.java)) engine.plugins.add(AppHapticsPlugin())
@@ -23,8 +21,6 @@ internal fun attachWenkuEnginePlugins(engine: FlutterEngine) {
 }
 
 class WenkuHostPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityResultListener, PluginRegistry.RequestPermissionsResultListener {
-    private var api: Wenku8Bridge? = null
-    private var apiChannel: MethodChannel? = null
     private var toolsChannel: MethodChannel? = null
     private var tools: LocalTools? = null
     private var documents: BookDocuments? = null
@@ -32,11 +28,6 @@ class WenkuHostPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRes
     private var activityBinding: ActivityPluginBinding? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        val main = Handler(Looper.getMainLooper())
-        api = Wenku8Bridge(binding.applicationContext) { main.post(it) }
-        apiChannel = MethodChannel(binding.binaryMessenger, "org.mewx.wenku8/legacy_api").also {
-            it.setMethodCallHandler(api)
-        }
         toolsChannel = MethodChannel(binding.binaryMessenger, "org.mewx.wenku8/local_tools").also {
             it.setMethodCallHandler { call, result ->
                 val attached = tools
@@ -55,11 +46,8 @@ class WenkuHostPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRes
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         detachActivity()
-        apiChannel?.setMethodCallHandler(null)
         toolsChannel?.setMethodCallHandler(null)
         documentsChannel?.setMethodCallHandler(null)
-        api?.close()
-        api = null
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
@@ -73,6 +61,7 @@ class WenkuHostPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRes
         binding.addActivityResultListener(this)
         binding.addRequestPermissionsResultListener(this)
     }
+
     private fun detachActivity() {
         activityBinding?.removeActivityResultListener(this)
         activityBinding?.removeRequestPermissionsResultListener(this)
@@ -82,6 +71,7 @@ class WenkuHostPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRes
         documents?.close()
         documents = null
     }
+
     override fun onDetachedFromActivity() = detachActivity()
     override fun onDetachedFromActivityForConfigChanges() {
         activityBinding?.removeActivityResultListener(this)

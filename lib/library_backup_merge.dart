@@ -11,6 +11,7 @@ extension LibraryBackupMerge on LibraryState {
     if (options.includePurification) {
       await ReaderPurificationStore.shared.ensureLoaded();
     }
+    _ensureAllBookmarksLoaded();
     final appLanguage = _prefs.get('appLanguage');
     final checkAppUpdates = _prefs.get('checkAppUpdates');
     final localTxtEncoding = _prefs.get('localTxtEncoding');
@@ -139,6 +140,7 @@ extension LibraryBackupMerge on LibraryState {
         final known = {..._known};
         final chapters = {..._chapters};
         final positions = {..._positions};
+        _ensureAllBookmarksLoaded();
         final marks = <int, List<ReaderBookmark>>{
           for (final entry in _bookmarks.entries) entry.key: [...entry.value],
         };
@@ -401,6 +403,7 @@ extension LibraryBackupMerge on LibraryState {
         _positions
           ..clear()
           ..addAll(positions);
+        _rawBookmarks.clear();
         _bookmarks
           ..clear()
           ..addAll(marks);
@@ -430,6 +433,7 @@ extension LibraryBackupMerge on LibraryState {
           _bookmarkChanges.notifyListeners();
           _underlineChanges.notifyListeners();
           _searchChanges.notifyListeners();
+          _shelfChanges.notifyListeners();
           _shelfViewChanges.notifyListeners();
           if (importPreferences) {
             _application.notifyListeners();

@@ -6,7 +6,11 @@ import 'app_ui.dart';
 import 'app_interactions.dart';
 import 'catalog.dart';
 import 'cloud_sources.dart';
-import 'offline_cache.dart' show formatCacheBytes;
+String _formatCloudBytes(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+}
 
 typedef ImportCloudBook = Future<Novel> Function(String name, String path);
 typedef ImportCloudBatch =
@@ -849,7 +853,7 @@ class _CloudBookBrowserState extends State<CloudBookBrowser> {
                                         _imported.contains(entry.id)
                                             ? '已导入'
                                             : entry.size > 0
-                                            ? formatCacheBytes(entry.size)
+                                            ? _formatCloudBytes(entry.size)
                                             : '大小未知',
                                         style: TextStyle(
                                           fontSize: 12,

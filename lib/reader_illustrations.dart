@@ -6,7 +6,6 @@ import 'package:flutter/services.dart';
 
 import 'app_ui.dart';
 import 'cover_arrival.dart';
-import 'legacy_transport.dart';
 import 'reader_content.dart' show normalizeReaderIllustrationUrl;
 
 typedef IllustrationRequest = Future<Uint8List> Function(String url);
@@ -17,7 +16,11 @@ class ReaderIllustrationCache {
   ReaderIllustrationCache({
     IllustrationRequest? request,
     this.maxBytes = 16 * 1024 * 1024,
-  }) : _request = request ?? LegacyTransport.illustration;
+  }) : _request =
+           request ??
+           ((_) => Future<Uint8List>.error(
+             const FormatException('在线插图接口已移除'),
+           ));
   static final shared = ReaderIllustrationCache();
   final IllustrationRequest _request;
   final int maxBytes;

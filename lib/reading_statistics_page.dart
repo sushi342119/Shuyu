@@ -14,7 +14,6 @@ import 'feature_pages.dart';
 import 'glass_dock.dart';
 import 'library_state.dart';
 import 'local_library.dart';
-import 'offline_repository.dart';
 import 'performance_preferences.dart';
 import 'reading_statistics_charts.dart';
 import 'reading_statistics_data.dart';
@@ -908,19 +907,9 @@ class _ReadingStatisticsPageState extends State<ReadingStatisticsPage>
   }
 
   Novel? _knownBook(int id) {
-    final repository = widget.repository;
-    final offline = switch (repository) {
-      final OfflineNovelRepository repo => repo,
-      final CompositeNovelRepository repo
-          when repo.remote is OfflineNovelRepository =>
-        repo.remote as OfflineNovelRepository,
-      _ => null,
-    };
     final local =
         widget.state.localLibrary ?? localLibraryOf(widget.repository);
-    return local?.novelFor(id) ??
-        widget.state.cachedNovel(id) ??
-        offline?.cache.book(id)?.novel;
+    return local?.novelFor(id) ?? widget.state.cachedNovel(id);
   }
 
   String? _knownTitle(Novel? book) {

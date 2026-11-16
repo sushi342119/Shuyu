@@ -12,7 +12,6 @@ import 'app_palette.dart';
 import 'book_tags.dart';
 import 'catalog.dart';
 import 'haptic_preferences.dart';
-import 'legacy_wenku_repository.dart';
 import 'library_state.dart';
 import 'listening/audio_output.dart';
 import 'listening/cache.dart';
@@ -21,8 +20,6 @@ import 'listening/store.dart';
 import 'listening/widgets.dart';
 import 'local_library.dart';
 import 'native_effects.dart';
-import 'offline_cache.dart';
-import 'offline_repository.dart';
 import 'pages.dart';
 import 'performance_preferences.dart';
 import 'reading_widget_cards.dart';
@@ -86,32 +83,40 @@ Future<T?> _safeStartup<T>(
 Future<void> main() async {
   final binding = WidgetsFlutterBinding.ensureInitialized();
   try {
-    await _safeStartup('registerAppLicenses', registerAppLicenses);
-    await _safeStartup('TouchSamplingPolicy', () => TouchSamplingPolicy(binding));
+    final isAndroid = defaultTargetPlatform == TargetPlatform.android;
     unawaited(
       _safeStartup(
         'setEnabledSystemUIMode',
         () => SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge),
       ),
     );
-    final state = await _requiredStartup('本地阅读状态', LibraryState.load);
-    if (state.appPalette.source == AppPaletteSource.system ||
-        !state.appPalette.themedIcon) {
-      await _safeStartup('refreshSystemPalette', state.refreshSystemPalette);
-    }
-    await _safeStartup('TagStore.load', TagStore.load);
-    await _safeStartup('state.loadFonts', state.loadFonts);
+    // Wave 1: run independent disk, preference, and platform queries concurrently.
+    final stateFuture = _requiredStartup('本地阅读状态', LibraryState.load);
+    final localFuture = isAndroid
+        ? _requiredStartup('本地书库', LocalLibraryStore.load)
+        : Future<LocalLibraryStore?>.value(null);
+    final deviceMapFuture = isAndroid
+        ? _safeStartup('LocalPlatform.deviceProfile', LocalPlatform.deviceProfile)
+        : Future<Map<String, Object?>?>.value(null);
+    final sharedPrefsFuture = isAndroid
+        ? _safeStartup('SharedPreferences', SharedPreferences.getInstance)
+        : Future<SharedPreferences?>.value(null);
+    await Future.wait<Object?>([
+      _safeStartup('registerAppLicenses', registerAppLicenses),
+      _safeStartup('TouchSamplingPolicy', () => TouchSamplingPolicy(binding)),
+      stateFuture,
+      localFuture,
+      deviceMapFuture,
+      sharedPrefsFuture,
+    ]);
+    final state = await stateFuture;
+    final local = await localFuture;
+    final deviceMap = await deviceMapFuture;
+    final sharedPrefs = await sharedPrefsFuture;
     // Automatic glass tier: RAM ≤ 4 GB or Android ≤ 10 starts on 轻. A failed
     // query keeps 标准; the user can always pick a tier by hand.
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      await _safeStartup('LocalPlatform.deviceProfile', () async {
-        state.setDeviceProfile(
-          DeviceProfile.fromMap(await LocalPlatform.deviceProfile()),
-        );
-      });
-    }
-    if (state.effectivePerformance.needsRuntimeEffects) {
-      await _safeStartup('NativeEffects.prepare', NativeEffects.prepare);
+    if (isAndroid && deviceMap != null) {
+      state.setDeviceProfile(DeviceProfile.fromMap(deviceMap));
     }
     final brightness = switch (state.theme) {
       ThemeMode.light => Brightness.light,
@@ -119,51 +124,48 @@ Future<void> main() async {
       ThemeMode.system =>
         WidgetsBinding.instance.platformDispatcher.platformBrightness,
     };
-    await _safeStartup(
-      'setSystemUIOverlayStyle',
-      () => SystemChrome.setSystemUIOverlayStyle(novelSystemUiStyle(brightness)),
-    );
-    final remote = LegacyWenkuRepository();
+    // Wave 2: parallelize palette, tag store, fonts, shader warm-up & audio cache.
+    final audioCacheFuture = isAndroid
+        ? _safeStartup('SpeechAudioCache', SpeechAudioCache.forApp)
+        : Future<SpeechAudioCache?>.value(null);
+    await Future.wait<Object?>([
+      _safeStartup('TagStore.load', TagStore.load),
+      _safeStartup('state.loadFonts', state.loadFonts),
+      if (state.appPalette.source == AppPaletteSource.system ||
+          !state.appPalette.themedIcon)
+        _safeStartup('refreshSystemPalette', state.refreshSystemPalette),
+      if (state.effectivePerformance.needsRuntimeEffects)
+        _safeStartup('NativeEffects.prepare', NativeEffects.prepare),
+      _safeStartup(
+        'setSystemUIOverlayStyle',
+        () => SystemChrome.setSystemUIOverlayStyle(novelSystemUiStyle(brightness)),
+      ),
+      audioCacheFuture,
+    ]);
     final NovelRepository repository;
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      final local = await _requiredStartup('本地书库', LocalLibraryStore.load);
-      final remoteRepository =
-          await _safeStartup<NovelRepository>(
-            'OfflineNovelRepository',
-            () async => OfflineNovelRepository(
-              remote: remote,
-              cache: await OfflineCacheStore.forApp(),
-            ),
-          ) ??
-          remote;
-      repository = CompositeNovelRepository(
-        local: local,
-        remote: remoteRepository,
-      );
+    if (isAndroid) {
+      final localStore = local!;
+      repository = localStore;
+      state.bindLocalChapters(localStore);
     } else {
       repository = const DemoNovelRepository();
     }
-    if (repository is CompositeNovelRepository) {
-      state.bindLocalChapters(repository.local);
-    }
-    final isAndroid = defaultTargetPlatform == TargetPlatform.android;
-    final listening = isAndroid
+    final audioCache = await audioCacheFuture;
+    final listening = isAndroid && audioCache != null && sharedPrefs != null
         ? await _safeStartup(
             'ListeningController',
-            () async => ListeningController(
+            () => ListeningController(
               repository: repository,
-              audio: await SpeechAudioCache.forApp(),
-              store: ListeningStore(await SharedPreferences.getInstance()),
+              audio: audioCache,
+              store: ListeningStore(sharedPrefs),
               outputFactory: createListeningOutput,
             ),
           )
         : null;
-    final updates = isAndroid
+    final updates = isAndroid && sharedPrefs != null
         ? await _safeStartup(
             'AppUpdates',
-            () async => AppUpdates(
-              preferences: await SharedPreferences.getInstance(),
-            ),
+            () => AppUpdates(preferences: sharedPrefs),
           )
         : null;
     runApp(

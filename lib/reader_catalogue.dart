@@ -9,7 +9,6 @@ import 'app_ui.dart';
 import 'catalog.dart';
 import 'chapter_splitter.dart' show TxtTocRulePreset;
 import 'library_state.dart';
-import 'offline_cache.dart';
 import 'regex_safety.dart';
 
 /// A bounded, lazy chapter picker using the existing glass drawer. The current
@@ -19,12 +18,10 @@ class ReaderCatalogue extends StatefulWidget {
     super.key,
     required this.novel,
     required this.currentChapter,
-    this.cache,
     this.onConfigureTocRule,
   });
   final Novel novel;
   final int currentChapter;
-  final OfflineCacheStore? cache;
   final Future<Novel?> Function(String? customPattern, int maxChapterChars)?
   onConfigureTocRule;
 
@@ -493,18 +490,6 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
                 children: [
                   if (current)
                     const Text('正在阅读', style: TextStyle(fontSize: 10)),
-                  if (widget.cache case final OfflineCacheStore cache)
-                    AnimatedBuilder(
-                      animation: cache.bookChanges(widget.novel.id),
-                      builder: (context, _) =>
-                          cache
-                                  .book(widget.novel.id)
-                                  ?.chapterBytes
-                                  .containsKey(chapter.id) ==
-                              true
-                          ? const Text('已缓存', style: TextStyle(fontSize: 10))
-                          : const SizedBox.shrink(),
-                    ),
                 ],
               ),
             ],
@@ -524,7 +509,6 @@ class ReaderMarksSheet extends StatefulWidget {
     required this.state,
     required this.novel,
     required this.currentChapter,
-    this.cache,
     this.onConfigureTocRule,
     this.onPickUnderline,
     this.onEditMark,
@@ -532,7 +516,6 @@ class ReaderMarksSheet extends StatefulWidget {
   final LibraryState state;
   final Novel novel;
   final int currentChapter;
-  final OfflineCacheStore? cache;
   final Future<Novel?> Function(String? customPattern, int maxChapterChars)?
   onConfigureTocRule;
   final Future<void> Function()? onPickUnderline;

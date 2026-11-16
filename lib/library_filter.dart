@@ -142,21 +142,25 @@ bool matchesSearch(
   String term,
   SearchScope scope, {
   TagStore? store,
+  String? normalizedQuery,
 }) {
-  final q = term.trim().toLowerCase();
+  final q = normalizedQuery ?? term.trim().toLowerCase();
   if (q.isEmpty) return true;
-  final title = (book?.title ?? '').toLowerCase();
-  final author = (book?.author ?? '').toLowerCase();
-  final titleOrAuthor = title.contains(q) || author.contains(q);
-  final tags = (store ?? TagStore.shared)
-      .tagsForBook(id)
-      .map((tag) => tag.name.toLowerCase())
-      .join(' ');
-  return switch (scope) {
-    SearchScope.titleAuthor => titleOrAuthor,
-    SearchScope.tags => tags.contains(q),
-    SearchScope.all => titleOrAuthor || '$id'.contains(q) || tags.contains(q),
-  };
+  if (scope != SearchScope.tags && book != null) {
+    if (book.title.toLowerCase().contains(q) ||
+        book.author.toLowerCase().contains(q)) {
+      return true;
+    }
+    if (scope == SearchScope.titleAuthor) return false;
+  } else if (scope == SearchScope.titleAuthor) {
+    return false;
+  }
+  if (scope == SearchScope.all && '$id'.contains(q)) return true;
+  final bookTags = (store ?? TagStore.shared).tagsForBook(id);
+  for (final tag in bookTags) {
+    if (tag.name.toLowerCase().contains(q)) return true;
+  }
+  return false;
 }
 
 /// Result of a batch tag operation; failures name the book and the reason.

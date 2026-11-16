@@ -5,7 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shuyu/app_ui.dart';
 import 'package:shuyu/catalog.dart';
 import 'package:shuyu/library_state.dart';
-import 'package:shuyu/legacy_wenku_repository.dart';
 import 'package:shuyu/legacy_cover.dart';
 import 'package:shuyu/main.dart';
 
@@ -113,17 +112,6 @@ void main() {
     final reloaded = await LibraryState.load();
     expect(reloaded.contains(1), isTrue);
     expect(reloaded.chapterFor(1), 2);
-  });
-
-  test('原版正文空白行被整理为可读段落', () async {
-    final repository = LegacyWenkuRepository(
-      request: (_) async => '  第一行  \r\n \n   \r\n 第二行\r\n',
-    );
-    final text = await repository.chapterContent(
-      4189,
-      const NovelChapter('第一章', '', id: 1),
-    );
-    expect(text, '第一行\n\n第二行');
   });
 
   testWidgets('精选书籍可进入详情与阅读器', (tester) async {

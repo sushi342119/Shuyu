@@ -61,23 +61,6 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
 
   Future<void> _seedFromCache() async {
     final generation = _loadGeneration;
-    if (offlineRepositoryForBook(widget.repository, widget.novel.id)
-        case final offline?) {
-      try {
-        final cached = await offline
-            .cachedBook(widget.novel.id)
-            .timeout(widget.loadTimeout);
-        if (mounted &&
-            generation == _loadGeneration &&
-            _loadingLocal &&
-            cached != null &&
-            cached.chapters.isNotEmpty) {
-          setState(() => _cached = cached);
-        }
-      } catch (_) {
-        // Online loading remains available when a local snapshot is damaged.
-      }
-    }
   }
 
   Future<Novel> _load() {
@@ -177,11 +160,7 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
           _cached == null &&
           snapshot.connectionState != ConnectionState.done,
       loadError: _cached == null ? snapshot.error : null,
-      fromCache:
-          (_cached != null && !snapshot.hasData) ||
-          (offlineRepositoryForBook(widget.repository, widget.novel.id)
-                  ?.isDirectoryOffline(widget.novel.id) ??
-              false),
+      fromCache: _cached != null && !snapshot.hasData,
       onRetry: () => setState(() {
         _loaded = _load();
       }),
@@ -606,39 +585,6 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                               ],
                                             ),
                                           ),
-                                          if (offlineRepositoryForBook(
-                                                repository,
-                                                novel.id,
-                                              )
-                                              case final offline?) ...[
-                                            const SizedBox(height: 8),
-                                            if (isLoading)
-                                              const InlineSkeleton(
-                                                key: ValueKey(
-                                                  'detail-cache-skeleton',
-                                                ),
-                                                label: '正在加载缓存信息',
-                                              )
-                                            else if (loadError == null)
-                                              RevealFromTop(
-                                                key: const ValueKey(
-                                                  'detail-cache-reveal',
-                                                ),
-                                                axis: ArchiveRevealAxis
-                                                    .horizontal,
-                                                animation: _contentIntro,
-                                                start: .24,
-                                                end: .72,
-                                                child: OfflineBookStatus(
-                                                  repository: offline,
-                                                  novel: novel,
-                                                  localDirectory:
-                                                      widget.fromCache,
-                                                ),
-                                              )
-                                            else
-                                              const SizedBox(height: 18),
-                                          ],
                                         ],
                                       ),
                                     ),
@@ -875,7 +821,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                       animation: _contentIntro,
                       enabled: !_reduceMotion && loadError == null,
                       child: AnimatedBuilder(
-                        animation: state,
+                        animation: state.shelfChanges,
                         builder: (context, _) => GlassPillButton(
                           key: const ValueKey('detail-read-button'),
                           icon: CupertinoIcons.book,
@@ -946,7 +892,6 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       builder: (_) => ReaderCatalogue(
         novel: novel,
         currentChapter: state.chapterForNovel(novel),
-        cache: offlineRepositoryForBook(repository, novel.id)?.cache,
       ),
     );
     if (!context.mounted || picked == null) return;
@@ -1134,7 +1079,6 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   }
 
   Widget _header(BuildContext context) {
-    final offline = offlineRepositoryForBook(repository, novel.id);
     return Row(
       children: [
         GlassIconButton(
@@ -1142,29 +1086,14 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
           label: '返回',
           onPressed: () => Navigator.pop(context),
         ),
-        if (offline != null) const SizedBox(width: 46),
         Expanded(
           child: ArchiveRouteTitle(
             title: '图书详情',
             code: ArchiveDesign.fileCode(novel.id),
           ),
         ),
-        if (offline != null)
-          if (isLoading || loadError != null || novel.chapters.isEmpty)
-            const GlassIconButton(
-              icon: CupertinoIcons.cloud_download,
-              label: '下载与缓存',
-              onPressed: null,
-            )
-          else
-            OfflineBookMenu(
-              repository: offline,
-              novel: novel,
-              startChapter: state.chapterForNovel(novel),
-              reduceMotion: state.reduceMotion,
-            ),
-      AnimatedBuilder(
-        animation: state,
+        AnimatedBuilder(
+        animation: state.shelfChanges,
         builder: (context, child) => GlassIconButton(
           icon: state.contains(novel.id)
               ? CupertinoIcons.bookmark_fill

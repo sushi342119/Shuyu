@@ -27,45 +27,116 @@ bool shouldIndentReaderParagraph(
 const cjkClosingPunctuation = '，。！？、；：）》」』】〕］｝’”';
 const cjkOpeningPunctuation = '（《「『【〔［｛‘“';
 
+@pragma('vm:prefer-inline')
+bool _isCjkClosingCodeUnit(int code) => switch (code) {
+  0xFF0C || // ，
+  0x3002 || // 。
+  0xFF01 || // ！
+  0xFF1F || // ？
+  0x3001 || // 、
+  0xFF1B || // ；
+  0xFF1A || // ：
+  0xFF09 || // ）
+  0x300B || // 》
+  0x300D || // 」
+  0x300F || // 』
+  0x3011 || // 】
+  0x3015 || // 〕
+  0xFF3D || // ］
+  0xFF5D || // ｝
+  0x2019 || // ’
+  0x201D => true, // ”
+  _ => false,
+};
+
+@pragma('vm:prefer-inline')
+bool _isCjkOpeningCodeUnit(int code) => switch (code) {
+  0xFF08 || // （
+  0x300A || // 《
+  0x300C || // 「
+  0x300E || // 『
+  0x3010 || // 【
+  0x3014 || // 〔
+  0xFF3B || // ［
+  0xFF5B || // ｛
+  0x2018 || // ‘
+  0x201C => true, // “
+  _ => false,
+};
+
+@pragma('vm:prefer-inline')
+bool _isCompressibleCjkCodeUnitPair(int prev, int curr) =>
+    _isCjkClosingCodeUnit(prev) &&
+    (_isCjkClosingCodeUnit(curr) || _isCjkOpeningCodeUnit(curr));
+
 bool isCompressibleCjkPunctuationPair(String previous, String current) {
   if (previous.isEmpty || current.isEmpty) return false;
-  final prevClosing = cjkClosingPunctuation.contains(previous);
-  final currClosing = cjkClosingPunctuation.contains(current);
-  final currOpening = cjkOpeningPunctuation.contains(current);
-  return (prevClosing && currClosing) || (prevClosing && currOpening);
+  return _isCompressibleCjkCodeUnitPair(
+    previous.codeUnitAt(0),
+    current.codeUnitAt(0),
+  );
 }
 
 List<InlineSpan> compressCjkPunctuationSpans(
   List<InlineSpan> spans,
   TextStyle baseStyle,
 ) {
+  if (spans.isEmpty) return spans;
   final font = baseStyle.fontSize ?? 19.0;
   final baseSpacing = baseStyle.letterSpacing ?? 0.0;
-  final compressedStyle = baseStyle.copyWith(
-    letterSpacing: baseSpacing - font * 0.28,
-  );
-  final result = <InlineSpan>[];
-  for (final span in spans) {
+  TextStyle? compressedStyle;
+  List<InlineSpan>? result;
+  for (var spanIdx = 0; spanIdx < spans.length; spanIdx++) {
+    final span = spans[spanIdx];
     if (span is! TextSpan || span.text == null || span.children != null) {
-      result.add(span);
+      result?.add(span);
       continue;
     }
     final text = span.text!;
-    if (text.length < 2) {
-      result.add(span);
+    final len = text.length;
+    if (len < 2) {
+      result?.add(span);
       continue;
     }
+    // Fast scan using UTF-16 code units without per-character String allocation.
+    var firstMatch = -1;
+    for (var i = 0; i + 1 < len; i++) {
+      if (_isCompressibleCjkCodeUnitPair(
+        text.codeUnitAt(i),
+        text.codeUnitAt(i + 1),
+      )) {
+        firstMatch = i;
+        break;
+      }
+    }
+    if (firstMatch < 0) {
+      result?.add(span);
+      continue;
+    }
+    result ??= spans.sublist(0, spanIdx);
+    compressedStyle ??= baseStyle.copyWith(
+      letterSpacing: baseSpacing - font * 0.28,
+    );
     final effectiveStyle = span.style == null
         ? compressedStyle
         : span.style!.copyWith(
-            letterSpacing: (span.style!.letterSpacing ?? baseSpacing) - font * 0.28,
+            letterSpacing:
+                (span.style!.letterSpacing ?? baseSpacing) - font * 0.28,
           );
-    var segStart = 0;
-    var inCompressed = false;
-    for (var i = 0; i < text.length; i++) {
+    if (firstMatch > 0) {
+      result.add(
+        TextSpan(text: text.substring(0, firstMatch), style: span.style),
+      );
+    }
+    var segStart = firstMatch;
+    var inCompressed = true;
+    for (var i = firstMatch + 1; i < len; i++) {
       final pairCompress =
-          i + 1 < text.length &&
-          isCompressibleCjkPunctuationPair(text[i], text[i + 1]);
+          i + 1 < len &&
+          _isCompressibleCjkCodeUnitPair(
+            text.codeUnitAt(i),
+            text.codeUnitAt(i + 1),
+          );
       if (pairCompress != inCompressed) {
         if (i > segStart) {
           result.add(
@@ -79,9 +150,7 @@ List<InlineSpan> compressCjkPunctuationSpans(
         inCompressed = pairCompress;
       }
     }
-    if (segStart == 0 && !inCompressed) {
-      result.add(span);
-    } else if (segStart < text.length) {
+    if (segStart < len) {
       result.add(
         TextSpan(
           text: text.substring(segStart),
@@ -90,7 +159,7 @@ List<InlineSpan> compressCjkPunctuationSpans(
       );
     }
   }
-  return result;
+  return result ?? spans;
 }
 
 /// Builds source text with geometry-only indentation and optional continuation.

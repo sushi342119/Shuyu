@@ -106,13 +106,17 @@ enum ReaderPageEffect {
 
   const ReaderPageEffect(this.label);
   final String label;
+
+  /// Choices shown in the reader paging settings, in recommended order.
+  static const choices = [slide, cover, paper, staggered, fade, none];
+
   Duration get duration => switch (this) {
     staggered => const Duration(milliseconds: 620),
     none => Duration.zero,
-    slide => const Duration(milliseconds: 300),
-    cover => const Duration(milliseconds: 340),
-    paper => const Duration(milliseconds: 440),
-    fade => const Duration(milliseconds: 300),
+    slide => const Duration(milliseconds: 260),
+    cover => const Duration(milliseconds: 280),
+    paper => const Duration(milliseconds: 420),
+    fade => const Duration(milliseconds: 260),
   };
 }
 
@@ -198,7 +202,7 @@ class ReaderPreferences {
     this.verticalLatinOrientation = ReaderVerticalLatinOrientation.rotated,
     this.tapLayout = ReaderTapLayout.standard,
     this.edgeBrightness = false,
-    this.pageEffect = ReaderPageEffect.staggered,
+    this.pageEffect = ReaderPageEffect.slide,
     this.pageSpeed = ReaderPageSpeed.normal,
     this.hideSystemStatus = false,
     this.showStatusInfo = true,
@@ -440,6 +444,7 @@ class ReaderPreferences {
     'tapLayout': tapLayout.name,
     'edgeBrightness': edgeBrightness,
     'pageEffect': pageEffect.name,
+    if (pageEffect != ReaderPageEffect.slide) 'pageEffectConfigured': true,
     'pageSpeed': pageSpeed.name,
     'hideSystemStatus': hideSystemStatus,
     'showStatusInfo': showStatusInfo,
@@ -496,6 +501,7 @@ class ReaderPreferences {
     for (final key in [
       'indent',
       'indentConfigured',
+      'pageEffectConfigured',
       'justify',
       'tapPaging',
       'tapBothSidesNext',
@@ -587,9 +593,11 @@ class ReaderPreferences {
       hideSystemStatus: json['hideSystemStatus'] == true,
       showStatusInfo: json['showStatusInfo'] != false,
       chapterEntrance: json['chapterEntrance'] == true,
-      pageEffect: ReaderPageEffect.values.byName(
-        json['pageEffect'] ?? 'staggered',
-      ),
+      pageEffect: json['pageEffect'] == null ||
+              (json['pageEffect'] == 'staggered' &&
+                  json['pageEffectConfigured'] != true)
+          ? ReaderPageEffect.slide
+          : ReaderPageEffect.values.byName(json['pageEffect'] as String),
       pageSpeed: ReaderPageSpeed.values.byName(json['pageSpeed'] ?? 'normal'),
       edgeDeadZone: number('edgeDeadZone', 0, 48, 0),
       tapGrid: parsedTapGrid,

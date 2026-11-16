@@ -226,20 +226,36 @@ class _MomentComposition {
     child: ColoredBox(color: color ?? edition.accent.withValues(alpha: .45)),
   );
 
-  Widget cover(double size) => SizedBox(
-    key: const ValueKey('reading-moment-book-cover'),
-    width: size,
-    height: size * 1.48,
-    child: Image.memory(
-      presentation.coverBytes!,
-      fit: BoxFit.contain,
-      gaplessPlayback: true,
-      filterQuality: FilterQuality.medium,
-      semanticLabel: completion!.title.isEmpty
-          ? '书籍封面'
-          : '${completion!.title} 封面',
-      errorBuilder: (_, _, _) => const SizedBox.shrink(),
-    ),
+  Widget cover(double size) => Builder(
+    builder: (context) {
+      final raw = MemoryImage(presentation.coverBytes!);
+      final dpr = MediaQuery.devicePixelRatioOf(context);
+      final targetWidth =
+          PaintingBinding.instance.imageCache.statusForKey(raw).untracked &&
+              size.isFinite &&
+              size > 0
+          ? (size * (dpr.isFinite && dpr > 0 ? dpr : 1.0)).round().clamp(
+              64,
+              1536,
+            )
+          : null;
+      return SizedBox(
+        key: const ValueKey('reading-moment-book-cover'),
+        width: size,
+        height: size * 1.48,
+        child: Image.memory(
+          presentation.coverBytes!,
+          fit: BoxFit.contain,
+          cacheWidth: targetWidth,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.medium,
+          semanticLabel: completion!.title.isEmpty
+              ? '书籍封面'
+              : '${completion!.title} 封面',
+          errorBuilder: (_, _, _) => const SizedBox.shrink(),
+        ),
+      );
+    },
   );
 
   Widget recordIdentity(Color ink, Color muted) {

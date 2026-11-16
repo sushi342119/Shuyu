@@ -24,8 +24,6 @@ import 'listening/widgets.dart';
 import 'local_platform.dart';
 import 'native_effects.dart' show NativeGlassGroup;
 import 'novel_feed_controller.dart';
-import 'offline_repository.dart';
-import 'offline_widgets.dart';
 import 'reader_catalogue.dart';
 import 'reader_chrome.dart';
 import 'ui_preferences.dart';

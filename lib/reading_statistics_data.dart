@@ -4,7 +4,6 @@ import 'bookmark_library_page.dart';
 import 'catalog.dart';
 import 'library_state.dart';
 import 'local_library.dart';
-import 'offline_repository.dart';
 import 'reading_activity.dart';
 import 'reading_statistics_analysis.dart';
 
@@ -161,18 +160,8 @@ class ReadingStatisticsData {
     }
     currentStreak = current;
 
-    final offline = switch (repository) {
-      final OfflineNovelRepository repo => repo,
-      final CompositeNovelRepository repo
-          when repo.remote is OfflineNovelRepository =>
-        repo.remote as OfflineNovelRepository,
-      _ => null,
-    };
     final local = state.localLibrary ?? localLibraryOf(repository);
-    Novel? known(int id) =>
-        local?.novelFor(id) ??
-        state.cachedNovel(id) ??
-        offline?.cache.book(id)?.novel;
+    Novel? known(int id) => local?.novelFor(id) ?? state.cachedNovel(id);
     final bookDays = <int, int>{};
     for (final day in selected) {
       if (!observed(day.date)) continue;

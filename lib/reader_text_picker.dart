@@ -635,34 +635,60 @@ class ReaderChineseSegmenter {
   ReaderChineseSegmenter({
     Directory? directory,
     Future<Uint8List> Function()? loadData,
+    Duration? idleTimeout,
   }) : _directory = directory,
-       _loadData = loadData;
+       _loadData = loadData,
+       _explicitIdleTimeout = idleTimeout;
   static final shared = ReaderChineseSegmenter();
   final Directory? _directory;
   final Future<Uint8List> Function()? _loadData;
+  final Duration? _explicitIdleTimeout;
   Isolate? _worker;
   ReceivePort? _messages, _failures;
   SendPort? _port;
   Future<void>? _starting;
   Completer<void>? _ready;
+  Timer? _idleTimer;
   bool _disposed = false;
   int _requestId = 0;
   final _pending = <int, Completer<List<List<String>>>>{};
   final _cache = <String, List<List<String>>>{};
 
+  Duration? get _effectiveIdleTimeout =>
+      _explicitIdleTimeout ??
+      (WidgetsBinding.instance.runtimeType
+              .toString()
+              .contains('TestWidgetsFlutterBinding')
+          ? null
+          : const Duration(minutes: 3));
+
+  void _scheduleIdleShutdown() {
+    _idleTimer?.cancel();
+    _idleTimer = null;
+    final timeout = _effectiveIdleTimeout;
+    if (timeout == null || _disposed || _worker == null || _pending.isNotEmpty) {
+      return;
+    }
+    _idleTimer = Timer(timeout, _parkIdleWorker);
+  }
+
+  void _parkIdleWorker() {
+    _idleTimer?.cancel();
+    _idleTimer = null;
+    if (_disposed || _pending.isNotEmpty) return;
+    _worker?.kill(priority: Isolate.immediate);
+    _worker = null;
+    _port = null;
+    _starting = null;
+    _ready = null;
+    _messages?.close();
+    _messages = null;
+    _failures?.close();
+    _failures = null;
+  }
+
   Future<void> _start() => _starting ??=
       () async {
-        if (_disposed) throw StateError('分词器已关闭');
-        final data =
-            await (_loadData?.call() ??
-                rootBundle
-                    .load('assets/tokenizer/jieba-1.0.1.dgz')
-                    .then(
-                      (value) => value.buffer.asUint8List(
-                        value.offsetInBytes,
-                        value.lengthInBytes,
-                      ),
-                    ));
         if (_disposed) throw StateError('分词器已关闭');
         final root =
             _directory ??
@@ -671,9 +697,25 @@ class ReaderChineseSegmenter {
             );
         await root.create(recursive: true);
         final path = '${root.path}/jieba-1.0.1.dgz';
-        final part = File('$path.part');
-        await part.writeAsBytes(data, flush: true);
-        await part.rename(path);
+        final dictFile = File(path);
+        if (_loadData != null ||
+            !await dictFile.exists() ||
+            await dictFile.length() <= 0) {
+          final data =
+              await (_loadData?.call() ??
+                  rootBundle
+                      .load('assets/tokenizer/jieba-1.0.1.dgz')
+                      .then(
+                        (value) => value.buffer.asUint8List(
+                          value.offsetInBytes,
+                          value.lengthInBytes,
+                        ),
+                      ));
+          if (_disposed) throw StateError('分词器已关闭');
+          final part = File('$path.part');
+          await part.writeAsBytes(data, flush: true);
+          await part.rename(path);
+        }
         if (_disposed) throw StateError('分词器已关闭');
         final ready = _ready = Completer<void>();
         ready.future.ignore();
@@ -735,22 +777,30 @@ class ReaderChineseSegmenter {
       _cache[key] = cached;
       return cached;
     }
+    _idleTimer?.cancel();
+    _idleTimer = null;
     await _start();
     if (_disposed) throw StateError('分词器已关闭');
     final id = ++_requestId;
     final response = Completer<List<List<String>>>();
     _pending[id] = response;
     _port!.send([id, runs]);
-    final result = await response.future;
-    _cache[key] = result;
-    while (_cache.length > 64) {
-      _cache.remove(_cache.keys.first);
+    try {
+      final result = await response.future;
+      _cache[key] = result;
+      while (_cache.length > 64) {
+        _cache.remove(_cache.keys.first);
+      }
+      return result;
+    } finally {
+      _scheduleIdleShutdown();
     }
-    return result;
   }
 
   void dispose() {
     _disposed = true;
+    _idleTimer?.cancel();
+    _idleTimer = null;
     final ready = _ready;
     if (ready != null && !ready.isCompleted) {
       ready.completeError(StateError('分词器已关闭'));

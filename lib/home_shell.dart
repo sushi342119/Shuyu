@@ -218,7 +218,10 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
       _boundLocal = repo.local;
     } else {
       homeRepository = repo;
-      if (repo is LocalLibraryStore) _boundLocal = repo;
+      if (repo is LocalLibraryStore) {
+        widget.state.bindLocalChapters(repo);
+        _boundLocal = repo;
+      }
     }
     if (_boundLocal != null) {
       _lastSyncedRevision = localScanProgressFor(_boundLocal!).value.revision;
@@ -235,19 +238,9 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     _searchFeed = NovelFeedController(homeRepository, search: true);
     _searchText.addListener(_searchEdited);
     _searchFeed.addListener(_searchSucceeded);
-    final repository = widget.repository;
-    final OfflineNovelRepository? offline =
-        repository is CompositeNovelRepository
-        ? (repository.remote is OfflineNovelRepository
-              ? repository.remote as OfflineNovelRepository
-              : null)
-        : (repository is OfflineNovelRepository ? repository : null);
-    if (offline != null) {
-      unawaited(offline.loadCache().catchError((Object _) {}));
-    }
     // 启动自动扫描本地书库（静默，有变化才提示）。
-    if (repository is CompositeNovelRepository) {
-      _autoScanLocal(repository.local);
+    if (_boundLocal != null) {
+      _autoScanLocal(_boundLocal!);
     }
     final discover = DiscoverPage(
       books: const [],

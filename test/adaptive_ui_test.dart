@@ -13,7 +13,6 @@ import 'package:shuyu/library_state.dart';
 import 'package:shuyu/listening/controller.dart';
 import 'package:shuyu/listening/store.dart';
 import 'package:shuyu/listening/widgets.dart';
-import 'package:shuyu/low_performance_page.dart';
 import 'package:shuyu/main.dart';
 import 'package:shuyu/pages.dart';
 import 'package:shuyu/performance_preferences.dart';
@@ -258,29 +257,6 @@ void main({AdaptiveCapture? capture, bool native = false}) {
         );
         await tester.pumpAndSettle();
       }
-
-      await tester.runAsync(
-        () =>
-            library.setPerformance(const PerformancePreferences(enabled: true)),
-      );
-      await page(LowPerformancePage(state: library));
-      await snapshot('performance');
-      final reset = find.byKey(const ValueKey('performance-light-preset'));
-      await tester.scrollUntilVisible(
-        reset,
-        200,
-        scrollable: find
-            .descendant(
-              of: find.byKey(const ValueKey('performance-options-scroll')),
-              matching: find.byType(Scrollable),
-            )
-            .first,
-      );
-      await tester.pumpAndSettle();
-      onScreen(reset);
-      await tester.runAsync(
-        () => library.setPerformance(const PerformancePreferences()),
-      );
 
       final novel = demoNovels.first.withChapters([
         NovelChapter(

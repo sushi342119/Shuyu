@@ -247,6 +247,178 @@ Rect detectMangaContentRect(Uint8List rgbaPixels, int width, int height) {
 }
 
 @visibleForTesting
+Size? parseMangaImageDimensions(Uint8List bytes) {
+  final len = bytes.length;
+  if (len < 10) return null;
+
+  // 1. PNG: 89 50 4E 47 0D 0A 1A 0A + IHDR chunk at bytes 12..23
+  if (len >= 24 &&
+      bytes[0] == 0x89 &&
+      bytes[1] == 0x50 &&
+      bytes[2] == 0x4E &&
+      bytes[3] == 0x47 &&
+      bytes[4] == 0x0D &&
+      bytes[5] == 0x0A &&
+      bytes[6] == 0x1A &&
+      bytes[7] == 0x0A &&
+      bytes[12] == 0x49 &&
+      bytes[13] == 0x48 &&
+      bytes[14] == 0x44 &&
+      bytes[15] == 0x52) {
+    final w =
+        (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19];
+    final h =
+        (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23];
+    if (w > 0 && h > 0) return Size(w.toDouble(), h.toDouble());
+    return null;
+  }
+
+  // 2. GIF87a / GIF89a: little-endian uint16 width/height at bytes 6..9
+  if (bytes[0] == 0x47 &&
+      bytes[1] == 0x49 &&
+      bytes[2] == 0x46 &&
+      bytes[3] == 0x38 &&
+      (bytes[4] == 0x37 || bytes[4] == 0x39) &&
+      bytes[5] == 0x61) {
+    final w = bytes[6] | (bytes[7] << 8);
+    final h = bytes[8] | (bytes[9] << 8);
+    if (w > 0 && h > 0) return Size(w.toDouble(), h.toDouble());
+    return null;
+  }
+
+  // 3. WebP: RIFF....WEBP + VP8 / VP8L / VP8X
+  if (len >= 30 &&
+      bytes[0] == 0x52 &&
+      bytes[1] == 0x49 &&
+      bytes[2] == 0x46 &&
+      bytes[3] == 0x46 &&
+      bytes[8] == 0x57 &&
+      bytes[9] == 0x45 &&
+      bytes[10] == 0x42 &&
+      bytes[11] == 0x50 &&
+      bytes[12] == 0x56 &&
+      bytes[13] == 0x50 &&
+      bytes[14] == 0x38) {
+    final kind = bytes[15];
+    if (kind == 0x20) {
+      // VP8 lossy bitstream: keyframe start code 9D 01 2A at 23..25
+      if (bytes[23] == 0x9D && bytes[24] == 0x01 && bytes[25] == 0x2A) {
+        final w = bytes[26] | ((bytes[27] & 0x3F) << 8);
+        final h = bytes[28] | ((bytes[29] & 0x3F) << 8);
+        if (w > 0 && h > 0) return Size(w.toDouble(), h.toDouble());
+      }
+    } else if (kind == 0x4C && bytes[20] == 0x2F) {
+      // VP8L lossless bitstream: signature 0x2F at byte 20
+      final w = 1 + (bytes[21] | ((bytes[22] & 0x3F) << 8));
+      final h =
+          1 +
+          (((bytes[22] >> 6) & 0x03) |
+              (bytes[23] << 2) |
+              ((bytes[24] & 0x0F) << 10));
+      if (w > 0 && h > 0) return Size(w.toDouble(), h.toDouble());
+    } else if (kind == 0x58) {
+      // VP8X extended header: 24-bit LE (width - 1) at 24..26, (height - 1) at 27..29
+      final w = 1 + (bytes[24] | (bytes[25] << 8) | (bytes[26] << 16));
+      final h = 1 + (bytes[27] | (bytes[28] << 8) | (bytes[29] << 16));
+      if (w > 0 && h > 0) return Size(w.toDouble(), h.toDouble());
+    }
+    return null;
+  }
+
+  // 4. JPEG: FF D8 ... scan APP1 Exif orientation & SOF0..SOF15 frame header
+  if (bytes[0] == 0xFF && bytes[1] == 0xD8) {
+    var swapAxes = false;
+    var offset = 2;
+    while (offset + 3 < len) {
+      if (bytes[offset] != 0xFF) {
+        offset++;
+        continue;
+      }
+      while (offset < len && bytes[offset] == 0xFF) {
+        offset++;
+      }
+      if (offset >= len) break;
+      final marker = bytes[offset++];
+      if (marker == 0xD9 || marker == 0xDA) break; // EOI or SOS
+      if (marker == 0x00 ||
+          marker == 0x01 ||
+          marker == 0xD8 ||
+          (marker >= 0xD0 && marker <= 0xD7)) {
+        continue;
+      }
+      if (offset + 1 >= len) break;
+      final segLen = (bytes[offset] << 8) | bytes[offset + 1];
+      if (segLen < 2 || offset + segLen > len) break;
+
+      // APP1 Exif orientation check (5..8 swaps 90/270-degree dimensions)
+      if (marker == 0xE1 &&
+          segLen >= 16 &&
+          bytes[offset + 2] == 0x45 &&
+          bytes[offset + 3] == 0x78 &&
+          bytes[offset + 4] == 0x69 &&
+          bytes[offset + 5] == 0x66 &&
+          bytes[offset + 6] == 0x00 &&
+          bytes[offset + 7] == 0x00) {
+        final tiffStart = offset + 8;
+        final segEnd = offset + segLen;
+        final little =
+            bytes[tiffStart] == 0x49 && bytes[tiffStart + 1] == 0x49;
+        final big = bytes[tiffStart] == 0x4D && bytes[tiffStart + 1] == 0x4D;
+        if ((little || big) && tiffStart + 8 <= segEnd) {
+          int u16(int p) =>
+              little ? (bytes[p] | (bytes[p + 1] << 8)) : ((bytes[p] << 8) | bytes[p + 1]);
+          int u32(int p) => little
+              ? (bytes[p] |
+                    (bytes[p + 1] << 8) |
+                    (bytes[p + 2] << 16) |
+                    (bytes[p + 3] << 24))
+              : ((bytes[p] << 24) |
+                    (bytes[p + 1] << 16) |
+                    (bytes[p + 2] << 8) |
+                    bytes[p + 3]);
+          if (u16(tiffStart + 2) == 0x002A) {
+            final ifdOffset = u32(tiffStart + 4);
+            final ifdPos = tiffStart + ifdOffset;
+            if (ifdOffset >= 8 && ifdPos + 2 <= segEnd) {
+              final count = u16(ifdPos);
+              for (var i = 0; i < count; i++) {
+                final entry = ifdPos + 2 + i * 12;
+                if (entry + 12 > segEnd) break;
+                if (u16(entry) == 0x0112) {
+                  final orientation = u16(entry + 8);
+                  if (orientation >= 5 && orientation <= 8) {
+                    swapAxes = true;
+                  }
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // SOF0..SOF15 (excluding 0xC4 DHT, 0xC8 JPG, 0xCC DAC)
+      if (marker >= 0xC0 &&
+          marker <= 0xCF &&
+          marker != 0xC4 &&
+          marker != 0xC8 &&
+          marker != 0xCC) {
+        if (segLen < 7 || offset + 6 >= len) return null;
+        final h = (bytes[offset + 3] << 8) | bytes[offset + 4];
+        final w = (bytes[offset + 5] << 8) | bytes[offset + 6];
+        if (w <= 0 || h <= 0) return null;
+        return swapAxes
+            ? Size(h.toDouble(), w.toDouble())
+            : Size(w.toDouble(), h.toDouble());
+      }
+      offset += segLen;
+    }
+  }
+
+  return null;
+}
+
+@visibleForTesting
 Future<Rect> computeNormalizedCropRect(ui.Image image) async {
   final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
   if (data == null) return const Rect.fromLTWH(0, 0, 1, 1);
@@ -694,6 +866,12 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
     Uint8List bytes, {
     required bool computeCrop,
   }) async {
+    if (!computeCrop) {
+      final fastSize = parseMangaImageDimensions(bytes);
+      if (fastSize != null && fastSize.width > 0 && fastSize.height > 0) {
+        return (fastSize, null);
+      }
+    }
     ui.ImmutableBuffer? buffer;
     ui.ImageDescriptor? descriptor;
     ui.Codec? codec;
@@ -742,26 +920,24 @@ class _LocalMangaReaderPageState extends State<LocalMangaReaderPage>
   }
 
   MangaChapterEntry? _chapterForPage(int page) {
-    if (_chapters.isEmpty) return null;
-    MangaChapterEntry? current;
-    for (final ch in _chapters) {
-      if (page >= ch.startPage) {
-        current = ch;
-      } else {
-        break;
-      }
-    }
-    return current;
+    final idx = _chapterIndexForPage(page);
+    if (idx < 0 || idx >= _chapters.length) return null;
+    if (page < _chapters[idx].startPage) return null;
+    return _chapters[idx];
   }
 
   int _chapterIndexForPage(int page) {
     if (_chapters.isEmpty) return -1;
+    var low = 0;
+    var high = _chapters.length - 1;
     var found = 0;
-    for (var i = 0; i < _chapters.length; i++) {
-      if (page >= _chapters[i].startPage) {
-        found = i;
+    while (low <= high) {
+      final mid = (low + high) >> 1;
+      if (_chapters[mid].startPage <= page) {
+        found = mid;
+        low = mid + 1;
       } else {
-        break;
+        high = mid - 1;
       }
     }
     return found;

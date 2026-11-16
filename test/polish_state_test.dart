@@ -1,15 +1,11 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shuyu/catalog.dart';
-import 'package:shuyu/legacy_wenku_repository.dart';
 import 'package:shuyu/library_state.dart';
 import 'package:shuyu/novel_feed_controller.dart';
-import 'package:shuyu/offline_cache.dart';
-import 'package:shuyu/offline_repository.dart';
 import 'package:shuyu/reader_content.dart';
 import 'package:shuyu/ui_notifiers.dart';
 
@@ -26,25 +22,6 @@ class _Search extends DemoNovelRepository {
   }) {
     calls.add(query);
     return replies.putIfAbsent(query, Completer<NovelPage>.new).future;
-  }
-}
-
-class _DelayedDeletionCache extends OfflineCacheStore {
-  _DelayedDeletionCache(super.directory);
-  final removed = Completer<void>();
-  final release = Completer<void>();
-  @override
-  Future<void> clear() async {
-    await super.clear();
-    removed.complete();
-    await release.future;
-  }
-
-  @override
-  Future<void> removeBook(int id) async {
-    await super.removeBook(id);
-    removed.complete();
-    await release.future;
   }
 }
 
@@ -277,145 +254,6 @@ void main() {
       expect(state.debugMetadataEncodeCount, 1);
     },
   );
-
-  test(
-    'directory requests coalesce and pre-refresh results never overwrite newer chapters',
-    () async {
-      final replies = <Completer<String>>[];
-      final actions = <String>[];
-      final repository = LegacyWenkuRepository(
-        request: (action) async {
-          actions.add(action);
-          if (action.contains('do=list')) {
-            final reply = Completer<String>();
-            replies.add(reply);
-            return reply.future;
-          }
-          if (action.contains('do=intro')) return '<intro>介绍</intro>';
-          return '<metadata><data name="Title" value="作品"/></metadata>';
-        },
-      );
-      final old = repository.chapters(71);
-      final duplicate = repository.chapters(71);
-      expect(replies.length, 1);
-      await Future.wait([
-        repository.detail(offlineFixtureBook(71)),
-        repository.detail(offlineFixtureBook(71)),
-      ]);
-      expect(actions.where((action) => action.contains('do=intro')).length, 1);
-      final fresh = repository.chapters(71);
-      replies[1].complete('<book><chapter cid="72">新章</chapter></book>');
-      expect((await fresh).single.id, 72);
-      replies[0].complete('<book><chapter cid="71">旧章</chapter></book>');
-      await old;
-      await duplicate;
-      expect((await repository.chapters(71)).single.id, 72);
-    },
-  );
-
-  test(
-    'large directory/body decoding preserves protocol and immutable ordered paragraphs',
-    () async {
-      final source =
-          ' 第一行 \r\n${'超长正文 😀 ' * 12000}\r\n<!--image-->图像<!--image-->\r\n末行';
-      final repository = LegacyWenkuRepository(
-        request: (action) async {
-          if (action.contains('do=list')) {
-            return '<book>${List.generate(1200, (i) => '<chapter cid="${i + 1}">章节 $i ${'标题' * 30}</chapter>').join()}</book>';
-          }
-          return source;
-        },
-      );
-      final chapters = await repository.chapters(71);
-      expect(chapters.length, 1200);
-      expect(chapters.last.id, 1200);
-      final normalized = await repository.chapterContent(71, chapters.first);
-      final content = await ReaderContent.parse(normalized);
-      expect(content.paragraphs, [
-        '第一行',
-        '超长正文 😀 ' * 11999 + '超长正文 😀',
-        '[插图]',
-        '末行',
-      ]);
-      expect(() => content.paragraphs.add('extra'), throwsUnsupportedError);
-      await expectLater(ReaderContent.parse(' \n '), throwsFormatException);
-    },
-  );
-
-  testWidgets('cache changes update only the affected book visual observers', (
-    tester,
-  ) async {
-    final folder = await tester.runAsync(
-      () => Directory.systemTemp.createTemp('novel8-polish-notify-'),
-    );
-    final cache = OfflineCacheStore(folder!);
-    final remote = OfflineFixtureRepository(
-      books: [offlineFixtureBook(71), offlineFixtureBook(72)],
-    );
-    final repository = OfflineNovelRepository(remote: remote, cache: cache);
-    addTearDown(() async {
-      repository.dispose();
-      cache.dispose();
-      await folder.delete(recursive: true);
-    });
-    var first = 0;
-    var second = 0;
-    repository.bookChanges(71).addListener(() => first++);
-    repository.bookChanges(72).addListener(() => second++);
-    await tester.runAsync(() async {
-      await cache.saveBook(remote.books[71]!, epoch: cache.epochFor(71));
-      await cache.saveBook(remote.books[72]!, epoch: cache.epochFor(72));
-    });
-    await tester.pump();
-    first = second = 0;
-    await tester.runAsync(
-      () => cache.saveChapter(71, 71001, '正文', epoch: cache.epochFor(71)),
-    );
-    await tester.pump();
-    expect(first, 1);
-    expect(second, 0);
-    expect(cache.book(71)!.cachedCount, 1);
-    expect(cache.book(71)!.bytes, 6);
-    final directoryIndex = cache.book(71)!.chapterIds;
-    await tester.runAsync(
-      () => cache.saveChapter(71, 71001, '新正文', epoch: cache.epochFor(71)),
-    );
-    expect(cache.book(71)!.chapterIds, same(directoryIndex));
-    expect(cache.book(71)!.cachedCount, 1);
-    expect(cache.book(71)!.bytes, 9);
-  });
-
-  for (final all in [false, true]) {
-    test(
-      'a new download remains tracked when ${all ? 'all-cache' : 'book'} deletion completes later',
-      () async {
-        final folder = await Directory.systemTemp.createTemp(
-          'novel8-delete-order-',
-        );
-        final cache = _DelayedDeletionCache(folder);
-        final remote = OfflineFixtureRepository();
-        final repository = OfflineNovelRepository(remote: remote, cache: cache);
-        addTearDown(() async {
-          repository.dispose();
-          cache.dispose();
-          await folder.delete(recursive: true);
-        });
-        await cache.load();
-        final deletion = all
-            ? repository.clearCache()
-            : repository.removeCachedBook(71);
-        await cache.removed.future;
-        repository.download(remote.books[71]!);
-        final newer = repository.jobFor(71)!;
-        cache.release.complete();
-        await deletion;
-        expect(repository.jobFor(71), same(newer));
-        await offlineWaitUntil(() => !newer.active);
-        expect(newer.phase, DownloadPhase.completed);
-        expect(cache.book(71)!.cachedCount, 3);
-      },
-    );
-  }
 
   test(
     'hard-wrapped mid-sentence paragraphs are merged while distinct paragraphs stay separate',

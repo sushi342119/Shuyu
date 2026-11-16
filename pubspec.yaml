@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.9.17+91
+version: 1.10.1+95
 
 environment:
   sdk: ^3.11.3
@@ -95,15 +95,6 @@ flutter:
     - assets/licenses/GPL-3.0.txt
     - assets/licenses/edge-tts.txt
     - assets/licenses/libmobi.txt
-    - assets/licenses/jsoup.txt
-    - assets/licenses/commonmark.txt
-    - assets/licenses/pdfbox.txt
-    - assets/licenses/pdfbox-notice.txt
-    - assets/licenses/poi.txt
-    - assets/licenses/bouncycastle.txt
-    - assets/licenses/desugar-jdk.txt
-    - assets/licenses/juniversalchardet.txt
-    - assets/licenses/cronet.txt
     - assets/licenses/dart-jieba.txt
     - assets/tokenizer/jieba-1.0.1.dgz
   fonts:
@@ -111,8 +102,6 @@ flutter:
       fonts:
         - asset: assets/fonts/SourceHanSerifCN-Regular.otf
           weight: 400
-        - asset: assets/fonts/SourceHanSerifCN-Bold.otf
-          weight: 700
     - family: ReadingDisplay
       fonts:
         - asset: assets/fonts/ReadingDisplay-Medium.ttf

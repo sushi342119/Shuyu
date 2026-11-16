@@ -173,13 +173,15 @@ class ReadingWidgetCards extends ChangeNotifier {
     return card;
   }
 
+  String? _lastPublishedPayloadSignature;
+
   void _changed() {
     if (_disposed) return;
     notifyListeners();
     _timer?.cancel();
     _timer = Timer(
       const Duration(milliseconds: 700),
-      () => unawaited(publish()),
+      () => unawaited(publish(force: false)),
     );
   }
 
@@ -198,15 +200,15 @@ class ReadingWidgetCards extends ChangeNotifier {
         },
   ];
 
-  Future<void> publish() {
+  Future<void> publish({bool force = true}) {
     // One owner serializes native commits, so a slower old render cannot replace
     // a newer privacy/configuration update.
-    final next = _writes.then((_) => _publish());
+    final next = _writes.then((_) => _publish(force: force));
     _writes = next.catchError((Object _) {});
     return next;
   }
 
-  Future<void> _publish() async {
+  Future<void> _publish({bool force = true}) async {
     if (_disposed || !ReadingWidgetBridge.supported) return;
     _hostReady ??= ReadingWidgetBridge.channel
         .invokeMethod<bool>('cardsSupported')
@@ -305,9 +307,17 @@ class ReadingWidgetCards extends ChangeNotifier {
         });
       }
       if (_disposed) return;
+      final payloadSignature = jsonEncode(payload);
+      if (!force &&
+          oldFiles.isEmpty &&
+          payloadSignature == _lastPublishedPayloadSignature) {
+        error = null;
+        return;
+      }
       await ReadingWidgetBridge.channel.invokeMethod<void>('publishCards', {
         'cards': payload,
       });
+      _lastPublishedPayloadSignature = payloadSignature;
       for (final path in oldFiles) {
         try {
           await File(path).delete();

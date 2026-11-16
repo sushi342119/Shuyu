@@ -12,6 +12,7 @@ class ReaderTurnScope extends InheritedWidget {
     required super.child,
     this.outgoing = false,
     this.enabled = true,
+    this.isolateFragments = true,
     this.slot = 0,
     this.slots = 1,
     this.relay = false,
@@ -22,7 +23,7 @@ class ReaderTurnScope extends InheritedWidget {
 
   final Animation<double> animation;
   final double direction;
-  final bool outgoing, enabled;
+  final bool outgoing, enabled, isolateFragments;
   final int slot, slots;
   final bool relay, vertical;
   final Size leafSize;
@@ -125,13 +126,14 @@ class ReaderTurnScope extends InheritedWidget {
       }
       return true;
     });
-    return active;
+    return active ?? nearest;
   }
 
   static const idle = ReaderTurnScope(
     animation: AlwaysStoppedAnimation(1),
     direction: 1,
     enabled: false,
+    isolateFragments: false,
     child: SizedBox(),
   );
 
@@ -141,6 +143,7 @@ class ReaderTurnScope extends InheritedWidget {
       direction != oldWidget.direction ||
       outgoing != oldWidget.outgoing ||
       enabled != oldWidget.enabled ||
+      isolateFragments != oldWidget.isolateFragments ||
       relay != oldWidget.relay ||
       vertical != oldWidget.vertical ||
       leafSize != oldWidget.leafSize ||
@@ -167,12 +170,13 @@ class ReaderTurnPart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scope = motion ?? ReaderTurnScope.maybeOf(context);
+    final scope = motion ?? ReaderTurnScope.maybeOf(context) ?? ReaderTurnScope.idle;
     return _TurnPart(
-      scope: scope ?? ReaderTurnScope.idle,
+      scope: scope,
       index: index,
       count: count,
       bounds: bounds,
+      isolate: scope.isolateFragments,
       child: child,
     );
   }
@@ -290,11 +294,13 @@ class _TurnPart extends SingleChildRenderObjectWidget {
     required this.index,
     required this.count,
     this.bounds,
+    this.isolate = true,
     required Widget child,
-  }) : super(child: RepaintBoundary(child: child));
+  }) : super(child: isolate ? RepaintBoundary(child: child) : child);
   final ReaderTurnScope scope;
   final int index, count;
   final Rect? bounds;
+  final bool isolate;
 
   @override
   ReaderTurnPartRender createRenderObject(BuildContext context) =>
@@ -310,6 +316,7 @@ class ReaderTurnPartRender extends RenderProxyBox {
   ReaderTurnScope scope;
   int index, count;
   Rect? bounds;
+  bool _listening = false;
   final _translation = LayerHandle<TransformLayer>();
   final _opacity = LayerHandle<OpacityLayer>();
   int debugLayoutCount = 0;
@@ -318,13 +325,23 @@ class ReaderTurnPartRender extends RenderProxyBox {
       scope.displacementFor(index, count, bounds: bounds);
   int get alpha => (scope.opacityFor(index, count) * 255).round();
   @override
-  bool get alwaysNeedsCompositing => child != null;
+  bool get alwaysNeedsCompositing => child != null && scope.enabled;
   Matrix4 get _transform =>
       Matrix4.translationValues(displacement.dx, displacement.dy, 0);
 
+  void _syncListener() {
+    final want = attached && scope.enabled;
+    if (want == _listening) return;
+    if (want) {
+      scope.animation.addListener(_tick);
+    } else {
+      scope.animation.removeListener(_tick);
+    }
+    _listening = want;
+  }
+
   void _tick() {
     markNeedsPaint();
-    markNeedsSemanticsUpdate();
   }
 
   void update(
@@ -333,26 +350,36 @@ class ReaderTurnPartRender extends RenderProxyBox {
     int nextCount,
     Rect? nextBounds,
   ) {
-    if (attached && next.animation != scope.animation) {
+    final wasEnabled = scope.enabled;
+    if (_listening && next.animation != scope.animation) {
       scope.animation.removeListener(_tick);
-      next.animation.addListener(_tick);
+      _listening = false;
     }
     scope = next;
     index = nextIndex;
     count = nextCount;
     bounds = nextBounds;
-    _tick();
+    _syncListener();
+    if (wasEnabled || next.enabled) {
+      markNeedsPaint();
+      if (wasEnabled != next.enabled) {
+        markNeedsSemanticsUpdate();
+      }
+    }
   }
 
   @override
   void attach(PipelineOwner owner) {
     super.attach(owner);
-    scope.animation.addListener(_tick);
+    _syncListener();
   }
 
   @override
   void detach() {
-    scope.animation.removeListener(_tick);
+    if (_listening) {
+      scope.animation.removeListener(_tick);
+      _listening = false;
+    }
     super.detach();
   }
 
@@ -366,9 +393,11 @@ class ReaderTurnPartRender extends RenderProxyBox {
   }
 
   @override
-  Rect get paintBounds => (Offset.zero & size).expandToInclude(
-    (Offset.zero & size).shift(displacement),
-  );
+  Rect get paintBounds => scope.enabled
+      ? (Offset.zero & size).expandToInclude(
+          (Offset.zero & size).shift(displacement),
+        )
+      : Offset.zero & size;
 
   @override
   void paint(PaintingContext context, Offset offset) {
@@ -401,19 +430,24 @@ class ReaderTurnPartRender extends RenderProxyBox {
   }
 
   @override
-  void applyPaintTransform(RenderBox child, Matrix4 transform) =>
+  void applyPaintTransform(RenderBox child, Matrix4 transform) {
+    if (scope.enabled && displacement != Offset.zero) {
       transform.multiply(_transform);
+    }
+  }
 
   @override
   bool hitTest(BoxHitTestResult result, {required Offset position}) =>
       !scope.outgoing &&
       alpha > 12 &&
-      result.addWithPaintTransform(
-        transform: _transform,
-        position: position,
-        hitTest: (result, position) =>
-            super.hitTest(result, position: position),
-      );
+      (!scope.enabled || displacement == Offset.zero
+          ? super.hitTest(result, position: position)
+          : result.addWithPaintTransform(
+              transform: _transform,
+              position: position,
+              hitTest: (result, position) =>
+                  super.hitTest(result, position: position),
+            ));
 
   @override
   void visitChildrenForSemantics(RenderObjectVisitor visitor) {

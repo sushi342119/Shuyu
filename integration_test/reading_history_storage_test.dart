@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:shuyu/legacy_wenku_repository.dart';
+import '../test/support/offline_fixture.dart';
 import 'package:shuyu/library_state.dart';
 
 void main() {
@@ -14,7 +14,7 @@ void main() {
       // Integration builds have their own render_probe application ID.
       final prefs = await SharedPreferences.getInstance();
       await prefs.clear();
-      final repository = LegacyWenkuRepository();
+      final repository = OfflineFixtureRepository();
       final preview = (await repository.list()).first;
       final detail = await repository.detail(preview);
       final chapters = await repository.chapters(preview.id);

@@ -1676,7 +1676,20 @@ class NovelCover extends StatelessWidget {
               )?.animation ??
               animation,
           imageProvider: switch (LegacyCover.peek(novel.id)) {
-            final bytes? => MemoryImage(bytes),
+            final bytes? => () {
+              final raw = MemoryImage(bytes);
+              if (!PaintingBinding.instance.imageCache
+                  .statusForKey(raw)
+                  .untracked) {
+                return raw;
+              }
+              final dpr =
+                  MediaQuery.maybeDevicePixelRatioOf(
+                    direction == HeroFlightDirection.push ? from : to,
+                  ) ??
+                  1.0;
+              return ResizeImage.resizeIfNeeded(_decodeCacheWidth(dpr), null, raw);
+            }(),
             null => null,
           },
           faceSize: Size(width, height),
@@ -1731,6 +1744,12 @@ class NovelCover extends StatelessWidget {
       return _coastalShelfPalette[novel.id % _coastalShelfPalette.length];
     }
     return const [Color(0xFF2C3444), accent];
+  }
+
+  int? _decodeCacheWidth(double dpr) {
+    if (!width.isFinite || width <= 0) return null;
+    final ratio = dpr.isFinite && dpr > 0 ? dpr : 1.0;
+    return (width * ratio).round().clamp(64, 2048);
   }
 
   Widget _visual({bool clip = true, bool recordArrival = true}) {
@@ -1789,6 +1808,9 @@ class NovelCover extends StatelessWidget {
                   label: '正在载入封面',
                 ),
               );
+              final decodeWidth = _decodeCacheWidth(
+                MediaQuery.devicePixelRatioOf(context),
+              );
               return FutureBuilder<Uint8List>(
                 key: ValueKey('cover-bytes-${novel.id}'),
                 future: LegacyCover.bytes(novel.id),
@@ -1798,9 +1820,17 @@ class NovelCover extends StatelessWidget {
                   if (bytes == null) {
                     return snapshot.hasError ? fallback : placeholder;
                   }
+                  final raw = MemoryImage(bytes);
+                  final effectiveCacheWidth =
+                      !PaintingBinding.instance.imageCache
+                          .statusForKey(raw)
+                          .untracked
+                      ? null
+                      : decodeWidth;
                   return Image.memory(
                     bytes,
                     fit: BoxFit.cover,
+                    cacheWidth: effectiveCacheWidth,
                     gaplessPlayback: true,
                     errorBuilder: (context, error, stack) => fallback,
                     frameBuilder: (context, child, frame, synchronous) =>

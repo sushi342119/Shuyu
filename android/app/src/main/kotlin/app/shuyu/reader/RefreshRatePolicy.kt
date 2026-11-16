@@ -15,10 +15,10 @@ internal object RefreshRatePolicy {
         val fastest = eligible.asSequence()
             .maxWithOrNull(compareBy<Mode> { it.rate }.thenBy { it.id == current.id })
             ?: return null
-        // A manual choice requests that exact same-resolution display mode.
-        // Automatic high refresh keeps rate-only scheduling on API 34+, where
-        // it no longer implicitly selects the DEFAULT resolution.
-        return Preference(if (target > 0f || sdk < 34) fastest.id else 0, fastest.rate)
+        // All candidates already match the current physical resolution, so binding
+        // fastest.id across all SDKs locks high refresh rate on OEM Android 14+ ROMs
+        // that ignore rate-only votes when preferredDisplayModeId is left at 0.
+        return Preference(fastest.id, fastest.rate)
     }
 
     fun rates(current: Mode, modes: List<Mode>): List<Float> = modes

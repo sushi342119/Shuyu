@@ -69,23 +69,47 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
   bool _lastIdWritable = true;
   bool _unreadOnly = false;
   int? _lastPickedId;
+  bool _tickerActive = true;
+  bool _dirtyWhileInactive = false;
   Future<void> _pendingWrite = Future<void>.value();
+
+  void _attachStateListeners(LibraryState? target) {
+    target?.shelfChanges.addListener(_onFilterChanged);
+    target?.historyChanges.addListener(_onHistoryChanged);
+  }
+
+  void _detachStateListeners(LibraryState? target) {
+    target?.shelfChanges.removeListener(_onFilterChanged);
+    target?.historyChanges.removeListener(_onHistoryChanged);
+  }
 
   @override
   void initState() {
     super.initState();
     _tagStore.addListener(_onTagsChanged);
     LibraryFilter.shared.addListener(_onFilterChanged);
-    widget.state?.addListener(_onFilterChanged);
+    _attachStateListeners(widget.state);
     unawaited(_loadDrawCounts());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final active = TickerMode.valuesOf(context).enabled;
+    if (active != _tickerActive) {
+      _tickerActive = active;
+      if (active && _dirtyWhileInactive) {
+        _dirtyWhileInactive = false;
+      }
+    }
   }
 
   @override
   void didUpdateWidget(covariant NovelRandomPickSection oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.state != widget.state) {
-      oldWidget.state?.removeListener(_onFilterChanged);
-      widget.state?.addListener(_onFilterChanged);
+      _detachStateListeners(oldWidget.state);
+      _attachStateListeners(widget.state);
     }
   }
 
@@ -93,12 +117,21 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
   void dispose() {
     _tagStore.removeListener(_onTagsChanged);
     LibraryFilter.shared.removeListener(_onFilterChanged);
-    widget.state?.removeListener(_onFilterChanged);
+    _detachStateListeners(widget.state);
     super.dispose();
   }
 
+  void _onHistoryChanged() {
+    if (_unreadOnly) _onFilterChanged();
+  }
+
   void _onFilterChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    if (!_tickerActive) {
+      _dirtyWhileInactive = true;
+      return;
+    }
+    setState(() {});
   }
 
   Future<void> _loadDrawCounts() async {

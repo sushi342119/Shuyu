@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -10,8 +9,6 @@ import 'package:shuyu/catalog.dart';
 import 'package:shuyu/library_state.dart';
 import 'package:shuyu/ui_preferences.dart';
 import 'package:shuyu/main.dart';
-import 'package:shuyu/offline_cache.dart';
-import 'package:shuyu/offline_repository.dart';
 import 'package:shuyu/pages.dart';
 import 'package:shuyu/reader_catalogue.dart';
 import 'package:shuyu/reading_history.dart';
@@ -120,26 +117,16 @@ void main({
   TestWidgetsFlutterBinding.ensureInitialized();
   late LibraryState state;
   late _ReaderRepository remote;
-  late Directory directory;
-  late OfflineCacheStore cache;
-  late OfflineNovelRepository offline;
   late GlobalKey imageKey;
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({'motionLevel': 'off'});
     state = await LibraryState.load();
     remote = _ReaderRepository();
-    directory = await Directory.systemTemp.createTemp('novel8-reading-ui-');
-    cache = OfflineCacheStore(directory);
-    await cache.load();
-    offline = OfflineNovelRepository(remote: remote, cache: cache);
     imageKey = GlobalKey();
   });
   tearDown(() async {
-    offline.dispose();
-    cache.dispose();
     state.dispose();
-    if (await directory.exists()) await directory.delete(recursive: true);
   });
 
   Future<void> shot(WidgetTester tester, String name) async {
@@ -176,11 +163,7 @@ void main({
         ),
       ),
     );
-    if (repository is OfflineNovelRepository) {
-      await _settleIo(tester);
-    } else {
-      await tester.pumpAndSettle();
-    }
+    await tester.pumpAndSettle();
   }
 
   Future<void> history(
@@ -377,35 +360,6 @@ void main({
       expect(find.text('过时章节正文'), findsNothing);
       expect(find.textContaining('正文 ${novel.chapters[2].id}'), findsWidgets);
       expect(state.positionFor(71)!.chapterId, novel.chapters[2].id);
-      expect(tester.takeException(), isNull);
-    },
-  );
-
-  testWidgets(
-    'offline directory marks stored bodies and switches cached chapters without remote calls',
-    (tester) async {
-      final novel = remote.books[71]!;
-      await tester.runAsync(() async {
-        final epoch = cache.epochFor(71);
-        await cache.saveBook(novel, epoch: epoch);
-        for (final chapter in novel.chapters.take(2)) {
-          await cache.saveChapter(
-            71,
-            chapter.id,
-            _body(chapter.id),
-            epoch: epoch,
-          );
-        }
-      });
-      await reader(tester, repository: offline);
-      await openCatalogue(tester);
-      expect(find.text('已缓存'), findsNWidgets(2));
-      await shot(tester, 'reader-directory-offline');
-      await tester.tap(_chapterControl(1));
-      await _settleIo(tester);
-      expect(remote.bodies, isEmpty);
-      expect(state.positionFor(71)!.chapterId, novel.chapters[1].id);
-      expect(find.textContaining('正文 ${novel.chapters[1].id}'), findsWidgets);
       expect(tester.takeException(), isNull);
     },
   );

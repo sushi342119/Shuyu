@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,9 +7,6 @@ import 'package:shuyu/app_ui.dart';
 import 'package:shuyu/book_tags.dart';
 import 'package:shuyu/catalog.dart';
 import 'package:shuyu/library_state.dart';
-import 'package:shuyu/offline_cache.dart';
-import 'package:shuyu/offline_repository.dart';
-import 'package:shuyu/offline_widgets.dart';
 import 'package:shuyu/pages.dart';
 
 import 'support/offline_fixture.dart';
@@ -73,21 +69,15 @@ void main({
   capture,
 }) {
   late LibraryState state;
-  late Directory directory;
-  late OfflineCacheStore cache;
   final novel = offlineFixtureBook(83);
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     state = await LibraryState.load();
     await TagStore.load();
-    directory = await Directory.systemTemp.createTemp('novel8-detail-polish-');
-    cache = OfflineCacheStore(directory);
   });
   tearDown(() async {
     state.dispose();
-    cache.dispose();
-    if (await directory.exists()) await directory.delete(recursive: true);
   });
 
   void phoneViewport(WidgetTester tester) {
@@ -209,8 +199,7 @@ void main({
     (tester) async {
       phoneViewport(tester);
       final pending = _PendingDetail();
-      final repository = OfflineNovelRepository(remote: pending, cache: cache);
-      addTearDown(repository.dispose);
+      final repository = pending;
       final key = GlobalKey();
       await tester.pumpWidget(
         _app(
@@ -227,30 +216,14 @@ void main({
         find.byKey(const ValueKey('detail-meta-skeleton')),
         findsOneWidget,
       );
-      expect(
-        find.byKey(const ValueKey('detail-cache-skeleton')),
-        findsOneWidget,
-      );
-      expect(find.byType(OfflineBookStatus), findsNothing);
-      expect(find.textContaining('缓存'), findsNothing);
       expect(find.text('正在加载目录'), findsNothing);
       final button = tester.widget<GlassPillButton>(find.byKey(_readKey));
       expect(button.loading, isTrue);
       expect(button.onPressed, isNull);
       expect(tester.binding.transientCallbackCount, 0);
-      final download = tester.widget<GlassIconButton>(
-        find.byWidgetPredicate(
-          (widget) => widget is GlassIconButton && widget.label == '下载与缓存',
-        ),
-      );
-      expect(download.onPressed, isNull);
       if (capture != null) await capture(tester, key, 'detail-polish-loading');
       pending.detailData.complete(novel);
       await tester.pump();
-      expect(
-        find.byKey(const ValueKey('detail-cache-skeleton')),
-        findsOneWidget,
-      );
       pending.directory.complete(novel.chapters);
       for (
         var i = 0;
@@ -267,14 +240,9 @@ void main({
       await tester.pump(const Duration(milliseconds: 130));
       expect(
         _phase(tester, 'detail-meta-reveal'),
-        greaterThan(_phase(tester, 'detail-cache-reveal')),
-      );
-      expect(
-        _phase(tester, 'detail-cache-reveal'),
         greaterThan(_phase(tester, 'detail-summary-reveal')),
       );
       await tester.pumpAndSettle();
-      expect(find.text('缓存 0 / 3 章'), findsOneWidget);
       expect(find.text('开始阅读 · 第1章'), findsOneWidget);
       expect(find.byType(InlineSkeleton), findsNothing);
       if (capture != null) await capture(tester, key, 'detail-polish-ready');
@@ -387,11 +355,7 @@ void main({
     'empty or failed detail never offers a misleading continue action',
     (tester) async {
       phoneViewport(tester);
-      final repository = OfflineNovelRepository(
-        remote: const DemoNovelRepository(),
-        cache: cache,
-      );
-      addTearDown(repository.dispose);
+      const repository = DemoNovelRepository();
       await tester.pumpWidget(
         _app(
           DetailPage(
@@ -403,8 +367,6 @@ void main({
       );
       await tester.pumpAndSettle();
       expect(find.text('暂无可读章节'), findsOneWidget);
-      expect(find.text('暂无章节缓存'), findsOneWidget);
-      expect(find.textContaining('缓存 0 / 0'), findsNothing);
       expect(
         tester.widget<GlassPillButton>(find.byKey(_readKey)).onPressed,
         isNull,
@@ -423,43 +385,9 @@ void main({
       );
       await tester.pumpAndSettle();
       expect(find.text('重试加载目录'), findsOneWidget);
-      expect(find.byType(OfflineBookStatus), findsNothing);
-      expect(find.textContaining('缓存 0 / 0'), findsNothing);
       await tester.tap(find.byKey(_readKey));
       await tester.pumpAndSettle();
       expect(retries, 1);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
-  );
-
-  testWidgets(
-    'cache count uses current directory instead of removed old chapters',
-    (tester) async {
-      final repository = OfflineNovelRepository(
-        remote: const DemoNovelRepository(),
-        cache: cache,
-      );
-      addTearDown(repository.dispose);
-      await tester.runAsync(() async {
-        final epoch = cache.epochFor(novel.id);
-        await cache.saveBook(novel, epoch: epoch);
-        await cache.saveChapter(
-          novel.id,
-          novel.chapters[0].id,
-          '已缓存正文。',
-          epoch: epoch,
-        );
-      });
-      final changed = novel.withChapters([
-        novel.chapters[1],
-        novel.chapters[2],
-      ]);
-      await tester.pumpWidget(
-        _app(OfflineBookStatus(repository: repository, novel: changed)),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('缓存 0 / 2 章'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     },

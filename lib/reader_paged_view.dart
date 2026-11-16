@@ -735,16 +735,25 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
   void _animateSpread(int spread) {
     final pager = _pager!;
     final current = (pager.page ?? 0) - _edgeSlots;
-    setState(() {
+    final plainSlide =
+        _effect == ReaderPageEffect.slide || _effect == ReaderPageEffect.none;
+    if (plainSlide) {
       _swipeOrigin ??= current.round();
       _programmaticTurn = true;
-    });
+    } else {
+      setState(() {
+        _swipeOrigin ??= current.round();
+        _programmaticTurn = true;
+      });
+    }
     unawaited(
       pager
           .animateToPage(
             spread + _edgeSlots,
             duration: widget.preferences.pageSpeed.durationFor(_effect),
-            curve: Curves.linear,
+            curve: _effect == ReaderPageEffect.slide
+                ? Curves.easeOutCubic
+                : Curves.linear,
           )
           .whenComplete(() {
             if (!mounted || _pager?.hasClients != true) return;
@@ -752,13 +761,21 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
             final settled = position.round();
             if ((position - settled).abs() > .005) return;
             if (_swipeOrigin == null && _turnSpread == null) return;
-            setState(() {
+            if (plainSlide) {
               _swipeOrigin = null;
               _programmaticTurn = false;
               _target = _page;
               _turn.value = 1;
               _turnSpread = null;
-            });
+            } else {
+              setState(() {
+                _swipeOrigin = null;
+                _programmaticTurn = false;
+                _target = _page;
+                _turn.value = 1;
+                _turnSpread = null;
+              });
+            }
           }),
     );
   }
@@ -976,7 +993,8 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
     final position = metrics.page == null ? null : metrics.page! - _edgeSlots;
     if (origin == null ||
         position == null ||
-        _effect == ReaderPageEffect.none) {
+        _effect == ReaderPageEffect.none ||
+        _effect == ReaderPageEffect.slide) {
       return;
     }
     final delta = position - origin;
@@ -1442,6 +1460,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
             (entering ||
                 _effect == ReaderPageEffect.staggered &&
                     (incoming || outgoing)),
+        isolateFragments: entering || _effect == ReaderPageEffect.staggered,
         outgoing: outgoing,
         relay: !entering && (outgoing || incoming),
         vertical:
@@ -1805,11 +1824,20 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
           if (notification is ScrollStartNotification &&
               notification.dragDetails != null) {
             _turn.stop();
-            setState(() {
+            final originSpread =
+                ((pager.page ?? _edgeSlots) - _edgeSlots).round();
+            if (_effect == ReaderPageEffect.slide ||
+                _effect == ReaderPageEffect.none) {
               _turnSpread = null;
-              _swipeOrigin = ((pager.page ?? _edgeSlots) - _edgeSlots).round();
+              _swipeOrigin = originSpread;
               _programmaticTurn = false;
-            });
+            } else {
+              setState(() {
+                _turnSpread = null;
+                _swipeOrigin = originSpread;
+                _programmaticTurn = false;
+              });
+            }
             _overscroll = 0;
             _crossedBoundary = false;
             _swipeFeedbackSent = false;
@@ -1839,7 +1867,8 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
             if (boundary != 0 && _adjacentLayouts.containsKey(boundary)) {
               _finishBoundary(boundary);
             }
-            setState(() {
+            if (_effect == ReaderPageEffect.slide ||
+                _effect == ReaderPageEffect.none) {
               if (!_programmaticTurn &&
                   spread != _swipeOrigin &&
                   spread >= 0 &&
@@ -1851,7 +1880,21 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
               _target = _page;
               _turn.value = 1;
               _turnSpread = null;
-            });
+            } else {
+              setState(() {
+                if (!_programmaticTurn &&
+                    spread != _swipeOrigin &&
+                    spread >= 0 &&
+                    spread < _spreadCount) {
+                  _readingAnchor = _firstVisibleAnchor;
+                }
+                _swipeOrigin = null;
+                _programmaticTurn = false;
+                _target = _page;
+                _turn.value = 1;
+                _turnSpread = null;
+              });
+            }
           }
           if (notification is OverscrollNotification &&
               notification.dragDetails != null &&

@@ -590,19 +590,21 @@ class ListeningParagraphHighlight extends StatelessWidget {
         child: child,
         builder: (context, state, child) {
           final own = state.active && state.novel?.id == novelId;
+          if (!own) return child!;
           final current =
-              own &&
               state.chapter == chapter &&
               state.current?.paragraph == paragraph;
-          final plane = CustomPaint(
-            key: ValueKey('listening-highlight-$paragraph'),
-            painter: _ListeningPlane(
-              active: current,
-              dark: Theme.of(context).brightness == Brightness.dark,
-            ),
-            child: child,
-          );
-          if (!own || !interactive) return plane;
+          final plane = current
+              ? CustomPaint(
+                  key: ValueKey('listening-highlight-$paragraph'),
+                  painter: _ListeningPlane(
+                    active: true,
+                    dark: Theme.of(context).brightness == Brightness.dark,
+                  ),
+                  child: child,
+                )
+              : child!;
+          if (!interactive) return plane;
           void activate() {
             unawaited(
               (onDoubleTap?.call() ??

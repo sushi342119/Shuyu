@@ -10,7 +10,6 @@ import 'library_state.dart';
 import 'library_reflow.dart';
 import 'local_library.dart';
 import 'local_platform.dart';
-import 'offline_repository.dart';
 import 'pages.dart' show readerPageFor;
 import 'quote_card.dart';
 import 'reader_annotation_editor.dart';
@@ -100,14 +99,11 @@ Future<ReaderAnnotationContext?> loadOfflineReaderAnnotationContext({
   required ReadingPosition anchor,
   Novel? novel,
 }) async {
-  final offline = offlineRepositoryForBook(repository, novelId);
-  if (offline != null) await offline.cache.load();
   final localStore = state.localLibrary;
   final localBook = localStore?.bookFor(novelId);
   novel =
       novel ??
       (localBook == null ? null : localStore!.toNovel(localBook)) ??
-      offline?.cache.book(novelId)?.novel ??
       state.cachedNovel(novelId);
   if (localBook != null && novel != null && novel.chapters.isEmpty) {
     novel = novel.withChapters(await localStore!.chapters(novelId));
@@ -147,8 +143,6 @@ Future<ReaderAnnotationContext?> loadOfflineReaderAnnotationContext({
     String? body;
     if (localStore != null && isLocalNovelId(novelId)) {
       body = await localStore.chapterContent(novelId, chapter);
-    } else if (offline != null) {
-      body = await offline.cache.readChapter(novelId, chapter.id);
     } else if (chapter.content.trim().isNotEmpty) {
       body = chapter.content;
     }
@@ -347,7 +341,6 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
 
   Novel? _known(int id) =>
       widget.state.localLibrary?.novelFor(id) ??
-      offlineRepositoryForBook(widget.repository, id)?.cache.book(id)?.novel ??
       widget.state.cachedNovel(id);
 
   Future<void> _open(int id, ReaderBookmark mark) async {

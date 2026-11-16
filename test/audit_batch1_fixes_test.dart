@@ -14,8 +14,6 @@ import 'package:shuyu/library_backup.dart';
 import 'package:shuyu/library_filter.dart';
 import 'package:shuyu/library_state.dart';
 import 'package:shuyu/local_library.dart';
-import 'package:shuyu/offline_cache.dart';
-import 'package:shuyu/offline_repository.dart';
 import 'package:shuyu/pages.dart';
 import 'package:shuyu/reader_purification.dart';
 import 'package:shuyu/reader_underline.dart';
@@ -62,28 +60,6 @@ void main() {
       await tempDir.delete(recursive: true);
     } catch (_) {}
   });
-
-  test(
-    'offlineRepositoryOf and offlineRepositoryForBook unwrap CompositeNovelRepository only for online books',
-    () async {
-      final cache = OfflineCacheStore(Directory('${tempDir.path}/offline'));
-      final remote = OfflineFixtureRepository();
-      final offline = OfflineNovelRepository(remote: remote, cache: cache);
-      final local = await LocalLibraryStore.load();
-      addTearDown(() {
-        offline.dispose();
-        local.dispose();
-      });
-      final composite = CompositeNovelRepository(local: local, remote: offline);
-
-      expect(offlineRepositoryOf(composite), same(offline));
-      expect(offlineRepositoryForBook(composite, 71), same(offline));
-      expect(offlineRepositoryForBook(composite, 0), isNull);
-      expect(offlineRepositoryForBook(composite, -5), isNull);
-      expect(offlineRepositoryForBook(composite, localNovelIdBase), isNull);
-      expect(offlineRepositoryForBook(composite, localNovelIdBase + 42), isNull);
-    },
-  );
 
   test(
     'downloadable and custom fonts round-trip through ReadingPosition, savePosition, createBackup, and restoreBackup',

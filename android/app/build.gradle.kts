@@ -57,6 +57,12 @@ android {
             applicationIdSuffix = ".profile_probe"
         }
         release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             // Release tasks require the existing distribution key below.
             // Preview builds use the separate debug variant.
             if (releaseKeyFile.isFile) {

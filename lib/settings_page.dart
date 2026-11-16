@@ -36,13 +36,6 @@ class SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final localLib = LocalPlatform.android ? localLibraryOf(repository) : null;
-    final offlineRepo = switch (repository) {
-      final OfflineNovelRepository o => o,
-      CompositeNovelRepository(:final remote)
-          when remote is OfflineNovelRepository =>
-        remote,
-      _ => null,
-    };
     final updateScope = AppUpdatesScope.maybeOf(context);
     final versionText =
         '版本 ${updateScope?.installed?.version ?? currentAppVersion}'
@@ -276,7 +269,7 @@ class SettingsPage extends StatelessWidget {
 
               // 03 / 阅读记录：历史、统计、书签与离线缓存。
               if (repository != null) ...[
-                sectionHeader(context, '阅读记录', '历史 · 统计 · 缓存'),
+                sectionHeader(context, '阅读记录', '历史 · 统计 · 书签'),
                 const SizedBox(height: 14),
                 ContentPanel(
                   child: _settingsToolList(context, [
@@ -314,28 +307,7 @@ class SettingsPage extends StatelessWidget {
                         ),
                       ),
                     ],
-                    if (offlineRepo case final OfflineNovelRepository offline)
-                      _SettingsBentoItem(
-                        key: const ValueKey('settings-offline-cache'),
-                        icon: CupertinoIcons.cloud_download,
-                        title: '缓存管理',
-                        subtitle: '管理已下载章节与离线缓存空间',
-                        onTap: () => pushNovelPage<void>(
-                          context,
-                          OfflineCachePage(
-                            repository: offline,
-                            reduceMotion: state.reduceMotion,
-                            onOpen: (pageContext, novel) => openDetail(
-                              pageContext,
-                              novel,
-                              state,
-                              offline,
-                              fromCache: true,
-                            ),
-                          ),
-                          reduceMotion: state.reduceMotion,
-                        ),
-                      ),
+
                   ]),
                 ),
                 const SizedBox(height: 24),

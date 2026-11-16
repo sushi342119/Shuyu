@@ -277,6 +277,9 @@ class ReaderPaperPainter extends SnapshotPainter {
   int snapshotCount = 0;
   int? _lastImage;
   ui.ImageShader? _texture;
+  Int32List? _paperColors;
+  Int32List? _inkColors;
+  Float32List? _uvBuffer;
   void update(ReaderSpineTurn next) {
     if (config.active != next.active) {
       if (next.active) {
@@ -330,7 +333,7 @@ class ReaderPaperPainter extends SnapshotPainter {
       offset,
     ) {
       painter(context, offset);
-      if (geometry.lift < .001) return;
+      if (geometry.lift < .015) return;
       final canvas = context.canvas;
       canvas.save();
       canvas.translate(offset.dx, offset.dy);
@@ -435,33 +438,46 @@ class ReaderPaperPainter extends SnapshotPainter {
     required double lift,
     required Size size,
   }) {
-    Int32List colors(ReaderPaperMesh mesh, bool ink) => Int32List.fromList([
-      for (final normal in mesh.normals)
-        if (ink)
-          Color.lerp(
+    Int32List fillColors(ReaderPaperMesh mesh, bool ink) {
+      final len = mesh.normals.length;
+      final buf = ink
+          ? (_inkColors != null && _inkColors!.length == len
+                ? _inkColors!
+                : (_inkColors = Int32List(len)))
+          : (_paperColors != null && _paperColors!.length == len
+                ? _paperColors!
+                : (_paperColors = Int32List(len)));
+      final inkAlpha = back && config.single ? .075 * lift : 1.0;
+      for (var i = 0; i < len; i++) {
+        final shade = (1 - mesh.normals[i].abs()) * .18 * lift;
+        buf[i] = ink
+            ? Color.lerp(
                 const Color(0xffffffff),
                 const Color(0xff000000),
-                (1 - normal.abs()) * .18 * lift,
-              )!
-              .withValues(alpha: back && config.single ? .075 * lift : 1)
-              .toARGB32()
-        else
-          Color.lerp(
-            config.paper,
-            const Color(0xff000000),
-            (1 - normal.abs()) * .18 * lift,
-          )!.toARGB32(),
-    ]);
+                shade,
+              )!.withValues(alpha: inkAlpha).toARGB32()
+            : Color.lerp(
+                config.paper,
+                const Color(0xff000000),
+                shade,
+              )!.toARGB32();
+      }
+      return buf;
+    }
+
     final surface = ui.Vertices.raw(
       ui.VertexMode.triangles,
       paperMesh.positions,
-      colors: colors(paperMesh, false),
+      colors: fillColors(paperMesh, false),
       indices: paperMesh.indices,
     );
     canvas.drawVertices(surface, BlendMode.srcOver, Paint());
     surface.dispose();
-    final uv = Float32List(inkMesh.uv.length);
-    for (var i = 0; i < uv.length; i += 2) {
+    final uvLen = inkMesh.uv.length;
+    final uv = _uvBuffer != null && _uvBuffer!.length == uvLen
+        ? _uvBuffer!
+        : (_uvBuffer = Float32List(uvLen));
+    for (var i = 0; i < uvLen; i += 2) {
       final u = inkMesh.uv[i];
       final mirror = _back ? config.fromRight : !config.fromRight;
       uv[i] = (mirror ? size.width - u : u) * ratio;
@@ -471,7 +487,7 @@ class ReaderPaperPainter extends SnapshotPainter {
       ui.VertexMode.triangles,
       inkMesh.positions,
       textureCoordinates: uv,
-      colors: colors(inkMesh, true),
+      colors: fillColors(inkMesh, true),
       indices: inkMesh.indices,
     );
     canvas.drawVertices(

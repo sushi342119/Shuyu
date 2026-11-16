@@ -8,7 +8,6 @@ import 'package:shuyu/catalog.dart';
 import 'package:shuyu/book_tags.dart';
 import 'package:shuyu/library_backup.dart';
 import 'package:shuyu/library_state.dart';
-import 'package:shuyu/low_performance_page.dart';
 import 'package:shuyu/main.dart';
 import 'package:shuyu/performance_preferences.dart';
 import 'support/visual_review.dart';
@@ -137,59 +136,6 @@ void main() {
         ),
         findsNothing,
       );
-    },
-  );
-
-  testWidgets(
-    'settings can customize and reset the preset without exposing diagnostics',
-    (tester) async {
-      tester.view.physicalSize = const Size(412, 915);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      final boundary = GlobalKey();
-      await tester.runAsync(
-        () => state.setPerformance(const PerformancePreferences(enabled: true)),
-      );
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: novelTheme(Brightness.light),
-          builder: (context, child) => RepaintBoundary(
-            key: boundary,
-            child: PerformanceScope(
-              preferences: state.performance,
-              child: child!,
-            ),
-          ),
-          home: LowPerformancePage(state: state),
-        ),
-      );
-      await tester.pumpAndSettle();
-      final glass = find.byKey(const ValueKey('performanceGlass'));
-      expect(tester.widget<CupertinoSwitch>(glass).value, false);
-      await tester.ensureVisible(glass);
-      await tester.pumpAndSettle();
-      await tester.tap(glass);
-      await tester.pumpAndSettle();
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 20)),
-      );
-      await tester.pumpAndSettle();
-      await pumpUntil(tester, () => state.performance.glass);
-      expect(state.performance.glass, true);
-      await tester.ensureVisible(
-        find.byKey(const ValueKey('performance-light-preset')),
-      );
-      await tester.tap(find.byKey(const ValueKey('performance-light-preset')));
-      await tester.pumpAndSettle();
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 20)),
-      );
-      await tester.pumpAndSettle();
-      await pumpUntil(tester, () => !state.performance.glass);
-      expect(state.performance.glass, false);
-      expect(tester.takeException(), isNull);
-      await captureReview(tester, boundary, 'low-performance-settings');
     },
   );
 

@@ -1,15 +1,14 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'legacy_transport.dart';
 import 'local_library.dart';
 
-/// Reuses the original Android cover API, with bounded encoded memory and
-/// stable cached futures. Eviction leaves the native disk cache untouched.
+/// Bounded encoded-byte memory cache and local cover loader registry.
 abstract final class LegacyCover {
   static final _cache = LegacyCoverCache(
-    request: (aid) =>
-        LegacyTransport.channel.invokeMethod<Uint8List>('cover', {'aid': aid}),
+    request: (_) => Future<Uint8List?>.error(
+      const FormatException('在线封面接口已移除'),
+    ),
   );
   static bool Function(int aid)? _canLoadLocal;
   static Future<Uint8List?> Function(int aid)? _loadLocal;

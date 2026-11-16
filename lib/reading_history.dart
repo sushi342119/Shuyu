@@ -5,7 +5,6 @@ import 'app_ui.dart';
 import 'app_interactions.dart';
 import 'catalog.dart';
 import 'library_state.dart';
-import 'offline_repository.dart';
 
 class ReadingHistoryPage extends StatefulWidget {
   const ReadingHistoryPage({
@@ -25,20 +24,11 @@ class ReadingHistoryPage extends StatefulWidget {
 class _ReadingHistoryPageState extends State<ReadingHistoryPage> {
   final Map<int, Future<Novel?>> _requests = {};
 
-  Novel? _known(int id) {
-    if (offlineRepositoryForBook(widget.repository, id) case final offline?) {
-      final book = offline.cache.book(id)?.novel;
-      if (book != null) return book;
-    }
-    return widget.state.cachedNovel(id);
-  }
+  Novel? _known(int id) =>
+      widget.state.localLibrary?.novelFor(id) ?? widget.state.cachedNovel(id);
 
   Future<Novel?> _resolve(int id) async {
-    Novel? book;
-    if (offlineRepositoryForBook(widget.repository, id) case final offline?) {
-      book = await offline.cachedBook(id);
-    }
-    book ??= await widget.repository.find(id);
+    final book = await widget.repository.find(id);
     if (book != null) await widget.state.rememberNovel(book);
     return book;
   }

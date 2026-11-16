@@ -11,7 +11,7 @@ class RefreshRatePolicyTest {
         for (max in listOf(60f, 90f, 120f, 144f, 165f)) {
             val p = RefreshRatePolicy.select(36, mode(1, 60f), listOf(mode(1, 60f), mode(2, max)))!!
             assertEquals(max, p.rate, 0f)
-            assertEquals(0, p.modeId)
+            assertEquals(if (max == 60f) 1 else 2, p.modeId)
         }
     }
 
@@ -22,10 +22,10 @@ class RefreshRatePolicyTest {
         assertEquals(90f, p.rate, 0f)
     }
 
-    @Test fun legacyUsesSameSizeModeAndModernUsesRateOnly() {
+    @Test fun legacyAndModernBothBindSameResolutionFastestModeId() {
         for (sdk in listOf(24, 29, 30, 31, 33, 34, 35, 36)) {
             val p = RefreshRatePolicy.select(sdk, mode(1, 60f), listOf(mode(1, 60f), mode(2, 119.88f)))!!
-            assertEquals(if (sdk < 34) 2 else 0, p.modeId)
+            assertEquals(2, p.modeId)
             assertEquals(119.88f, p.rate, 0f)
         }
     }

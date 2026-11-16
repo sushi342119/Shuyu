@@ -87,6 +87,23 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
   double _lastOffset = 0;
   double _lastMax = 0;
 
+  List<EpubBlock>? _epubPurifySourceBlocks;
+  int _epubPurifyChapter = -1;
+  int _epubPurifyRevision = -1;
+  List<PurifiedParagraph?>? _epubPurifyEntries;
+
+  int _epubUnderlineGen = 0;
+  int _epubAnnotationsChapterId = -1;
+  int _epubAnnotationsChapterIdx = -1;
+  int _epubAnnotationsUnderlineGen = -1;
+  int _epubAnnotationsPurifyRev = -1;
+  List<EpubBlock>? _epubAnnotationsSourceBlocks;
+  List<ReaderAnnotationRange>? _epubAnnotationsCached;
+
+  void _onEpubUnderlinesChanged() {
+    _epubUnderlineGen++;
+  }
+
   int get _total => _novel.chapters.length;
 
   bool get _hasLayout =>
@@ -179,6 +196,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       _chapter = widget.state.chapterForNovel(_novel).clamp(0, _total - 1);
     }
     _scroll.addListener(_onScroll);
+    widget.state.underlineChanges.addListener(_onEpubUnderlinesChanged);
     _progressValue.value = _total == 0 ? 0 : _chapterStart(_chapter);
     // 先读旧的章内位置；必须在恢复滚动之后才开始保存，否则旧位置被 0 覆盖。
     double? restoreRatio;
@@ -198,6 +216,16 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
         unawaited(_saveChapter(_chapter));
       }
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant LocalEpubReaderPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.state != widget.state) {
+      oldWidget.state.underlineChanges.removeListener(_onEpubUnderlinesChanged);
+      widget.state.underlineChanges.addListener(_onEpubUnderlinesChanged);
+      _epubUnderlineGen++;
+    }
   }
 
   @override
@@ -345,7 +373,24 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     if (block.kind == EpubBlockKind.image) {
       return const PurifiedParagraph('');
     }
-    return ReaderPurificationStore.shared.purifyParagraphWithMap(
+    final store = ReaderPurificationStore.shared;
+    if (!store.hasEnabledRules && !store.hasChapterEdits(_novel.id, _chapter)) {
+      return PurifiedParagraph(block.text ?? '');
+    }
+    if (!identical(sourceBlocks, _epubPurifySourceBlocks) ||
+        _epubPurifyChapter != _chapter ||
+        _epubPurifyRevision != store.revision ||
+        _epubPurifyEntries == null ||
+        _epubPurifyEntries!.length != sourceBlocks.length) {
+      _epubPurifySourceBlocks = sourceBlocks;
+      _epubPurifyChapter = _chapter;
+      _epubPurifyRevision = store.revision;
+      _epubPurifyEntries = List<PurifiedParagraph?>.filled(
+        sourceBlocks.length,
+        null,
+      );
+    }
+    return _epubPurifyEntries![blockIndex] ??= store.purifyParagraphWithMap(
       block.text ?? '',
       bookId: _novel.id,
       bookTitle: _novel.title,
@@ -354,6 +399,39 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       chapterTitle: _rawChapterTitle(),
       isFirstParagraph: blockIndex == 0,
     );
+  }
+
+  List<ReaderAnnotationRange> _projectedEpubAnnotations(
+    int chapterId,
+    List<EpubBlock> allBlocks,
+  ) {
+    final store = ReaderPurificationStore.shared;
+    if (_epubAnnotationsCached != null &&
+        _epubAnnotationsChapterId == chapterId &&
+        _epubAnnotationsChapterIdx == _chapter &&
+        _epubAnnotationsUnderlineGen == _epubUnderlineGen &&
+        _epubAnnotationsPurifyRev == store.revision &&
+        identical(_epubAnnotationsSourceBlocks, allBlocks)) {
+      return _epubAnnotationsCached!;
+    }
+    final rawAnnotations = widget.state.annotationsFor(
+      _novel.id,
+      chapterId: chapterId,
+    );
+    final projected = rawAnnotations.isEmpty ||
+            (!store.hasEnabledRules &&
+                !store.hasChapterEdits(_novel.id, _chapter))
+        ? rawAnnotations
+        : store.mapAnnotationsToPurified(
+            rawAnnotations,
+            resolveParagraph: (pIdx) => _purifyBlockAt(pIdx, blocks: allBlocks),
+          );
+    _epubAnnotationsChapterId = chapterId;
+    _epubAnnotationsChapterIdx = _chapter;
+    _epubAnnotationsUnderlineGen = _epubUnderlineGen;
+    _epubAnnotationsPurifyRev = store.revision;
+    _epubAnnotationsSourceBlocks = allBlocks;
+    return _epubAnnotationsCached = projected;
   }
 
   /// 切章时保存：章序号 + 章首位置（新章从头开始）。
@@ -914,6 +992,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       );
     }
     _idleSave?.cancel();
+    widget.state.underlineChanges.removeListener(_onEpubUnderlinesChanged);
     _selection.dispose();
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
@@ -1157,6 +1236,8 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
           child: ListView.builder(
             key: ValueKey('epub-chapter-$_chapter-$_chapterVisit'),
             controller: _scroll,
+            addAutomaticKeepAlives: false,
+            cacheExtent: (media.size.height * .75).clamp(250.0, 900.0),
             padding: EdgeInsets.fromLTRB(
               20 + media.padding.left,
               media.padding.top + FrostedHeader.toolbarHeight + 16,
@@ -1235,17 +1316,9 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
         child: AnimatedBuilder(
           animation: widget.state.underlineChanges,
           builder: (context, _) {
-            final rawAnnotations = chapterId == null
+            final annotations = chapterId == null
                 ? const <ReaderAnnotationRange>[]
-                : widget.state.annotationsFor(_novel.id, chapterId: chapterId);
-            final annotations = rawAnnotations.isEmpty || purified.isIdentity
-                ? rawAnnotations
-                : ReaderPurificationStore.shared.mapAnnotationsToPurified(
-                    rawAnnotations,
-                    resolveParagraph: (pIdx) => pIdx == blockIndex
-                        ? purified
-                        : _purifyBlockAt(pIdx, blocks: allBlocks),
-                  );
+                : _projectedEpubAnnotations(chapterId, allBlocks);
             final marks = annotations.isEmpty
                 ? const <ReaderTextMark>[]
                 : clipReaderParagraphMarks(

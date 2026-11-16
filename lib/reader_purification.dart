@@ -793,8 +793,11 @@ class ReaderPurificationStore extends ChangeNotifier {
   bool _loaded = false;
   bool _enabled = true;
   bool get enabled => _enabled;
+  int _revision = 0;
+  int get revision => _revision;
 
   void _invalidateCaches() {
+    _revision++;
     _cachedEnabledRules = null;
     _paragraphCache.clear();
     _chapterEffectiveCache.clear();

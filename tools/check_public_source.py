@@ -21,11 +21,7 @@ PATTERNS = {
 }
 
 
-# This DOI in the unmodified Apache Commons Math notice is not a host address.
-# Only the complete, reviewed citation in this license file is exempt.
-UPSTREAM_LICENSE_CITATIONS = {
-    'assets/licenses/poi.txt': 'http://citeseerx.ist.psu.edu/viewdoc/download;?doi=' + '10.1.1.' + '173.1898&rep=rep1&type=pdf',
-}
+UPSTREAM_LICENSE_CITATIONS: dict[str, str] = {}
 
 
 def inspect(root: Path) -> list[str]:

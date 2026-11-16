@@ -457,28 +457,9 @@ class LibraryState extends ChangeNotifier {
       if (key.startsWith('reader_bookmarks_')) {
         final id = int.tryParse(key.substring('reader_bookmarks_'.length));
         if (id == null || id <= 0) continue;
-        try {
-          final records = jsonDecode(_prefs.getString(key)!);
-          if (records is! List) continue;
-          final bookmarks = <ReaderBookmark>[];
-          final ids = <String>{};
-          for (final record in records) {
-            try {
-              final bookmark = ReaderBookmark.fromJson(
-                Map<String, dynamic>.from(record as Map),
-              );
-              if (ids.add(bookmark.id)) bookmarks.add(bookmark);
-            } catch (_) {
-              // One damaged bookmark does not erase the remaining marks.
-            }
-          }
-          bookmarks.sort(
-            (a, b) => b.position.updatedAt.compareTo(a.position.updatedAt),
-          );
-          _bookmarks[id] = bookmarks;
-          _updateUnderlineIndex(id, notify: false);
-        } catch (_) {
-          // Resume records are independent of the bookmark list.
+        final raw = _prefs.get(key);
+        if (raw is String && raw.isNotEmpty) {
+          _rawBookmarks[id] = raw;
         }
       }
     }
@@ -677,6 +658,7 @@ class LibraryState extends ChangeNotifier {
   final _bookmarkChanges = _StateNotifier();
   final _underlineChanges = _StateNotifier();
   final _searchChanges = _StateNotifier();
+  final _shelfChanges = _StateNotifier();
   final _shelfViewChanges = _StateNotifier();
   final _readerBehaviorChanges = _StateNotifier();
   final Set<int> _shelf = {};
@@ -688,6 +670,7 @@ class LibraryState extends ChangeNotifier {
   final Map<int, int> _chapters = {};
   final Map<int, ReadingPosition> _positions = {};
   final Map<int, int> _added = {};
+  final Map<int, String> _rawBookmarks = {};
   final Map<int, List<ReaderBookmark>> _bookmarks = {};
   final Map<int, List<ReaderUnderlineRange>> _underlineRanges = {};
   final Map<int, Map<int, List<ReaderUnderlineRange>>> _underlinesByChapter =
@@ -781,9 +764,11 @@ class LibraryState extends ChangeNotifier {
         ..clear()
         ..addAll(repaired);
       _shelfLoadFailed = false;
+      if (!_disposed) _shelfChanges.notifyListeners();
       notifyListeners();
     });
   }
+  Listenable get shelfChanges => _shelfChanges;
   Listenable get appearanceChanges => _appearance;
   Listenable get applicationChanges => _application;
   Listenable get glassChanges => _glassChanges;
@@ -939,20 +924,69 @@ class LibraryState extends ChangeNotifier {
     );
   }
 
-  List<ReaderBookmark> bookmarksFor(int id) =>
-      List.unmodifiable(_bookmarks[id] ?? const <ReaderBookmark>[]);
+  @visibleForTesting
+  bool debugIsBookmarksDecoded(int id) => !_rawBookmarks.containsKey(id);
 
-  List<ReaderUnderlineRange> underlinesFor(int id, {int? chapterId}) =>
-      chapterId == null
-      ? _underlineRanges[id] ?? const []
-      : _underlinesByChapter[id]?[chapterId] ?? const [];
+  void _ensureBookmarksLoaded(int id, {bool buildIndex = true}) {
+    final raw = _rawBookmarks.remove(id);
+    if (raw == null) return;
+    try {
+      final records = jsonDecode(raw);
+      if (records is! List) return;
+      final bookmarks = <ReaderBookmark>[];
+      final ids = <String>{};
+      for (final record in records) {
+        try {
+          final bookmark = ReaderBookmark.fromJson(
+            Map<String, dynamic>.from(record as Map),
+          );
+          if (ids.add(bookmark.id)) bookmarks.add(bookmark);
+        } catch (_) {
+          // One damaged bookmark does not erase the remaining marks.
+        }
+      }
+      bookmarks.sort(
+        (a, b) => b.position.updatedAt.compareTo(a.position.updatedAt),
+      );
+      _bookmarks[id] = bookmarks;
+      if (buildIndex) {
+        _updateUnderlineIndex(id, notify: false);
+      }
+    } catch (_) {
+      // Resume records are independent of the bookmark list.
+    }
+  }
 
-  List<ReaderAnnotationRange> annotationsFor(int id, {int? chapterId}) =>
-      chapterId == null
-      ? _annotationRanges[id] ?? const []
-      : _annotationsByChapter[id]?[chapterId] ?? const [];
+  void _ensureAllBookmarksLoaded() {
+    if (_rawBookmarks.isEmpty) return;
+    for (final id in _rawBookmarks.keys.toList(growable: false)) {
+      _ensureBookmarksLoaded(id);
+    }
+  }
+
+  List<ReaderBookmark> bookmarksFor(int id) {
+    _ensureBookmarksLoaded(id);
+    return List.unmodifiable(_bookmarks[id] ?? const <ReaderBookmark>[]);
+  }
+
+  List<ReaderUnderlineRange> underlinesFor(int id, {int? chapterId}) {
+    _ensureBookmarksLoaded(id);
+    return chapterId == null
+        ? _underlineRanges[id] ?? const []
+        : _underlinesByChapter[id]?[chapterId] ?? const [];
+  }
+
+  List<ReaderAnnotationRange> annotationsFor(int id, {int? chapterId}) {
+    _ensureBookmarksLoaded(id);
+    return chapterId == null
+        ? _annotationRanges[id] ?? const []
+        : _annotationsByChapter[id]?[chapterId] ?? const [];
+  }
 
   bool _updateUnderlineIndex(int id, {bool notify = true}) {
+    if (_rawBookmarks.containsKey(id)) {
+      _ensureBookmarksLoaded(id, buildIndex: false);
+    }
     final styledMarks =
         List<ReaderBookmark>.of(_bookmarks[id] ?? const <ReaderBookmark>[])
           ..sort((a, b) {
@@ -1022,6 +1056,7 @@ class LibraryState extends ChangeNotifier {
 
 
   List<({int novelId, ReaderBookmark bookmark})> get bookmarkEntries {
+    _ensureAllBookmarksLoaded();
     final entries =
         [
           for (final entry in _bookmarks.entries)
@@ -1297,6 +1332,7 @@ class LibraryState extends ChangeNotifier {
       _hiddenHistory.remove(id);
       _known.remove(id);
       _persistedNovels.remove(id);
+      _rawBookmarks.remove(id);
       _bookmarks.remove(id);
       _underlineRanges.remove(id);
       _underlinesByChapter.remove(id);
@@ -1313,6 +1349,7 @@ class LibraryState extends ChangeNotifier {
           _shelfViewChanges.notifyListeners();
         }
       }
+      if (!_disposed) _shelfChanges.notifyListeners();
       _historyChanged();
       notifyListeners();
     });
@@ -1409,6 +1446,7 @@ class LibraryState extends ChangeNotifier {
         current = positionFor(id) ?? (_chapters.containsKey(id) ? ReadingPosition(
           chapter: _chapters[id]!, chapterId: _chapters[id]!, offset: 0, fraction: 0,
           fontSize: fontSize, width: 0, updatedAt: 0) : null);
+        _ensureBookmarksLoaded(id);
         marks = _bookmarks[id] == null ? null : List.of(_bookmarks[id]!);
       });
       if (journal?['status'] == 'done') return;
@@ -1696,6 +1734,7 @@ class LibraryState extends ChangeNotifier {
         _chapters[id] = _positions[id]!.chapter;
       }
       if (records['reader_bookmarks_$id'] case final String raw) {
+        _rawBookmarks.remove(id);
         _bookmarks[id] = [
           for (final item in jsonDecode(raw) as List)
             ReaderBookmark.fromJson(Map<String, dynamic>.from(item as Map)),
@@ -2130,9 +2169,13 @@ class LibraryState extends ChangeNotifier {
     if (accepts == null) _known[novel.id] = novel;
     final queued = _queuePositionWrite(() async {
       if (accepts != null && !accepts()) return;
+      final previous = _known[novel.id];
       final snapshot = _novelSnapshot(novel);
       if (snapshot != null) await _writeNovel(novel, snapshot);
       _known[novel.id] = novel;
+      if (!_disposed && previous == null && _shelf.contains(novel.id)) {
+        _shelfChanges.notifyListeners();
+      }
     });
     return _withWriteTimeout(queued, '书籍详情保存');
   }
@@ -2235,6 +2278,7 @@ class LibraryState extends ChangeNotifier {
     }
     late ReaderBookmark result;
     await _queuePositionWrite(() async {
+      _ensureBookmarksLoaded(novelId);
       final marks = _bookmarks[novelId] ?? const <ReaderBookmark>[];
       final previous = marks.where((mark) => mark.id == id).firstOrNull;
       if (previous == null) throw const FormatException('这条书签已被移除');
@@ -2289,6 +2333,7 @@ class LibraryState extends ChangeNotifier {
     }
     late ReaderBookmark result;
     await _queuePositionWrite(() async {
+      _ensureBookmarksLoaded(novelId);
       final marks = _bookmarks[novelId] ?? const <ReaderBookmark>[];
       final previous = marks.where((mark) => mark.id == id).firstOrNull;
       if (previous == null) throw const FormatException('这条书签已被移除');
@@ -2390,6 +2435,7 @@ class LibraryState extends ChangeNotifier {
     }
     ReaderBookmark? result;
     await _queuePositionWrite(() async {
+      _ensureBookmarksLoaded(novel.id);
       final marks = _bookmarks[novel.id] ?? const <ReaderBookmark>[];
       final matching = marks.where((mark) {
         if (!mark.isUnderline) return false;
@@ -2504,6 +2550,7 @@ class LibraryState extends ChangeNotifier {
     ReaderBookmark? result;
     await _queuePositionWrite(() async {
       if (!_acceptLocalPosition(novel, position.chapter)) return;
+      _ensureBookmarksLoaded(novel.id);
       final marks = _bookmarks[novel.id] ?? const <ReaderBookmark>[];
       for (final mark in marks) {
         if (!mark.isUnderline &&
@@ -2570,6 +2617,7 @@ class LibraryState extends ChangeNotifier {
     if (novel.id <= 0 || page < 0 || page >= pageCount) return null;
     ReaderBookmark? result;
     await _queuePositionWrite(() async {
+      _ensureBookmarksLoaded(novel.id);
       final marks = _bookmarks[novel.id] ?? const <ReaderBookmark>[];
       for (final mark in marks) {
         if (!mark.isUnderline &&
@@ -2618,6 +2666,7 @@ class LibraryState extends ChangeNotifier {
       return barrier.future.then((_) => removeBookmark(novelId, id));
     }
     return _queuePositionWrite(() async {
+      _ensureBookmarksLoaded(novelId);
       final marks = _bookmarks[novelId];
       if (marks == null || !marks.any((mark) => mark.id == id)) return;
       final next = marks.where((mark) => mark.id != id).toList();
@@ -2637,6 +2686,7 @@ class LibraryState extends ChangeNotifier {
       );
     }
     return _queuePositionWrite(() async {
+      _ensureBookmarksLoaded(novelId);
       final marks = _bookmarks[novelId] ?? const <ReaderBookmark>[];
       final previous = marks.where((mark) => mark.id == id).firstOrNull;
       if (previous == null || previous.category == category) return;
@@ -2658,6 +2708,7 @@ class LibraryState extends ChangeNotifier {
   }
 
   Future<void> _writeBookmarks(int novelId, List<ReaderBookmark> marks) async {
+    _rawBookmarks.remove(novelId);
     final record = jsonEncode(marks.map((mark) => mark.toJson()).toList());
     await writeLibraryPreference(_prefs, 'reader_bookmarks_$novelId', record);
   }
@@ -2719,7 +2770,10 @@ class LibraryState extends ChangeNotifier {
         final novel = novels[id];
         if (novel != null) _known[id] = novel;
       }
-      if (!_disposed) notifyListeners();
+      if (!_disposed) {
+        _shelfChanges.notifyListeners();
+        notifyListeners();
+      }
     });
   }
 
@@ -2788,7 +2842,10 @@ class LibraryState extends ChangeNotifier {
       if (novel != null) _known[id] = novel;
       if (novel != null && snapshot != null) _persistedNovels[id] = novel;
       if (changedMembership) _shelfRevisions[id] = shelfRevision(id) + 1;
-      if (!_disposed && (changedMembership || novel != null)) notifyListeners();
+      if (!_disposed && (changedMembership || novel != null)) {
+        _shelfChanges.notifyListeners();
+        notifyListeners();
+      }
     });
   }
 
@@ -3372,19 +3429,39 @@ class LibraryState extends ChangeNotifier {
     }
   }
 
+  static bool _samePreferenceRecord(Object? existing, Object? incoming) {
+    if (identical(existing, incoming) || existing == incoming) return true;
+    if (existing is List<String> && incoming is List<String>) {
+      return listEquals(existing, incoming);
+    }
+    if (existing == null ||
+        incoming == null ||
+        existing is num ||
+        existing is bool ||
+        existing is String ||
+        incoming is num ||
+        incoming is bool ||
+        incoming is String) {
+      return false;
+    }
+    return jsonEncode(existing) == jsonEncode(incoming);
+  }
+
   Future<void> _commitLibraryRecords(Map<String, Object> changes, {
     bool repairingShelf = false,
   }) async {
     changes = Map<String, Object>.of(changes);
     if (changes.containsKey('shelf') && !repairingShelf) _requireShelfLoaded();
     changes.removeWhere(
-      (key, value) => jsonEncode(_prefs.get(key)) == jsonEncode(value),
+      (key, value) => _samePreferenceRecord(_prefs.get(key), value),
     );
     if (changes.isEmpty) return;
     final journal = jsonEncode({
       for (final key in changes.keys) key: _prefs.get(key),
     });
-    if (utf8.encode(journal).length > LibraryBackup.maxBytes * 2) {
+    final maxJournalBytes = LibraryBackup.maxBytes * 2;
+    if (journal.length * 3 > maxJournalBytes &&
+        utf8.encode(journal).length > maxJournalBytes) {
       throw const FormatException('本地恢复日志过大');
     }
     try {
@@ -3419,6 +3496,7 @@ class LibraryState extends ChangeNotifier {
     _bookmarkChanges.dispose();
     _underlineChanges.dispose();
     _searchChanges.dispose();
+    _shelfChanges.dispose();
     _shelfViewChanges.dispose();
     _readerBehaviorChanges.dispose();
     super.dispose();

@@ -1394,6 +1394,14 @@ class ArchiveBoxDepthRender extends RenderBox
   final _spineLayer = LayerHandle<TransformLayer>();
   final _coverLayer = LayerHandle<TransformLayer>();
   int debugLayoutCount = 0;
+  bool? _lastSemanticsSelected;
+  (double, double, double, Offset)? _cachedGeomKey;
+  Matrix4? _cachedBase;
+  Matrix4? _cachedCoverTransform;
+  Path? _cachedTopPath;
+  (Rect, Color, Color)? _cachedShaderKey;
+  Shader? _cachedTopShader;
+
   double get debugOpenFraction => _pose.weight(_index);
   bool get debugSelected => _pose.focus.round() == _index;
   Matrix4 get debugTransform => _coverTransform.clone();
@@ -1403,35 +1411,45 @@ class ArchiveBoxDepthRender extends RenderBox
     return ArchiveShelfGeometry.origin(_cover, _height, debugOpenFraction);
   }
 
-  Matrix4 get _base {
+  void _ensureGeometry() {
     final origin = _origin;
-    return Matrix4.identity()
+    final key = (_spine, _cover, _height, origin);
+    if (_cachedGeomKey == key) return;
+    _cachedGeomKey = key;
+    _cachedBase = Matrix4.identity()
       ..setEntry(0, 2, _WavePose.depthX)
       ..setEntry(1, 2, _WavePose.depthY)
       ..setEntry(1, 0, .10)
       ..setEntry(0, 3, origin.dx)
       ..setEntry(1, 3, origin.dy);
-  }
-
-  Matrix4 get _coverTransform {
-    final origin = _origin;
-    return Matrix4.identity()
+    _cachedCoverTransform = Matrix4.identity()
       ..setEntry(0, 0, _WavePose.depthX)
       ..setEntry(1, 0, _WavePose.depthY)
       ..setEntry(0, 3, origin.dx + _spine)
       ..setEntry(1, 3, origin.dy + _spine * .10);
-  }
-
-  Path get _topPath {
-    final origin = _origin;
     final front = Offset(_spine, _spine * .10);
     final depth = Offset(_cover * _WavePose.depthX, _cover * _WavePose.depthY);
-    return Path()..addPolygon([
+    _cachedTopPath = Path()..addPolygon([
       origin,
       origin + front,
       origin + front + depth,
       origin + depth,
     ], true);
+  }
+
+  Matrix4 get _base {
+    _ensureGeometry();
+    return _cachedBase!;
+  }
+
+  Matrix4 get _coverTransform {
+    _ensureGeometry();
+    return _cachedCoverTransform!;
+  }
+
+  Path get _topPath {
+    _ensureGeometry();
+    return _cachedTopPath!;
   }
 
   Path get _solidPath {
@@ -1481,6 +1499,8 @@ class ArchiveBoxDepthRender extends RenderBox
       _height = height;
       markNeedsLayout();
     }
+    final semanticsChanged =
+        _index != index || _label != label || _direction != direction;
     _index = index;
     _topStartColor = topStartColor;
     _topEndColor = topEndColor;
@@ -1488,12 +1508,20 @@ class ArchiveBoxDepthRender extends RenderBox
     _label = label;
     _direction = direction;
     _onTap = onTap;
+    if (semanticsChanged) {
+      _lastSemanticsSelected = debugSelected;
+      markNeedsSemanticsUpdate();
+    }
     _changed();
   }
 
   void _changed() {
     markNeedsPaint();
-    markNeedsSemanticsUpdate();
+    final selected = debugSelected;
+    if (_lastSemanticsSelected != selected) {
+      _lastSemanticsSelected = selected;
+      markNeedsSemanticsUpdate();
+    }
   }
 
   @override
@@ -1528,12 +1556,17 @@ class ArchiveBoxDepthRender extends RenderBox
       oldLayer: _coverLayer.layer,
     );
     final top = _topPath.shift(offset);
+    final bounds = top.getBounds();
+    final shaderKey = (bounds, _topStartColor, _topEndColor);
+    if (_cachedShaderKey != shaderKey || _cachedTopShader == null) {
+      _cachedShaderKey = shaderKey;
+      _cachedTopShader = LinearGradient(
+        colors: [_topStartColor, _topEndColor],
+      ).createShader(bounds);
+    }
     context.canvas.drawPath(
       top,
-      Paint()
-        ..shader = LinearGradient(
-          colors: [_topStartColor, _topEndColor],
-        ).createShader(top.getBounds()),
+      Paint()..shader = _cachedTopShader,
     );
     context.canvas.drawPath(
       top,

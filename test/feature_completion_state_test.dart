@@ -3,122 +3,14 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:shuyu/catalog.dart';
-import 'package:shuyu/legacy_wenku_repository.dart';
-import 'package:shuyu/publication_catalog.dart';
 import 'package:shuyu/reader_content.dart';
 import 'package:shuyu/reader_find.dart';
 import 'package:shuyu/reader_illustrations.dart';
 
-import 'support/offline_fixture.dart';
-
-String publicationXml(int id, {String date = '2026-10-05'}) =>
-    '<result><page num="3"/><item aid="$id"><data name="Title" value="作品 $id"/><data name="LastUpdate" value="$date"/></item></result>';
-
-
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => SharedPreferences.setMockInitialValues({}));
-  group('publication catalogue', () {
-    test(
-      'uses server category IDs/names, deduplicates and rejects error XML',
-      () {
-        expect(
-          PublicationLibrary.parse(
-            '<metadata><item sort="8">一迅社</item><item sort="8">重复</item></metadata>',
-          ).single.id,
-          8,
-        );
-        expect(
-          () => PublicationLibrary.parse('<result/>'),
-          throwsFormatException,
-        );
-        expect(
-          () => PublicationLibrary.parse('<metadata/>'),
-          throwsFormatException,
-        );
-      },
-    );
-    test(
-      'category browse reuses original sort key and normal cursor',
-      () async {
-        final calls = <String>[];
-        final repository = LegacyWenkuRepository(
-          request: (action) async {
-            calls.add(action);
-            return publicationXml(71);
-          },
-        );
-        expect(
-          (await repository.browse(sort: NovelSort.lastUpdate, page: 2)).page,
-          2,
-        );
-        await repository.browse(sort: NovelSort.lastUpdate, page: 2);
-        expect(calls, ['action=novellist&sort=lastupdate&page=2&t=0']);
-        await repository.browse(sort: NovelSort.lastUpdate, refresh: true);
-        expect(calls.last, 'action=novellist&sort=lastupdate&page=1&t=0');
-      },
-    );
-    test('stale browse refresh cannot replace newer metadata', () async {
-      final old = Completer<String>(), fresh = Completer<String>();
-      var calls = 0;
-      final repository = LegacyWenkuRepository(
-        request: (action) {
-          calls++;
-          return calls == 1 ? old.future : fresh.future;
-        },
-      );
-      final a = repository.browse(sort: NovelSort.lastUpdate);
-      final b = repository.browse(sort: NovelSort.lastUpdate, refresh: true);
-      fresh.complete(publicationXml(71, date: '2026-10-05'));
-      await b;
-      old.complete(publicationXml(71, date: '2010-01-01'));
-      await a;
-      expect((await repository.find(71))!.lastUpdate, '2026-10-05');
-    });
-    test(
-      'failed browse request is retriable rather than cached forever',
-      () async {
-        var calls = 0;
-        final repository = LegacyWenkuRepository(
-          request: (action) async {
-            calls++;
-            return calls == 1 ? '<html/>' : publicationXml(71);
-          },
-        );
-        await expectLater(
-          repository.browse(sort: NovelSort.lastUpdate),
-          throwsFormatException,
-        );
-        expect(
-          (await repository.browse(sort: NovelSort.lastUpdate)).items.single.id,
-          71,
-        );
-        expect(calls, 2);
-      },
-    );
-  });
   group('illustrations', () {
-    test(
-      'original paired image markers survive text normalization and keep order',
-      () async {
-        final repository = LegacyWenkuRepository(
-          request: (_) async =>
-              '前文\r\n<!--image-->http://img.wenku8.com/a.jpg<!--image--><!--image-->https://img.wenku8.com/b.jpg<!--image-->\r\n后文',
-        );
-        final body = await repository.chapterContent(
-          71,
-          offlineFixtureBook(71).chapters.first,
-        );
-        final content = await ReaderContent.parse(body);
-        expect(content.paragraphs.length, 4);
-        expect(content.paragraphs.first, '前文');
-        expect(content.illustrations, [
-          'https://img.wenku8.com/a.jpg',
-          'https://img.wenku8.com/b.jpg',
-        ]);
-      },
-    );
     test(
       'image URLs are not in-chapter search hits or arbitrary remote fetches',
       () async {
