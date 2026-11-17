@@ -1188,7 +1188,6 @@ class _ReaderPageState extends State<ReaderPage>
     setState(() => _illustrationsRefreshing = true);
     try {
       final body = await _requestContent(chapter, refresh: true);
-      if (body == null) return;
       final content = await ReaderContent.parse(body);
       if (!mounted || chapter != _chapter || generation != _contentGeneration) {
         return;

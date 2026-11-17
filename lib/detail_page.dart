@@ -59,9 +59,7 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
     unawaited(_seedFromCache());
   }
 
-  Future<void> _seedFromCache() async {
-    final generation = _loadGeneration;
-  }
+  Future<void> _seedFromCache() async {}
 
   Future<Novel> _load() {
     final future = _loadWithDeadline();

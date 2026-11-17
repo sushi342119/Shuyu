@@ -1,4 +1,3 @@
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -11,7 +10,6 @@ import 'package:shuyu/library_state.dart';
 import 'package:shuyu/main.dart';
 import 'package:shuyu/performance_preferences.dart';
 import 'support/visual_review.dart';
-import 'support/pump_storage.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
